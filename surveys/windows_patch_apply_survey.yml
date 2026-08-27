@@ -1,0 +1,61 @@
+---
+# AAP survey spec for "Windows - Apply Updates".
+# One operator decision: authorize patch install. Does not authorize reboot.
+# Provider, WSUS URL, categories, and targeting are not surveyed.
+name: "Windows Apply Updates Survey"
+description: >-
+  Authorize Windows patch installation for this run. Defaults false.
+  Scope is the AAP Limit prompt (required). Reboot is a separate job.
+spec:
+  - variable: operator_authorize_patch_install
+    question_name: "Authorize patch installation?"
+    question_description: >-
+      When true, Apply may install updates only if WSUS match, approved Limit,
+      OS policy, and maintenance window also pass. Does not authorize reboot.
+    type: multiplechoice
+    choices:
+      - "false"
+      - "true"
+    default: "false"
+    required: true
+
+  - variable: change_ticket_id
+    question_name: "Change ticket ID"
+    type: text
+    default: ""
+    required: false
+
+  - variable: maintenance_window_start
+    question_name: "Maintenance window start UTC"
+    question_description: "ISO-8601 Z, e.g. 2026-08-17T02:00:00Z"
+    type: text
+    default: ""
+    required: false
+
+  - variable: maintenance_window_end
+    question_name: "Maintenance window end UTC"
+    question_description: "ISO-8601 Z, e.g. 2026-08-17T06:00:00Z"
+    type: text
+    default: ""
+    required: false
+
+  - variable: maintenance_window_acknowledged
+    question_name: "Maintenance window acknowledged"
+    type: multiplechoice
+    choices:
+      - "false"
+      - "true"
+    default: "false"
+    required: true
+
+  - variable: snow_enabled
+    question_name: "Enable ServiceNow integration"
+    question_description: >-
+      Credentials remain AAP Credentials. Enable only when a change record
+      should be validated / receive work notes.
+    type: multiplechoice
+    choices:
+      - "false"
+      - "true"
+    default: "false"
+    required: true

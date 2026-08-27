@@ -1,0 +1,76 @@
+---
+# Read Windows Update policy registry (failed_when false so missing keys are missing, not fatal).
+
+- name: Read Windows Update policy WUServer
+  ansible.windows.win_reg_stat:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate
+    name: WUServer
+  register: windows_wsus_reg_wuserver
+  failed_when: false
+  tags:
+    - always
+    - wsus
+
+- name: Read Windows Update policy WUStatusServer
+  ansible.windows.win_reg_stat:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate
+    name: WUStatusServer
+  register: windows_wsus_reg_wustatus
+  failed_when: false
+  tags:
+    - always
+    - wsus
+
+- name: Read Windows Update AU UseWUServer
+  ansible.windows.win_reg_stat:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU
+    name: UseWUServer
+  register: windows_wsus_reg_usewu
+  failed_when: false
+  tags:
+    - always
+    - wsus
+
+- name: Read Windows Update policy TargetGroup
+  ansible.windows.win_reg_stat:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate
+    name: TargetGroup
+  register: windows_wsus_reg_targetgroup
+  failed_when: false
+  when: windows_wsus_client_targeting_active | default(false) | bool
+  tags:
+    - always
+    - wsus
+
+- name: Read Windows Update policy TargetGroupEnabled
+  ansible.windows.win_reg_stat:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate
+    name: TargetGroupEnabled
+  register: windows_wsus_reg_targetgroup_enabled
+  failed_when: false
+  when: windows_wsus_client_targeting_active | default(false) | bool
+  tags:
+    - always
+    - wsus
+
+- name: Record current WSUS registry facts
+  ansible.builtin.set_fact:
+    windows_wsus_current_server_url: "{{ windows_wsus_reg_wuserver.value | default('') }}"
+    windows_wsus_current_status_server_url: "{{ windows_wsus_reg_wustatus.value | default('') }}"
+    windows_wsus_current_use_wu_server: "{{ windows_wsus_reg_usewu.value | default('') }}"
+    windows_wsus_current_target_group: >-
+      {{
+        windows_wsus_reg_targetgroup.value | default('')
+        if (windows_wsus_client_targeting_active | default(false) | bool)
+        else ''
+      }}
+    windows_wsus_current_target_group_enabled: >-
+      {{
+        windows_wsus_reg_targetgroup_enabled.value | default('')
+        if (windows_wsus_client_targeting_active | default(false) | bool)
+        else ''
+      }}
+  changed_when: false
+  tags:
+    - always
+    - wsus

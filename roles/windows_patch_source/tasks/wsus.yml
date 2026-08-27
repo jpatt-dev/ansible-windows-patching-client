@@ -1,0 +1,116 @@
+---
+# WSUS registry validate or enforce. Inventory group_vars supply URLs.
+# validate: read/compare only. enforce: win_regedit, restart wuauserv if changed, reread.
+# Does not install updates. Does not reboot. Does not set AUOptions or other WU policy.
+
+- name: Normalize WSUS configuration mode
+  ansible.builtin.set_fact:
+    windows_wsus_configuration_mode: >-
+      {{ windows_wsus_configuration_mode | default('validate') | trim | lower }}
+    windows_wsus_effective_server_url: "{{ windows_wsus_server_url | default('') | trim }}"
+    windows_wsus_effective_status_url: "{{ windows_wsus_status_url | default('') | trim }}"
+    windows_wsus_client_targeting_active: >-
+      {{
+        (windows_wsus_client_targeting_enabled | default(false) | bool)
+        and ((windows_wsus_client_target_group | default('') | trim | length) > 0)
+      }}
+  changed_when: false
+  tags:
+    - always
+    - wsus
+
+- name: Assert WSUS configuration mode is supported
+  ansible.builtin.assert:
+    that:
+      - windows_wsus_configuration_mode in (windows_wsus_configuration_modes_allowed | default(['validate', 'enforce']))
+    fail_msg: >-
+      Unsupported windows_wsus_configuration_mode '{{ windows_wsus_configuration_mode }}'.
+      Allowed: validate, enforce.
+  tags:
+    - always
+    - wsus
+
+- name: Fail when WSUS assignment group has no server URL
+  ansible.builtin.assert:
+    that:
+      - (windows_wsus_effective_server_url | length) > 0
+      - (windows_wsus_effective_status_url | length) > 0
+    fail_msg: >-
+      WSUS assignment group '{{ windows_wsus_assignment_group }}' on
+      {{ inventory_hostname }} requires windows_wsus_server_url and
+      windows_wsus_status_url in inventory group_vars. Do not pass a WSUS URL
+      as a launch/survey extra-var.
+  tags:
+    - always
+    - wsus
+
+- name: Read current WSUS policy registry
+  ansible.builtin.include_tasks: wsus_read.yml
+  tags:
+    - always
+    - wsus
+
+- name: Compare current WSUS registry to inventory assignment
+  ansible.builtin.include_tasks: wsus_compare.yml
+  tags:
+    - always
+    - wsus
+
+- name: Enforce WSUS registry from inventory assignment
+  ansible.builtin.include_tasks: wsus_enforce.yml
+  when: windows_wsus_configuration_mode == 'enforce'
+  tags:
+    - always
+    - wsus
+
+- name: Re-read WSUS policy registry after enforce
+  ansible.builtin.include_tasks: wsus_read.yml
+  when: windows_wsus_configuration_mode == 'enforce'
+  tags:
+    - always
+    - wsus
+
+- name: Re-compare WSUS registry after enforce
+  ansible.builtin.include_tasks: wsus_compare.yml
+  when: windows_wsus_configuration_mode == 'enforce'
+  tags:
+    - always
+    - wsus
+
+- name: Report WSUS expected versus actual registry values
+  ansible.builtin.debug:
+    msg:
+      - "host: {{ inventory_hostname }}"
+      - "assignment_group: {{ windows_wsus_assignment_group | default('') }}"
+      - "provider: {{ windows_patch_provider_effective }}"
+      - "configuration_mode: {{ windows_wsus_configuration_mode }}"
+      - "expected WUServer: {{ windows_wsus_effective_server_url }}"
+      - "actual WUServer: {{ windows_wsus_current_server_url | default('') }}"
+      - "expected WUStatusServer: {{ windows_wsus_effective_status_url }}"
+      - "actual WUStatusServer: {{ windows_wsus_current_status_server_url | default('') }}"
+      - "UseWUServer: {{ windows_wsus_current_use_wu_server | default('') }}"
+      - "windows_wsus_mapping_status: {{ windows_wsus_mapping_status }}"
+      - "windows_wsus_config_match: {{ windows_wsus_config_match }}"
+  changed_when: false
+  tags:
+    - always
+    - wsus
+    - report
+
+- name: Fail when enforce did not produce a matching WSUS configuration
+  ansible.builtin.assert:
+    that:
+      - windows_wsus_mapping_status == 'matched'
+      - (windows_wsus_config_match is sameas true) or ((windows_wsus_config_match | default('') | string | lower) == 'true')
+    fail_msg: >-
+      WSUS enforce failed for {{ inventory_hostname }}
+      (assignment={{ windows_wsus_assignment_group | default('') }},
+      mapping={{ windows_wsus_mapping_status | default('unknown') }},
+      config_match={{ windows_wsus_config_match | default('unknown') }},
+      expected_WUServer={{ windows_wsus_effective_server_url }},
+      actual_WUServer={{ windows_wsus_current_server_url | default('') }},
+      UseWUServer={{ windows_wsus_current_use_wu_server | default('') }}).
+  when: windows_wsus_configuration_mode == 'enforce'
+  tags:
+    - always
+    - wsus

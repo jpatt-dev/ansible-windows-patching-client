@@ -1,0 +1,45 @@
+---
+# Shared defaults for patch_common role.
+
+patch_report_record: {}
+
+# Playbook safety boundary (hosts: pattern). Operational scope is AAP Limit.
+patch_default_target: "windows_hosts"
+
+# Require an explicit AAP Limit (ansible_limit). Blank / all / * fail.
+patch_require_explicit_limit: true
+
+# When true (apply/reboot), enforce approved_patch_targets allowlist.
+patch_enforce_scoped_target: false
+
+# Approved inventory groups for remediation (customize per client in group_vars).
+# windows_hosts is the playbook boundary — not an approved patch wave.
+approved_patch_targets:
+  - windows_canary
+  - windows_wave_1
+
+# Dual emergency override (never expose in surveys). Both required to bypass allowlist / all.
+patch_allow_unapproved_target: false
+patch_emergency_acknowledgement: ""
+patch_emergency_acknowledgement_required: "I understand this may patch unapproved hosts"
+
+# Operator-facing runtime decisions (surveyable). Default false = non-remediating.
+# Mapped to internal gates in tasks/normalize_operator_controls.yml.
+# Production surveys are authoritative unless allow_legacy_runtime_controls is true.
+operator_authorize_patch_install: false
+operator_allow_pre_patch_reboot: false
+operator_allow_post_patch_reboot: false
+allow_legacy_runtime_controls: false
+patch_apply_enabled: false
+reboot_enabled: false
+pre_patch_reboot_enabled: false
+post_patch_reboot_enabled: false
+windows_patch_mode: check_only
+maintenance_window_acknowledged: false
+snow_enabled: false
+
+# Always rejected for remediation unless dual emergency override succeeds.
+# Also rejected when patch_require_explicit_limit is true.
+patch_unsafe_targets:
+  - all
+  - "*"

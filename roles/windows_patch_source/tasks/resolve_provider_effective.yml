@@ -1,0 +1,88 @@
+---
+# Authoritative provider from inventory assignment groups (per host — never run_once).
+# Launch/survey windows_patch_provider is ignored for remediation.
+# Assignment source: group names matching ^windows_wsus_.+
+# Exact aggregate name windows_wsus is not an assignment source.
+
+- name: Detect WSUS assignment groups from inventory membership
+  ansible.builtin.set_fact:
+    windows_wsus_assignment_groups: >-
+      {{
+        (group_names | default([]))
+        | select('match', '^windows_wsus_.+$')
+        | list
+      }}
+    windows_patch_provider_launch_ignored: "{{ windows_patch_provider | default('') | trim | lower }}"
+  changed_when: false
+  tags:
+    - always
+    - source
+
+- name: Fail when host belongs to more than one WSUS assignment group
+  ansible.builtin.assert:
+    that:
+      - (windows_wsus_assignment_groups | length) <= 1
+    fail_msg: >-
+      Host {{ inventory_hostname }} belongs to multiple WSUS assignment groups:
+      {{ windows_wsus_assignment_groups | join(', ') }}.
+      A host must belong to exactly one group matching windows_wsus_*.
+      Inventory is authoritative — do not rely on variable precedence.
+  tags:
+    - always
+    - source
+
+- name: Set windows_patch_provider_effective from WSUS assignment
+  ansible.builtin.set_fact:
+    windows_patch_provider_effective: >-
+      {{
+        'wsus'
+        if ((windows_wsus_assignment_groups | length) == 1)
+        else 'unknown'
+      }}
+    windows_wsus_assignment_group: >-
+      {{
+        windows_wsus_assignment_groups[0]
+        if ((windows_wsus_assignment_groups | length) == 1)
+        else ''
+      }}
+  changed_when: false
+  tags:
+    - always
+    - source
+
+- name: Record skipped WSUS validation when no assignment group
+  ansible.builtin.set_fact:
+    windows_wsus_mapping_status: not_assigned
+    windows_wsus_config_match: not_validated
+    windows_wsus_effective_server_url: ""
+    windows_wsus_effective_status_url: ""
+  when: (windows_wsus_assignment_groups | length) == 0
+  changed_when: false
+  tags:
+    - always
+    - source
+
+- name: Mirror effective provider onto windows_patch_provider (inventory-derived only)
+  ansible.builtin.set_fact:
+    windows_patch_provider: "{{ windows_patch_provider_effective }}"
+  changed_when: false
+  tags:
+    - always
+    - source
+
+- name: Warn when launch windows_patch_provider differed from inventory-derived effective
+  ansible.builtin.debug:
+    msg: >-
+      Ignoring launch windows_patch_provider='{{ windows_patch_provider_launch_ignored }}'
+      for {{ inventory_hostname }}; authoritative provider is
+      windows_patch_provider_effective={{ windows_patch_provider_effective }}
+      (from WSUS assignment group '{{ windows_wsus_assignment_group | default('') }}').
+  when:
+    - (windows_patch_provider_launch_ignored | length) > 0
+    - windows_patch_provider_launch_ignored != windows_patch_provider_effective
+    - windows_patch_provider_launch_ignored != 'unknown'
+  changed_when: false
+  tags:
+    - always
+    - source
+    - report

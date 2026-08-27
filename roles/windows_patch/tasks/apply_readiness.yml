@@ -1,0 +1,214 @@
+---
+# In-job Apply readiness — do NOT rely on prior workflow-node facts.
+# Safe when Apply is launched directly outside a Workflow Template.
+# Active modes: check_only | direct_win_updates.
+# Remediating Apply re-checks pending reboot in this job and fails closed
+# if pending_reboot is true (does not reboot; does not clear registry).
+
+- name: Normalize apply mode and gate variables
+  ansible.builtin.set_fact:
+    windows_patch_mode: "{{ windows_patch_mode | default('check_only') | trim | lower }}"
+    patch_apply_enabled: "{{ patch_apply_enabled | default(false) | bool }}"
+    maintenance_window_acknowledged: "{{ maintenance_window_acknowledged | default(false) | bool }}"
+  tags:
+    - apply
+
+- name: Assert windows_patch_mode is supported
+  ansible.builtin.assert:
+    that:
+      - windows_patch_mode in (windows_patch_modes_allowed | default(['check_only', 'direct_win_updates']))
+    fail_msg: >-
+      Unsupported windows_patch_mode '{{ windows_patch_mode }}'.
+      Allowed: {{ windows_patch_modes_allowed | default(['check_only', 'direct_win_updates']) | join(', ') }}.
+  run_once: true
+  tags:
+    - apply
+
+- name: Probe WinRM connectivity for apply readiness
+  ansible.windows.win_ping:
+  register: windows_apply_winrm_ping
+  failed_when: false
+  when: windows_patch_mode == 'direct_win_updates'
+  tags:
+    - apply
+
+- name: Assert WinRM connectivity before remediating apply
+  ansible.builtin.assert:
+    that:
+      - (windows_apply_winrm_ping.ping | default('')) == 'pong'
+    fail_msg: >-
+      Apply readiness failed: WinRM connectivity check failed on
+      {{ inventory_hostname }}.
+  when: windows_patch_mode == 'direct_win_updates'
+  tags:
+    - apply
+
+- name: Re-check pending reboot before patch installation
+  ansible.builtin.include_tasks:
+    file: check_pending_reboot.yml
+    apply:
+      tags:
+        - apply
+  when: windows_patch_mode == 'direct_win_updates'
+  tags:
+    - apply
+
+- name: Fail closed when a pending reboot remains before remediating apply
+  ansible.builtin.assert:
+    that:
+      - not (pending_reboot | default(false) | bool)
+    fail_msg: >-
+      Apply blocked on {{ inventory_hostname }} because a pending reboot is still
+      present. Complete the pre-patch reboot workflow and rerun Apply.
+  when:
+    - windows_patch_mode == 'direct_win_updates'
+    - patch_apply_enabled | bool
+  tags:
+    - apply
+
+- name: Resolve authoritative provider and source context in this job (validate only)
+  ansible.builtin.include_role:
+    name: windows_patch_source
+  vars:
+    windows_wsus_configuration_mode: validate
+  tags:
+    - apply
+    - source
+
+- name: Re-collect host OS/health for OS policy (facts do not carry across nodes)
+  ansible.builtin.include_tasks: collect_host_health.yml
+  when: windows_patch_mode == 'direct_win_updates'
+  tags:
+    - apply
+
+- name: Block remediation when effective provider is unknown
+  ansible.builtin.assert:
+    that:
+      - windows_patch_mode == 'check_only'
+    fail_msg: >-
+      windows_patch_provider_effective=unknown cannot remediate
+      (mode={{ windows_patch_mode }}). Place the host in exactly one
+      windows_wsus_* assignment group, or use windows_patch_mode=check_only.
+  when: windows_patch_provider_effective | default('unknown') == 'unknown'
+  tags:
+    - apply
+
+- name: Enforce provider × mode matrix for direct_win_updates
+  ansible.builtin.assert:
+    that:
+      - windows_patch_provider_effective == 'wsus'
+    fail_msg: >-
+      direct_win_updates requires windows_patch_provider_effective=wsus
+      (exactly one windows_wsus_* assignment group; got '{{ windows_patch_provider_effective }}').
+  when: windows_patch_mode == 'direct_win_updates'
+  tags:
+    - apply
+
+- name: Fail closed when remediating mode is selected but apply gate is false
+  ansible.builtin.assert:
+    that:
+      - patch_apply_enabled | bool
+    fail_msg: >-
+      windows_patch_mode='{{ windows_patch_mode }}' requires
+      patch_apply_enabled=true. Use windows_patch_mode=check_only for
+      intentional non-install runs.
+  when:
+    - windows_patch_mode == 'direct_win_updates'
+    - not patch_apply_enabled
+  tags:
+    - apply
+
+- name: Enforce maintenance window for remediating apply
+  ansible.builtin.include_role:
+    name: patch_common
+    tasks_from: validate_maintenance_window.yml
+  vars:
+    patch_maintenance_window_enforce: true
+  when:
+    - windows_patch_mode == 'direct_win_updates'
+    - patch_apply_enabled
+  tags:
+    - apply
+    - maintenance
+
+- name: Resolve OS policy for direct_win_updates
+  ansible.builtin.include_tasks: resolve_os_policy.yml
+  when: windows_patch_mode == 'direct_win_updates'
+  tags:
+    - apply
+
+- name: Fail when OS policy unsupported or categories empty for direct_win_updates
+  ansible.builtin.assert:
+    that:
+      - windows_os_policy_supported | default(false) | bool
+      - (windows_os_policy.categories | default([]) | length) > 0
+    fail_msg: >-
+      OS '{{ windows_os_caption | default('unknown') }}' has no supported
+      windows_os_policy with categories. Refusing direct_win_updates.
+  when:
+    - windows_patch_mode == 'direct_win_updates'
+    - patch_apply_enabled
+  tags:
+    - apply
+
+- name: Fail when WSUS assignment URL is missing for remediating apply
+  ansible.builtin.assert:
+    that:
+      - (windows_wsus_effective_server_url | default('') | length) > 0
+      - (windows_wsus_assignment_groups | default([]) | length) == 1
+    fail_msg: >-
+      WSUS assignment readiness failed for {{ inventory_hostname }}.
+      Require exactly one windows_wsus_* group and group_vars URLs.
+  when:
+    - windows_patch_provider_effective == 'wsus'
+    - windows_patch_mode == 'direct_win_updates'
+    - patch_apply_enabled
+  tags:
+    - apply
+
+- name: Fail when WSUS host config does not match inventory assignment
+  ansible.builtin.assert:
+    that:
+      - windows_wsus_mapping_status | default('') == 'matched'
+      - (windows_wsus_config_match is sameas true) or ((windows_wsus_config_match | default('') | string | lower) == 'true')
+    fail_msg: >-
+      WSUS config match failed for {{ inventory_hostname }}
+      (assignment={{ windows_wsus_assignment_group | default('') }},
+      mapping={{ windows_wsus_mapping_status | default('unknown') }},
+      config_match={{ windows_wsus_config_match | default('unknown') }},
+      expected_WUServer={{ windows_wsus_effective_server_url | default('') }},
+      actual_WUServer={{ windows_wsus_current_server_url | default('') }},
+      UseWUServer={{ windows_wsus_current_use_wu_server | default('') }}).
+      Direct patching must not proceed through an unintended update source.
+      Run playbooks/windows/configure_wsus.yml (enforce) to set registry;
+      Precheck and Apply validate only and do not repair drift.
+  when:
+    - windows_patch_provider_effective == 'wsus'
+    - windows_patch_mode == 'direct_win_updates'
+    - patch_apply_enabled
+    - windows_wsus_require_config_match | default(true) | bool
+  tags:
+    - apply
+
+- name: Run opt-in client PowerShell precheck during apply readiness
+  ansible.builtin.include_tasks: powershell_precheck.yml
+  when:
+    - windows_powershell_precheck_enabled | default(false) | bool
+    - windows_patch_mode == 'direct_win_updates'
+  tags:
+    - apply
+    - powershell
+
+- name: Fail apply when PowerShell precheck critical failed
+  ansible.builtin.assert:
+    that:
+      - not (windows_powershell_precheck_critical_failed | default(false) | bool)
+    fail_msg: >-
+      Apply readiness failed: PowerShell precheck critical failure on
+      {{ inventory_hostname }}.
+  when:
+    - windows_powershell_precheck_enabled | default(false) | bool
+    - windows_patch_mode == 'direct_win_updates'
+  tags:
+    - apply
+    - powershell

@@ -1,0 +1,10 @@
+---
+# Temporary per-run host exclusion from patch remediation.
+# Survey-sourced for this implementation. Not inventory infrastructure truth.
+# Distinct from windows_exception_policy (application/update exceptions).
+
+patching_exception_hosts: ""
+patching_exception_reference: ""
+
+# Derived by tasks; do not survey. Future ServiceNow may set this to servicenow.
+patching_exception_source: workflow_survey

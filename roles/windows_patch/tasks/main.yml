@@ -1,0 +1,39 @@
+---
+- name: Include precheck tasks
+  ansible.builtin.include_tasks: precheck.yml
+  when: patch_phase | default('precheck') == 'precheck'
+  tags:
+    - precheck
+    - windows
+    - patching
+
+- name: Include discovery tasks
+  ansible.builtin.include_tasks: discovery.yml
+  when: patch_phase | default('precheck') == 'discovery'
+  tags:
+    - discovery
+    - windows
+    - patching
+
+- name: Include apply tasks
+  ansible.builtin.include_tasks: apply.yml
+  when: patch_phase | default('precheck') == 'apply'
+  tags:
+    - apply
+    - windows
+    - patching
+
+- name: Include reboot tasks
+  ansible.builtin.include_tasks: reboot.yml
+  when: patch_phase | default('precheck') == 'reboot'
+  tags:
+    - reboot
+    - windows
+
+- name: Include postcheck tasks
+  ansible.builtin.include_tasks: postcheck.yml
+  when: patch_phase | default('precheck') == 'postcheck'
+  tags:
+    - postcheck
+    - windows
+    - patching

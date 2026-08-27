@@ -1,0 +1,69 @@
+---
+# Post-patch reboot (phase=post).
+# Requires operator authorization for this phase, inventory
+# patching_reboot_allowed, no patch-cycle exception, and maintenance window
+# (ack + UTC start/end).
+# Inventory mode:
+#   if_required — reboot only when Windows reports pending reboot
+#   always — reboot when those safety gates pass even if pending reboot is false
+# Always re-checks pending reboot in this job.
+#
+# CLI:
+#   ansible-playbook -i /path/to/client-inventory \
+#     playbooks/windows/post_patch_reboot_if_required.yml
+
+- name: Windows post-patch reboot if required
+  hosts: windows_hosts
+  gather_facts: false
+  serial: "{{ patch_serial | default(1) }}"
+  tags:
+    - reboot
+    - windows
+
+  pre_tasks:
+    - name: Include shared orchestration validation
+      ansible.builtin.include_role:
+        name: patch_common
+      vars:
+        patch_default_target: windows_hosts
+        patch_enforce_scoped_target: true
+      tags:
+        - always
+
+    - name: Validate ServiceNow change before remediation
+      ansible.builtin.include_role:
+        name: servicenow_change
+      vars:
+        snow_phase: validate
+      run_once: true
+      tags:
+        - always
+        - servicenow
+
+  roles:
+    - role: windows_patch
+      vars:
+        patch_phase: reboot
+        reboot_phase: post
+
+# Serial-safe workflow-global artifact for Final Patch Report.
+- name: Windows post-patch reboot — publish workflow-global phase artifact
+  hosts: windows_hosts
+  gather_facts: false
+  connection: local
+  tags:
+    - reboot
+    - windows
+    - report
+
+  tasks:
+    - name: Publish patch_phase_reboot_post host-keyed artifact
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: publish_workflow_phase.yml
+      vars:
+        patch_workflow_phase_key: reboot_post
+      run_once: true
+      tags:
+        - always
+        - report

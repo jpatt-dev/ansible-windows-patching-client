@@ -1,0 +1,8 @@
+---
+# Prefer inventory / CMDB / group_vars — not free-form production surveys.
+application_code: ""
+application_validation_profile: "default"
+application_metadata_source: "inventory_or_unset"
+
+# warn | fail when required metadata missing
+application_metadata_missing_policy: warn

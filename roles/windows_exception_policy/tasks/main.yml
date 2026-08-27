@@ -1,0 +1,78 @@
+---
+# Evaluate windows_patch_exceptions. Do not invent application exception logic.
+# Expiration uses controller/EE UTC date via now() — gather_facts is false.
+
+- name: Set UTC today for exception expiration checks
+  ansible.builtin.set_fact:
+    windows_exception_today_utc: "{{ now(utc=true, fmt='%Y-%m-%d') }}"
+  changed_when: false
+  tags:
+    - always
+    - exceptions
+
+- name: Initialize exception evaluation facts
+  ansible.builtin.set_fact:
+    windows_exceptions_applied: []
+    windows_exceptions_expired: []
+    windows_exceptions_enabled_active: []
+    windows_exceptions_malformed: []
+  changed_when: false
+  tags:
+    - always
+    - exceptions
+
+- name: Evaluate each exception entry
+  ansible.builtin.include_tasks: evaluate.yml
+  loop: "{{ windows_patch_exceptions | default([]) }}"
+  loop_control:
+    loop_var: windows_exception_item
+  tags:
+    - always
+    - exceptions
+
+- name: Fail closed on enabled exceptions with malformed expiration_date
+  ansible.builtin.assert:
+    that:
+      - (windows_exceptions_malformed | default([]) | length) == 0
+    fail_msg: >-
+      Enabled exception(s) have malformed expiration_date (require YYYY-MM-DD):
+      {{ windows_exceptions_malformed | default([]) | join(', ') }}.
+  tags:
+    - always
+    - exceptions
+
+- name: Report exception evaluation summary
+  ansible.builtin.debug:
+    msg:
+      - "host: {{ inventory_hostname }}"
+      - "today_utc: {{ windows_exception_today_utc }}"
+      - "enabled_active: {{ windows_exceptions_enabled_active | default([]) }}"
+      - "expired: {{ windows_exceptions_expired | default([]) }}"
+      - "malformed: {{ windows_exceptions_malformed | default([]) }}"
+      - "applied: {{ windows_exceptions_applied | default([]) }}"
+  tags:
+    - always
+    - exceptions
+    - report
+
+- name: Set exception policy status for reporting
+  ansible.builtin.set_fact:
+    windows_exception_policy_status: >-
+      {{
+        'malformed'
+        if ((windows_exceptions_malformed | default([]) | length) > 0)
+        else (
+          'expired_present'
+          if ((windows_exceptions_expired | default([]) | length) > 0)
+          else (
+            'active'
+            if ((windows_exceptions_enabled_active | default([]) | length) > 0)
+            else 'none_enabled'
+          )
+        )
+      }}
+  changed_when: false
+  tags:
+    - always
+    - exceptions
+    - report

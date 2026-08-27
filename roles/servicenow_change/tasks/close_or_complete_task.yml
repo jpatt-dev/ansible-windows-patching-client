@@ -1,0 +1,34 @@
+---
+# EXAMPLE — close or complete a change task after remediation.
+# Allowed state values and transition rules are client-specific.
+# Do not assume standard states without client confirmation.
+
+- name: "EXAMPLE: Close or complete ServiceNow change task"
+  ansible.builtin.uri:
+    url: >-
+      {{ snow_effective_instance_url }}/api/now/table/{{ snow_task_table }}/{{ snow_change_task_id }}
+    method: PATCH
+    headers: "{{ snow_uri_headers }}"
+    url_username: "{{ snow_uri_user if snow_auth_type_normalized == 'basic' else omit }}"
+    url_password: "{{ snow_uri_password if snow_auth_type_normalized == 'basic' else omit }}"
+    force_basic_auth: "{{ snow_auth_type_normalized == 'basic' }}"
+    body_format: json
+    # EXAMPLE body — replace state / close_code / close_notes per client process.
+    body:
+      state: "3"
+      work_notes: >-
+        AAP patching workflow marked this change task complete
+        (EXAMPLE placeholder — map to client allowed transitions).
+    status_code: [200]
+    return_content: true
+  register: snow_close_task_result
+  delegate_to: localhost
+  become: false
+  no_log: true
+  failed_when: >-
+    snow_fail_on_invalid_change | default(true) | bool
+    and (snow_close_task_result.status | default(0)) != 200
+  changed_when: (snow_close_task_result.status | default(0)) == 200
+  tags:
+    - always
+    - servicenow

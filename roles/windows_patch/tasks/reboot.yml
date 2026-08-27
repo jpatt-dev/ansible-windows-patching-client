@@ -1,0 +1,272 @@
+---
+# Windows reboot (pre or post patch).
+# reboot_phase: pre | post (default post)
+# Requires: reboot_enabled AND phase-specific flag AND
+# (mode=always OR pending reboot) AND patching_reboot_allowed (inventory)
+# AND not patching_exception_active AND maintenance ack when reboot can occur.
+# Always re-check pending reboot in this job. ICMP is not proof of WinRM readiness.
+#
+# Skip reason precedence:
+#   if_required and not pending → reboot_not_required
+#   else: patch_cycle_exception > reboot_disabled > phase_reboot_disabled >
+#         inventory_reboot_not_allowed
+#
+# Delay semantics:
+#   windows_pre_reboot_delay  → win_reboot.pre_reboot_delay (fallback: reboot_delay)
+#   windows_post_reboot_delay → win_reboot.post_reboot_delay + wait_for_connection.delay
+
+- name: Normalize reboot gate and phase variables
+  ansible.builtin.set_fact:
+    reboot_enabled: "{{ reboot_enabled | default(false) | bool }}"
+    pre_patch_reboot_enabled: "{{ pre_patch_reboot_enabled | default(false) | bool }}"
+    post_patch_reboot_enabled: "{{ post_patch_reboot_enabled | default(false) | bool }}"
+    maintenance_window_acknowledged: "{{ maintenance_window_acknowledged | default(false) | bool }}"
+    windows_patch_mode: "{{ windows_patch_mode | default('check_only') | trim | lower }}"
+    reboot_phase: "{{ reboot_phase | default('post') | trim | lower }}"
+    patching_reboot_allowed_effective: "{{ patching_reboot_allowed | default(false) | bool }}"
+    windows_pre_patch_reboot_mode: "{{ windows_pre_patch_reboot_mode | default('if_required') | trim | lower }}"
+    windows_post_patch_reboot_mode: "{{ windows_post_patch_reboot_mode | default('if_required') | trim | lower }}"
+  tags:
+    - reboot
+
+- name: Assert reboot policy modes are supported
+  ansible.builtin.assert:
+    that:
+      - windows_pre_patch_reboot_mode in ['if_required', 'always']
+      - windows_post_patch_reboot_mode in ['if_required', 'always']
+    fail_msg: >-
+      Unsupported reboot policy on {{ inventory_hostname }}.
+      windows_pre_patch_reboot_mode='{{ windows_pre_patch_reboot_mode }}'
+      windows_post_patch_reboot_mode='{{ windows_post_patch_reboot_mode }}'.
+      Allowed: if_required, always.
+      Set these in inventory/group_vars (not a survey).
+  tags:
+    - reboot
+
+- name: Resolve authoritative provider for reboot reporting (validate only)
+  ansible.builtin.include_role:
+    name: windows_patch_source
+  vars:
+    windows_wsus_configuration_mode: validate
+  tags:
+    - reboot
+    - source
+
+- name: Resolve phase-specific reboot permission and policy mode
+  ansible.builtin.set_fact:
+    reboot_phase_enabled: >-
+      {{
+        (pre_patch_reboot_enabled | bool)
+        if (reboot_phase == 'pre')
+        else (post_patch_reboot_enabled | bool)
+      }}
+    windows_reboot_mode_effective: >-
+      {{
+        windows_pre_patch_reboot_mode
+        if (reboot_phase == 'pre')
+        else windows_post_patch_reboot_mode
+      }}
+  changed_when: false
+  tags:
+    - reboot
+
+- name: Check pending reboot state in this job
+  ansible.builtin.include_tasks: check_pending_reboot.yml
+  tags:
+    - reboot
+
+- name: Derive whether this phase should reboot
+  ansible.builtin.set_fact:
+    windows_reboot_should_run: >-
+      {{
+        not (patching_exception_active | default(false) | bool)
+        and (reboot_enabled | bool)
+        and (reboot_phase_enabled | bool)
+        and (patching_reboot_allowed_effective | bool)
+        and (
+          (windows_reboot_mode_effective == 'always')
+          or (pending_reboot | default(false) | bool)
+        )
+      }}
+  changed_when: false
+  tags:
+    - reboot
+
+- name: Report reboot decision inputs (operator vs inventory vs exception)
+  ansible.builtin.debug:
+    msg:
+      - "host: {{ inventory_hostname }}"
+      - "reboot_phase: {{ reboot_phase }}"
+      - "reboot_mode_effective: {{ windows_reboot_mode_effective }}"
+      - "pending_reboot: {{ pending_reboot | default(false) }}"
+      - "reboot_enabled: {{ reboot_enabled }}"
+      - "reboot_phase_enabled: {{ reboot_phase_enabled }}"
+      - "patching_reboot_allowed: {{ patching_reboot_allowed_effective }}"
+      - "patching_exception_active: {{ patching_exception_active | default(false) }}"
+      - "patching_exception_reference: {{ patching_exception_reference_effective | default('') }}"
+      - "windows_reboot_should_run: {{ windows_reboot_should_run }}"
+  changed_when: false
+  tags:
+    - reboot
+    - report
+
+- name: Validate maintenance window before Windows reboot
+  ansible.builtin.include_role:
+    name: patch_common
+    tasks_from: validate_maintenance_window.yml
+  vars:
+    patch_maintenance_window_enforce: true
+  when: windows_reboot_should_run | bool
+  tags:
+    - reboot
+    - maintenance
+
+- name: Reboot Windows host only when safety gates and reboot policy allow
+  ansible.windows.win_reboot:
+    reboot_timeout: "{{ windows_reboot_timeout | default(reboot_timeout | default(3600)) | int }}"
+    pre_reboot_delay: "{{ windows_pre_reboot_delay | default(reboot_delay | default(60)) | int }}"
+    post_reboot_delay: "{{ windows_post_reboot_delay | default(60) | int }}"
+  register: windows_reboot_result
+  when: windows_reboot_should_run | bool
+  tags:
+    - reboot
+
+- name: Wait for WinRM connectivity after reboot (not ICMP)
+  ansible.builtin.wait_for_connection:
+    timeout: "{{ windows_reboot_timeout | default(reboot_timeout | default(3600)) | int }}"
+    delay: "{{ windows_post_reboot_delay | default(60) | int }}"
+  when:
+    - windows_reboot_should_run | bool
+    - windows_reboot_result is defined
+    - not (windows_reboot_result is skipped)
+  tags:
+    - reboot
+
+- name: Confirm WinRM with win_ping after reboot wait
+  ansible.windows.win_ping:
+  register: windows_post_reboot_ping
+  when:
+    - windows_reboot_should_run | bool
+    - windows_reboot_result is defined
+    - not (windows_reboot_result is skipped)
+  tags:
+    - reboot
+
+- name: Set Windows reboot outcome facts from actual attempt
+  ansible.builtin.set_fact:
+    reboot_required: "{{ pending_reboot | default(false) | bool }}"
+    reboot_mode: "{{ windows_reboot_mode_effective }}"
+    reboot_performed: >-
+      {{
+        (windows_reboot_should_run | bool)
+        and (windows_reboot_result is defined)
+        and not (windows_reboot_result is skipped)
+        and not (windows_reboot_result is failed)
+      }}
+    reboot_skipped_reason: >-
+      {{
+        'reboot_not_required'
+        if (
+          (windows_reboot_mode_effective == 'if_required')
+          and not (pending_reboot | default(false) | bool)
+        )
+        else (
+          'patch_cycle_exception'
+          if (patching_exception_active | default(false) | bool)
+          else (
+            'reboot_disabled'
+            if (not reboot_enabled | bool)
+            else (
+              'phase_reboot_disabled'
+              if (not reboot_phase_enabled | bool)
+              else (
+                'inventory_reboot_not_allowed'
+                if (not patching_reboot_allowed_effective | bool)
+                else ''
+              )
+            )
+          )
+        )
+      }}
+    manual_followup_required: >-
+      {{
+        not (patching_exception_active | default(false) | bool)
+        and (
+          (pending_reboot | default(false) | bool)
+          or (windows_reboot_mode_effective == 'always')
+        )
+        and (
+          (not reboot_enabled | bool)
+          or (not reboot_phase_enabled | bool)
+          or (not patching_reboot_allowed_effective | bool)
+        )
+      }}
+  changed_when: false
+  tags:
+    - reboot
+    - report
+
+- name: Validate Windows Update and BITS services after reconnect
+  ansible.windows.win_service_info:
+    name: "{{ item }}"
+  register: windows_post_reboot_services
+  failed_when: false
+  loop:
+    - wuauserv
+    - BITS
+  when: reboot_performed | default(false) | bool
+  tags:
+    - reboot
+
+- name: Warn when reboot is required but skipped
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: {{ inventory_hostname }} reboot_required=true but
+      reboot_performed=false
+      (reason={{ reboot_skipped_reason | default('') }};
+      reboot_mode={{ windows_reboot_mode_effective }};
+      reboot_enabled={{ reboot_enabled }};
+      phase={{ reboot_phase }}; phase_enabled={{ reboot_phase_enabled }};
+      patching_reboot_allowed={{ patching_reboot_allowed_effective }}).
+      manual_followup_required=true.
+  when: manual_followup_required | default(false) | bool
+  tags:
+    - reboot
+    - report
+
+- name: Report Windows reboot outcome
+  ansible.builtin.debug:
+    msg:
+      - "host: {{ inventory_hostname }}"
+      - "reboot_phase: {{ reboot_phase }}"
+      - "reboot_mode_effective: {{ windows_reboot_mode_effective }}"
+      - "pending_reboot: {{ pending_reboot | default(false) }}"
+      - "reboot_required: {{ reboot_required | default(false) }}"
+      - "reboot_performed: {{ reboot_performed | default(false) }}"
+      - "patching_reboot_allowed: {{ patching_reboot_allowed_effective | default(false) }}"
+      - "patching_exception_active: {{ patching_exception_active | default(false) }}"
+      - "reboot_skipped_reason: {{ reboot_skipped_reason | default('') }}"
+      - "manual_followup_required: {{ manual_followup_required | default(false) }}"
+      - "note: reboot requires reboot_enabled AND phase flag AND inventory patching_reboot_allowed AND not patching_exception_active AND (mode=always OR pending_reboot)"
+      - "patch_provider_effective: {{ windows_patch_provider_effective | default('unknown') }}"
+      - "patch_mode: {{ windows_patch_mode }}"
+  tags:
+    - reboot
+    - report
+
+- name: Record Windows reboot patch_result for AAP
+  ansible.builtin.include_role:
+    name: patch_report
+  vars:
+    patch_report_phase: record
+    patch_report_phase_name: "reboot_{{ reboot_phase }}"
+    patch_report_patch_status: >-
+      {{
+        'excluded'
+        if (patching_exception_active | default(false) | bool)
+        else ('ok' if (reboot_performed | default(false) | bool) else 'skipped')
+      }}
+    patch_report_manual_followup_required: "{{ manual_followup_required | default(false) }}"
+  tags:
+    - reboot
+    - report

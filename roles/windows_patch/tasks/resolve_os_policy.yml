@@ -1,0 +1,71 @@
+---
+# Resolve structured OS patch policy via caption_regex (fail-closed).
+# Exactly one matching policy required. Zero → unsupported. Two+ → config error.
+# Representative caption: "Microsoft Windows Server 2019 Datacenter"
+
+- name: Initialize OS policy match candidates
+  ansible.builtin.set_fact:
+    windows_os_policy_match_candidates: []
+  changed_when: false
+  tags:
+    - always
+
+- name: Collect OS policies whose caption_regex matches windows_os_caption
+  ansible.builtin.set_fact:
+    windows_os_policy_match_candidates: >-
+      {{
+        windows_os_policy_match_candidates
+        + [item.key]
+      }}
+  when:
+    - (windows_os_caption | default('') | length) > 0
+    - (item.value.caption_regex | default('') | length) > 0
+    - (windows_os_caption | default('') | regex_search(item.value.caption_regex)) is not none
+  loop: "{{ windows_patch_policy_by_os | default({}) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  tags:
+    - always
+
+- name: Fail when multiple OS policies match the same caption
+  ansible.builtin.assert:
+    that:
+      - (windows_os_policy_match_candidates | default([]) | length) <= 1
+    fail_msg: >-
+      OS policy configuration error: caption '{{ windows_os_caption | default('') }}'
+      matched multiple policies {{ windows_os_policy_match_candidates | default([]) }}.
+      Fix overlapping caption_regex entries in windows_patch_policy_by_os.
+  tags:
+    - always
+
+- name: Build windows_os_policy when exactly one match
+  ansible.builtin.set_fact:
+    windows_os_policy_matched_key: "{{ windows_os_policy_match_candidates[0] }}"
+    windows_os_policy:
+      policy_id: "{{ windows_os_policy_match_candidates[0] }}"
+      caption_regex: "{{ windows_patch_policy_by_os[windows_os_policy_match_candidates[0]].caption_regex }}"
+      supported: "{{ windows_patch_policy_by_os[windows_os_policy_match_candidates[0]].supported | default(false) | bool }}"
+      categories: "{{ windows_patch_policy_by_os[windows_os_policy_match_candidates[0]].categories | default([]) }}"
+    windows_os_policy_supported: >-
+      {{
+        (windows_patch_policy_by_os[windows_os_policy_match_candidates[0]].supported | default(false) | bool)
+        and ((windows_patch_policy_by_os[windows_os_policy_match_candidates[0]].categories | default([]) | length) > 0)
+      }}
+  when: (windows_os_policy_match_candidates | default([]) | length) == 1
+  changed_when: false
+  tags:
+    - always
+
+- name: Set unsupported windows_os_policy when no match
+  ansible.builtin.set_fact:
+    windows_os_policy_matched_key: ""
+    windows_os_policy:
+      policy_id: none
+      caption_regex: ""
+      supported: false
+      categories: []
+    windows_os_policy_supported: false
+  when: (windows_os_policy_match_candidates | default([]) | length) == 0
+  changed_when: false
+  tags:
+    - always

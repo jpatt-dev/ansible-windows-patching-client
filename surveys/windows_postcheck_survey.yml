@@ -1,0 +1,24 @@
+---
+# AAP survey spec for "Windows - Postcheck".
+# Read-only. Do not survey patch/reboot authorization.
+name: "Windows Postcheck Survey"
+description: >-
+  Optional change context for a read-only postcheck. Never remediates.
+spec:
+  - variable: change_ticket_id
+    question_name: "Change ticket ID"
+    type: text
+    default: ""
+    required: false
+
+  - variable: snow_enabled
+    question_name: "Enable ServiceNow integration"
+    question_description: >-
+      Credentials remain AAP Credentials. Enable only when a change record
+      should receive work notes.
+    type: multiplechoice
+    choices:
+      - "false"
+      - "true"
+    default: "false"
+    required: true

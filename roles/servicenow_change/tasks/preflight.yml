@@ -1,0 +1,96 @@
+---
+# Fail closed when snow_enabled=true but required configuration is missing.
+# Auth values must come from AAP credentials / environment — never from git.
+
+- name: Assert ServiceNow instance URL is configured
+  ansible.builtin.assert:
+    that:
+      - (snow_effective_instance_url | default('') | length) > 0
+    fail_msg: >-
+      snow_enabled=true but snow_instance_url is empty and SNOW_INSTANCE_URL
+      is not set. Provide the instance URL via AAP Credential env injection
+      or extra-vars (do not commit client URLs to git).
+  tags:
+    - always
+    - servicenow
+
+- name: Assert ServiceNow change ID is configured
+  ansible.builtin.assert:
+    that:
+      - (snow_change_id | default('') | trim | length) > 0
+    fail_msg: >-
+      snow_enabled=true requires snow_change_id (change sys_id or number
+      per client mapping). Pass via survey or workflow extra-vars.
+  tags:
+    - always
+    - servicenow
+
+- name: Assert ServiceNow basic auth environment variables
+  ansible.builtin.assert:
+    that:
+      - (lookup('env', 'SNOW_USERNAME') | default('', true) | length) > 0
+      - (lookup('env', 'SNOW_PASSWORD') | default('', true) | length) > 0
+    fail_msg: >-
+      snow_auth_type=basic requires SNOW_USERNAME and SNOW_PASSWORD from
+      an AAP Credential (or injected environment). Do not store secrets in git.
+  when: snow_auth_type_normalized == 'basic'
+  no_log: true
+  tags:
+    - always
+    - servicenow
+
+- name: Assert ServiceNow bearer token environment variable
+  ansible.builtin.assert:
+    that:
+      - (lookup('env', 'SNOW_TOKEN') | default('', true) | length) > 0
+    fail_msg: >-
+      snow_auth_type=bearer requires SNOW_TOKEN from an AAP Credential
+      (or injected environment). Do not store secrets in git.
+  when: snow_auth_type_normalized == 'bearer'
+  no_log: true
+  tags:
+    - always
+    - servicenow
+
+- name: Assert supported ServiceNow auth type
+  ansible.builtin.assert:
+    that:
+      - snow_auth_type_normalized in ['basic', 'bearer']
+    fail_msg: >-
+      Unsupported snow_auth_type '{{ snow_auth_type | default('') }}'.
+      Use 'basic' or 'bearer'.
+  tags:
+    - always
+    - servicenow
+
+- name: Assert ServiceNow change task ID when closing a task
+  ansible.builtin.assert:
+    that:
+      - (snow_change_task_id | default('') | trim | length) > 0
+    fail_msg: >-
+      snow_phase=close_task requires snow_change_task_id.
+  when:
+    - (snow_phase | default('')) == 'close_task'
+    - snow_close_task | default(false) | bool
+  tags:
+    - always
+    - servicenow
+
+- name: Build ServiceNow auth header facts
+  ansible.builtin.set_fact:
+    snow_uri_user: "{{ lookup('env', 'SNOW_USERNAME') | default('', true) }}"
+    snow_uri_password: "{{ lookup('env', 'SNOW_PASSWORD') | default('', true) }}"
+    snow_uri_headers: >-
+      {{
+        {'Accept': 'application/json', 'Content-Type': 'application/json'}
+        | combine(
+          {'Authorization': 'Bearer ' ~ (lookup('env', 'SNOW_TOKEN') | default('', true))}
+          if snow_auth_type_normalized == 'bearer'
+          else {}
+        )
+      }}
+  no_log: true
+  changed_when: false
+  tags:
+    - always
+    - servicenow

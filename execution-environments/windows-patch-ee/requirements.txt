@@ -1,0 +1,7 @@
+# Minimal Python deps beyond the AAP 2.7 supported base EE.
+# Prefer packages already provided by the base image.
+# WinRM / Windows module runtime typically comes from the base EE and
+# ansible.windows — add pins here only if a client build requires extras.
+#
+# Example (uncomment only if needed in your environment):
+# pywinrm>=0.4.3

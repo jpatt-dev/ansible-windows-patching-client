@@ -1,0 +1,67 @@
+---
+- name: Record application metadata source
+  ansible.builtin.set_fact:
+    application_metadata_source: "{{ application_metadata_source | default('inventory_or_unset') }}"
+    application_validation_profile: "{{ application_validation_profile | default('default') }}"
+  changed_when: false
+  tags:
+    - always
+    - application
+
+- name: Evaluate missing required application_code
+  ansible.builtin.set_fact:
+    application_metadata_missing_code: "{{ (application_code | default('') | trim | length) == 0 }}"
+  changed_when: false
+  tags:
+    - always
+    - application
+
+- name: Warn when required application metadata is missing
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: application_code is empty on {{ inventory_hostname }}
+      (source={{ application_metadata_source }}). Prefer inventory/CMDB.
+  when:
+    - application_metadata_missing_code | default(false) | bool
+    - (application_metadata_missing_policy | default('warn')) == 'warn'
+  tags:
+    - always
+    - application
+
+- name: Fail when required application metadata is missing
+  ansible.builtin.assert:
+    that:
+      - not (application_metadata_missing_code | default(false) | bool)
+    fail_msg: >-
+      application_code is required (application_metadata_missing_policy=fail).
+      Set via inventory/group_vars/CMDB — not a free production survey field.
+  when: (application_metadata_missing_policy | default('warn')) == 'fail'
+  tags:
+    - always
+    - application
+
+- name: Note validation profile placeholder
+  ansible.builtin.debug:
+    msg: >-
+      application_validation_profile={{ application_validation_profile }}.
+      Profile checks are PLACEHOLDER until application owners define them.
+      OS patch success alone does not prove application health.
+  changed_when: false
+  tags:
+    - always
+    - application
+
+- name: Set application metadata report facts
+  ansible.builtin.set_fact:
+    application_metadata_status: >-
+      {{
+        'missing_code'
+        if (application_metadata_missing_code | default(false) | bool)
+        else 'ok'
+      }}
+    application_validation_result: "not_implemented"
+  changed_when: false
+  tags:
+    - always
+    - application
+    - report

@@ -1,0 +1,78 @@
+---
+# Configure only WSUS source registry values. No AUOptions, reboot, driver, or WUfB policy.
+
+- name: Set WUServer from inventory assignment
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate
+    name: WUServer
+    data: "{{ windows_wsus_effective_server_url }}"
+    type: string
+    state: present
+  register: windows_wsus_regedit_wuserver
+  tags:
+    - always
+    - wsus
+
+- name: Set WUStatusServer from inventory assignment
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate
+    name: WUStatusServer
+    data: "{{ windows_wsus_effective_status_url }}"
+    type: string
+    state: present
+  register: windows_wsus_regedit_wustatus
+  tags:
+    - always
+    - wsus
+
+- name: Set UseWUServer=1
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU
+    name: UseWUServer
+    data: 1
+    type: dword
+    state: present
+  register: windows_wsus_regedit_usewu
+  tags:
+    - always
+    - wsus
+
+- name: Set WSUS client TargetGroup from inventory
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate
+    name: TargetGroup
+    data: "{{ windows_wsus_client_target_group | trim }}"
+    type: string
+    state: present
+  register: windows_wsus_regedit_targetgroup
+  when: windows_wsus_client_targeting_active | default(false) | bool
+  tags:
+    - always
+    - wsus
+
+- name: Set TargetGroupEnabled=1
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate
+    name: TargetGroupEnabled
+    data: 1
+    type: dword
+    state: present
+  register: windows_wsus_regedit_targetgroup_enabled
+  when: windows_wsus_client_targeting_active | default(false) | bool
+  tags:
+    - always
+    - wsus
+
+- name: Restart Windows Update service when WSUS registry changed
+  ansible.windows.win_service:
+    name: wuauserv
+    state: restarted
+  when: >-
+    (windows_wsus_regedit_wuserver.changed | default(false) | bool)
+    or (windows_wsus_regedit_wustatus.changed | default(false) | bool)
+    or (windows_wsus_regedit_usewu.changed | default(false) | bool)
+    or (windows_wsus_regedit_targetgroup.changed | default(false) | bool)
+    or (windows_wsus_regedit_targetgroup_enabled.changed | default(false) | bool)
+  tags:
+    - always
+    - wsus

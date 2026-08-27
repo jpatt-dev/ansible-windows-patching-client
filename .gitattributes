@@ -1,0 +1,17 @@
+# Enforce LF line endings for cross-platform consistency (Windows authors, Linux EEs).
+* text=auto eol=lf
+
+# Shell scripts must remain executable with LF.
+*.sh text eol=lf
+
+# Local / generated artifacts — excluded from git archive packages if present.
+.pytest_cache/ export-ignore
+**/__pycache__/ export-ignore
+*.py export-ignore
+*.pyc export-ignore
+*.pyo export-ignore
+.venv/ export-ignore
+.ansible/ export-ignore
+collections/ export-ignore
+reports/ export-ignore
+*.retry export-ignore

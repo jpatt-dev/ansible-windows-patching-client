@@ -1,0 +1,37 @@
+---
+# Resolve provider from exactly-one windows_wsus_* assignment group.
+# WSUS registry: validate (read/compare) or enforce (win_regedit + reread).
+
+- name: Resolve authoritative provider from inventory groups
+  ansible.builtin.include_tasks: resolve_provider_effective.yml
+  tags:
+    - always
+    - source
+
+- name: Assert windows_patch_provider_effective is supported
+  ansible.builtin.assert:
+    that:
+      - windows_patch_provider_effective in (windows_patch_providers_allowed | default(['unknown', 'wsus']))
+    fail_msg: >-
+      Unsupported windows_patch_provider_effective '{{ windows_patch_provider_effective }}'.
+      Allowed: {{ windows_patch_providers_allowed | default(['unknown', 'wsus']) | join(', ') }}.
+  tags:
+    - always
+    - source
+
+- name: Include provider resolve status tasks
+  ansible.builtin.include_tasks: resolve.yml
+  when: (windows_patch_source_phase | default('resolve')) == 'resolve'
+  tags:
+    - always
+    - source
+
+- name: Include WSUS validate/configure tasks
+  ansible.builtin.include_tasks: wsus.yml
+  when:
+    - windows_patch_provider_effective == 'wsus'
+    - (windows_patch_source_phase | default('resolve')) in ['resolve', 'wsus']
+  tags:
+    - always
+    - source
+    - wsus

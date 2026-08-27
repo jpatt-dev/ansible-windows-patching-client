@@ -1,0 +1,61 @@
+---
+# Opt-in client PowerShell precheck.
+# Requires windows_powershell_precheck_enabled=true.
+#
+# Client script interface contract (structured object returned on the pipeline):
+#   Required:
+#     critical_failed: boolean
+#     overall_health: string
+#   Recommended:
+#     failed_checks: list
+#     warnings: list
+# Fail closed when enabled if the required structured result is unavailable.
+
+- name: Execute client PowerShell precheck
+  ansible.windows.win_powershell:
+    script: "{{ lookup('ansible.builtin.file', role_path ~ '/files/' ~ (windows_powershell_precheck_script | default('client_precheck.ps1'))) }}"
+  register: windows_ps_precheck
+  failed_when: false
+  tags:
+    - precheck
+    - powershell
+
+- name: Parse client PowerShell precheck result
+  ansible.builtin.set_fact:
+    windows_ps_precheck_data: "{{ windows_ps_precheck.result | default(windows_ps_precheck.output | default([])) | first | default({}) }}"
+  when: windows_ps_precheck is defined
+  changed_when: false
+  tags:
+    - precheck
+    - powershell
+
+- name: Validate client PowerShell precheck result
+  ansible.builtin.set_fact:
+    windows_powershell_precheck_critical_failed: >-
+      {{
+        (windows_ps_precheck.failed | default(false) | bool)
+        or ((windows_ps_precheck.error | default([])) | length > 0)
+        or (windows_ps_precheck_data is not mapping)
+        or (windows_ps_precheck_data | length == 0)
+        or (windows_ps_precheck_data.critical_failed is not defined)
+        or (windows_ps_precheck_data.overall_health is not defined)
+        or (windows_ps_precheck_data.critical_failed | bool)
+        or ((windows_ps_precheck_data.overall_health | string | lower) == 'failed')
+      }}
+  changed_when: false
+  tags:
+    - precheck
+    - powershell
+
+- name: Report client PowerShell precheck summary
+  ansible.builtin.debug:
+    msg:
+      - "Client PowerShell precheck"
+      - "overall_health: {{ windows_ps_precheck_data.overall_health | default('n/a') }}"
+      - "warnings: {{ windows_ps_precheck_data.warnings | default([]) }}"
+      - "failed_checks: {{ windows_ps_precheck_data.failed_checks | default([]) }}"
+      - "critical_failed: {{ windows_powershell_precheck_critical_failed | default(false) }}"
+  tags:
+    - precheck
+    - powershell
+    - report

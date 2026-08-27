@@ -1,0 +1,103 @@
+---
+# Map operator-facing survey variables to internal gates.
+# One operator decision per action. Phases never authorize each other.
+# Production surveys are authoritative. Legacy internal/CLI flags participate
+# only when allow_legacy_runtime_controls is true (never surveyed).
+
+- name: Capture legacy internal runtime control requests
+  ansible.builtin.set_fact:
+    allow_legacy_runtime_controls: "{{ allow_legacy_runtime_controls | default(false) | bool }}"
+    legacy_patch_apply_requested: "{{ patch_apply_enabled | default(false) | bool }}"
+    legacy_reboot_enabled_requested: "{{ reboot_enabled | default(false) | bool }}"
+    legacy_pre_patch_reboot_requested: "{{ pre_patch_reboot_enabled | default(false) | bool }}"
+    legacy_post_patch_reboot_requested: "{{ post_patch_reboot_enabled | default(false) | bool }}"
+  changed_when: false
+  tags:
+    - always
+
+- name: Normalize operator-facing patch and reboot authorizations
+  ansible.builtin.set_fact:
+    operator_authorize_patch_install: "{{ operator_authorize_patch_install | default(false) | bool }}"
+    operator_allow_pre_patch_reboot: "{{ operator_allow_pre_patch_reboot | default(false) | bool }}"
+    operator_allow_post_patch_reboot: "{{ operator_allow_post_patch_reboot | default(false) | bool }}"
+  changed_when: false
+  tags:
+    - always
+
+- name: Map operator authorizations to internal remediation gates
+  ansible.builtin.set_fact:
+    patch_apply_enabled: >-
+      {{
+        (operator_authorize_patch_install | bool)
+        or (
+          (allow_legacy_runtime_controls | bool)
+          and (legacy_patch_apply_requested | bool)
+        )
+      }}
+    pre_patch_reboot_enabled: >-
+      {{
+        (operator_allow_pre_patch_reboot | bool)
+        or (
+          (allow_legacy_runtime_controls | bool)
+          and (legacy_pre_patch_reboot_requested | bool)
+        )
+      }}
+    post_patch_reboot_enabled: >-
+      {{
+        (operator_allow_post_patch_reboot | bool)
+        or (
+          (allow_legacy_runtime_controls | bool)
+          and (legacy_post_patch_reboot_requested | bool)
+        )
+      }}
+  changed_when: false
+  tags:
+    - always
+
+- name: Derive reboot_enabled from phase authorizations only
+  ansible.builtin.set_fact:
+    reboot_enabled: >-
+      {{
+        (pre_patch_reboot_enabled | bool)
+        or (post_patch_reboot_enabled | bool)
+        or (
+          (allow_legacy_runtime_controls | bool)
+          and (legacy_reboot_enabled_requested | bool)
+        )
+      }}
+  changed_when: false
+  tags:
+    - always
+
+- name: Set remediating patch mode when install is authorized
+  ansible.builtin.set_fact:
+    windows_patch_mode: direct_win_updates
+  when: patch_apply_enabled | bool
+  changed_when: false
+  tags:
+    - always
+
+- name: Keep check_only when install is not authorized
+  ansible.builtin.set_fact:
+    windows_patch_mode: check_only
+  when: not (patch_apply_enabled | bool)
+  changed_when: false
+  tags:
+    - always
+
+- name: Report normalized operator controls
+  ansible.builtin.debug:
+    msg:
+      - "operator_authorize_patch_install: {{ operator_authorize_patch_install }}"
+      - "operator_allow_pre_patch_reboot: {{ operator_allow_pre_patch_reboot }}"
+      - "operator_allow_post_patch_reboot: {{ operator_allow_post_patch_reboot }}"
+      - "allow_legacy_runtime_controls: {{ allow_legacy_runtime_controls }}"
+      - "patch_apply_enabled: {{ patch_apply_enabled }}"
+      - "windows_patch_mode: {{ windows_patch_mode }}"
+      - "reboot_enabled: {{ reboot_enabled }}"
+      - "pre_patch_reboot_enabled: {{ pre_patch_reboot_enabled }}"
+      - "post_patch_reboot_enabled: {{ post_patch_reboot_enabled }}"
+  changed_when: false
+  tags:
+    - always
+    - report

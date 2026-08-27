@@ -1,0 +1,101 @@
+---
+# AAP workflow survey for Windows Patch Workflow / Windows Canary Patch Workflow.
+# Per-run operator decisions only. Inventory remains authoritative for WSUS/provider.
+# Targeting is AAP Limit (required). Do not survey host lists or emergency bypass.
+#
+# Confirm workflow survey-variable and Limit propagation during
+# deployment acceptance testing.
+name: "Windows Patch Workflow Survey"
+description: >-
+  Shared per-run authorization and maintenance context for the Windows patch
+  workflow. All remediation defaults are false.
+spec:
+  - variable: change_ticket_id
+    question_name: "Change ticket ID"
+    type: text
+    default: ""
+    required: false
+
+  - variable: maintenance_window_start
+    question_name: "Maintenance window start UTC"
+    question_description: "ISO-8601 Z, e.g. 2026-08-17T02:00:00Z"
+    type: text
+    default: ""
+    required: false
+
+  - variable: maintenance_window_end
+    question_name: "Maintenance window end UTC"
+    question_description: "ISO-8601 Z, e.g. 2026-08-17T06:00:00Z"
+    type: text
+    default: ""
+    required: false
+
+  - variable: maintenance_window_acknowledged
+    question_name: "Maintenance window acknowledged"
+    type: multiplechoice
+    choices:
+      - "false"
+      - "true"
+    default: "false"
+    required: true
+
+  - variable: operator_authorize_patch_install
+    question_name: "Authorize patch installation"
+    question_description: >-
+      Does not authorize reboot. Apply still validates WSUS, Limit, OS policy,
+      and the maintenance window.
+    type: multiplechoice
+    choices:
+      - "false"
+      - "true"
+    default: "false"
+    required: true
+
+  - variable: operator_allow_pre_patch_reboot
+    question_name: "Allow pre-patch reboot when required"
+    question_description: Does not authorize install or post-patch reboot.
+    type: multiplechoice
+    choices:
+      - "false"
+      - "true"
+    default: "false"
+    required: true
+
+  - variable: operator_allow_post_patch_reboot
+    question_name: "Allow post-patch reboot when required"
+    question_description: Does not authorize install or pre-patch reboot.
+    type: multiplechoice
+    choices:
+      - "false"
+      - "true"
+    default: "false"
+    required: true
+
+  - variable: patching_exception_hosts
+    question_name: "Patch Exception Hosts"
+    question_description: >-
+      Comma-separated inventory hostnames with an approved temporary exception
+      for this patch cycle. Example: win-host-02.example.com. Leave blank when
+      there are no exceptions.
+    type: text
+    default: ""
+    required: false
+
+  - variable: patching_exception_reference
+    question_name: "Patch Exception Reference"
+    question_description: >-
+      Approved exception/request reference. Required by the playbook when Patch
+      Exception Hosts is populated. Example: EXC-12345.
+    type: text
+    default: ""
+    required: false
+
+  - variable: snow_enabled
+    question_name: "Enable ServiceNow integration"
+    question_description: Credentials remain AAP Credentials — never surveyed.
+    type: multiplechoice
+    choices:
+      - "false"
+      - "true"
+    default: "false"
+    required: true

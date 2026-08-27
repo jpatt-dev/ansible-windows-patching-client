@@ -1,0 +1,61 @@
+---
+# Remediation-only target allowlist validation.
+# Included when patch_enforce_scoped_target is true (apply/reboot/maintenance).
+
+- name: Evaluate dual emergency override for unapproved targets
+  ansible.builtin.set_fact:
+    patch_emergency_override_ok: >-
+      {{
+        (patch_allow_unapproved_target | default(false) | bool)
+        and (
+          (patch_emergency_acknowledgement | default('') | trim)
+          == (patch_emergency_acknowledgement_required | default('I understand this may patch unapproved hosts'))
+        )
+      }}
+  run_once: true
+  changed_when: false
+  tags:
+    - always
+
+- name: Reject unsafe broad targets unless dual emergency override is set
+  ansible.builtin.assert:
+    that:
+      - patch_target_scope | lower not in (patch_unsafe_targets | default(['all', '*']) | map('lower') | list)
+    fail_msg: >-
+      Remediation cannot run against '{{ patch_target_scope }}'.
+      Use an approved inventory group from approved_patch_targets or the AAP Limit prompt.
+      Emergency override requires BOTH patch_allow_unapproved_target=true AND
+      patch_emergency_acknowledgement='{{ patch_emergency_acknowledgement_required }}'
+      (Controller extra-vars only — never via survey).
+  when: not (patch_emergency_override_ok | bool)
+  run_once: true
+  tags:
+    - always
+
+- name: Reject targets not on the approved allowlist unless dual emergency override is set
+  ansible.builtin.assert:
+    that:
+      - patch_target_scope in (approved_patch_targets | default([]))
+    fail_msg: >-
+      Target '{{ patch_target_scope }}' is not in approved_patch_targets:
+      {{ approved_patch_targets | default([]) | join(', ') }}.
+      Use an approved group or AAP Limit. Emergency override requires BOTH
+      patch_allow_unapproved_target=true AND
+      patch_emergency_acknowledgement='{{ patch_emergency_acknowledgement_required }}'
+      (Controller extra-vars only — never via survey).
+  when: not (patch_emergency_override_ok | bool)
+  run_once: true
+  tags:
+    - always
+
+- name: Warn when dual emergency override is active
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: patch emergency override is active for scope '{{ patch_target_scope }}'.
+      This may patch unapproved hosts. Audit this run carefully.
+  when: patch_emergency_override_ok | bool
+  run_once: true
+  changed_when: false
+  tags:
+    - always
+    - report

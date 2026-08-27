@@ -1,0 +1,48 @@
+---
+# EXAMPLE — attach a report file to a change record.
+# ServiceNow attachment API and metadata fields vary by instance.
+# Client must provide attachment process and required fields.
+
+- name: Skip attach when report path is missing
+  ansible.builtin.debug:
+    msg: >-
+      ServiceNow attach_report skipped: snow_report_path is empty or
+      snow_attach_report=false.
+  when: (snow_report_path | default('') | trim | length) == 0
+  changed_when: false
+  tags:
+    - always
+    - servicenow
+
+- name: "EXAMPLE: Attach report file to ServiceNow change"
+  ansible.builtin.uri:
+    # EXAMPLE query params — replace table_name / table_sys_id mapping per client.
+    url: >-
+      {{ snow_effective_instance_url }}/api/now/attachment/file?table_name={{ snow_change_table }}&table_sys_id={{ snow_change_id }}&file_name={{ snow_report_path | basename }}
+    method: POST
+    headers: >-
+      {{
+        snow_uri_headers
+        | combine({
+            'Content-Type': 'text/markdown',
+            'Accept': 'application/json'
+          })
+      }}
+    url_username: "{{ snow_uri_user if snow_auth_type_normalized == 'basic' else omit }}"
+    url_password: "{{ snow_uri_password if snow_auth_type_normalized == 'basic' else omit }}"
+    force_basic_auth: "{{ snow_auth_type_normalized == 'basic' }}"
+    src: "{{ snow_report_path }}"
+    status_code: [200, 201]
+    return_content: true
+  register: snow_attach_result
+  delegate_to: localhost
+  become: false
+  no_log: true
+  when: (snow_report_path | default('') | trim | length) > 0
+  failed_when: >-
+    snow_fail_on_invalid_change | default(true) | bool
+    and (snow_attach_result.status | default(0)) not in [200, 201]
+  changed_when: (snow_attach_result.status | default(0)) in [200, 201]
+  tags:
+    - always
+    - servicenow

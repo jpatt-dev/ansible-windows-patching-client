@@ -1,0 +1,195 @@
+---
+# Read-only Windows precheck. Never installs updates.
+# Re-collects host health in this job (AAP nodes do not preserve facts).
+# Critical failures fail this job AFTER reporting (stops workflow success path).
+
+- name: Normalize operator context for precheck summary
+  ansible.builtin.set_fact:
+    windows_patch_mode: "{{ windows_patch_mode | default('check_only') | trim | lower }}"
+    patch_apply_enabled: "{{ patch_apply_enabled | default(false) | bool }}"
+    maintenance_window_acknowledged: "{{ maintenance_window_acknowledged | default(false) | bool }}"
+  tags:
+    - precheck
+
+- name: Resolve patch provider / WSUS source context (validate only)
+  ansible.builtin.include_role:
+    name: windows_patch_source
+  vars:
+    windows_wsus_configuration_mode: validate
+  tags:
+    - precheck
+    - source
+
+- name: Evaluate Windows exception policy
+  ansible.builtin.include_role:
+    name: windows_exception_policy
+  tags:
+    - precheck
+    - exceptions
+
+- name: Load application metadata
+  ansible.builtin.include_role:
+    name: windows_application_metadata
+  tags:
+    - precheck
+    - application
+
+- name: Collect host connectivity, OS, boot, and disk health
+  ansible.builtin.include_tasks: collect_host_health.yml
+  tags:
+    - precheck
+
+- name: Run opt-in client PowerShell precheck
+  ansible.builtin.include_tasks: powershell_precheck.yml
+  when: windows_powershell_precheck_enabled | default(false) | bool
+  tags:
+    - precheck
+    - powershell
+
+- name: Search for pending Windows updates using approved OS policy categories
+  ansible.builtin.include_tasks: search_updates_policy.yml
+  tags:
+    - precheck
+    - patching
+
+- name: Check pending reboot state
+  ansible.builtin.include_tasks: check_pending_reboot.yml
+  tags:
+    - precheck
+    - reboot
+
+- name: Check Windows service status (placeholder list incl. WU/BITS)
+  ansible.windows.win_service_info:
+    name: "{{ item }}"
+  register: windows_service_checks
+  failed_when: false
+  loop: "{{ windows_services_to_check | default(['W32Time', 'wuauserv', 'BITS']) }}"
+  tags:
+    - precheck
+
+- name: Set precheck status vocabulary
+  ansible.builtin.set_fact:
+    precheck_status: >-
+      {{
+        'blocked'
+        if (
+          (windows_powershell_precheck_critical_failed | default(false) | bool)
+          or (
+            (windows_patch_provider_effective | default('unknown') == 'unknown')
+            and (patch_apply_enabled | default(false) | bool)
+          )
+          or (
+            (windows_patch_provider_effective | default('unknown') == 'wsus')
+            and (windows_wsus_mapping_status | default('') != 'matched')
+          )
+        )
+        else (
+          'failed'
+          if (not (windows_connectivity_ok | default(false) | bool))
+          else (
+            'warning'
+            if (
+              (windows_disk_low | default(false) | bool)
+              or (application_metadata_status | default('ok') == 'missing_code')
+            )
+            else 'passed'
+          )
+        )
+      }}
+    manual_followup_required: >-
+      {{
+        (not (windows_connectivity_ok | default(false) | bool))
+        or (windows_disk_low | default(false) | bool)
+        or (
+          (pending_reboot | default(false) | bool)
+          and not (reboot_enabled | default(false) | bool)
+        )
+        or (windows_patch_provider_effective | default('unknown') == 'unknown')
+        or (
+          (windows_patch_provider_effective | default('unknown') == 'wsus')
+          and (windows_wsus_mapping_status | default('') != 'matched')
+        )
+      }}
+    updates_found: "{{ windows_updates_policy_count | default(windows_update_search.found_update_count | default(0)) | int }}"
+  changed_when: false
+  tags:
+    - precheck
+    - report
+
+- name: Report maintenance window status during precheck (non-enforcing)
+  ansible.builtin.include_role:
+    name: patch_common
+    tasks_from: validate_maintenance_window.yml
+  vars:
+    patch_maintenance_window_enforce: false
+  tags:
+    - precheck
+    - maintenance
+
+- name: Report Windows precheck summary
+  ansible.builtin.debug:
+    msg:
+      - "host: {{ inventory_hostname }}"
+      - "windows_connectivity_ok: {{ windows_connectivity_ok | default(false) }}"
+      - "windows_winrm_health: {{ windows_winrm_health | default('unknown') }}"
+      - "windows_os_caption: {{ windows_os_caption | default('unknown') }}"
+      - "windows_os_version: {{ windows_os_version | default('unknown') }}"
+      - "windows_last_boot_time: {{ windows_last_boot_time | default('unknown') }}"
+      - "windows_disk_free_mb: {{ windows_disk_free_mb | default('unknown') }}"
+      - "pending_reboot: {{ pending_reboot | default(false) }}"
+      - "updates_found: {{ updates_found | default(0) }}"
+      - "windows_patch_provider_effective: {{ windows_patch_provider_effective | default('unknown') }}"
+      - "windows_wsus_assignment_group: {{ windows_wsus_assignment_group | default('') }}"
+      - "windows_patch_mode: {{ windows_patch_mode }}"
+      - "windows_wsus_mapping_status: {{ windows_wsus_mapping_status | default('not_validated') }}"
+      - "windows_wsus_config_match: {{ windows_wsus_config_match | default('not_validated') }}"
+      - "patch_wave_name: {{ patch_wave_name | default('unspecified') }}"
+      - "change_ticket_id: {{ change_ticket_id | default('') }}"
+      - "application_code: {{ application_code | default('') }}"
+      - "patch_apply_enabled: {{ patch_apply_enabled }}"
+      - "maintenance_window_acknowledged: {{ maintenance_window_acknowledged }}"
+      - "maintenance_window_status: {{ maintenance_window_status | default('unset') }}"
+      - "patching_exception_active: {{ patching_exception_active | default(false) }}"
+      - "patching_exception_reference: {{ patching_exception_reference_effective | default('') }}"
+      - "patching_exception_source: {{ patching_exception_source | default('workflow_survey') }}"
+      - "precheck_status: {{ precheck_status }}"
+      - "manual_followup_required: {{ manual_followup_required }}"
+  tags:
+    - precheck
+    - report
+
+- name: Record Windows precheck patch_result for AAP
+  ansible.builtin.include_role:
+    name: patch_report
+  vars:
+    patch_report_phase: record
+    patch_report_phase_name: precheck
+    patch_report_precheck_status: "{{ precheck_status }}"
+    patch_report_updates_available: "{{ updates_found | default(0) }}"
+    patch_report_updates_found: "{{ updates_found | default(0) }}"
+    patch_report_updates_installed: 0
+    patch_report_manual_followup_required: "{{ manual_followup_required | default(false) }}"
+  tags:
+    - precheck
+    - report
+
+- name: Fail Precheck job on critical conditions (after report)
+  ansible.builtin.assert:
+    that:
+      - windows_connectivity_ok | default(false) | bool
+      - not (windows_powershell_precheck_critical_failed | default(false) | bool)
+      - not (
+          (patch_apply_enabled | default(false) | bool)
+          and (windows_patch_provider_effective | default('unknown') == 'unknown')
+        )
+      - precheck_status | default('passed') not in ['failed', 'blocked']
+    fail_msg: >-
+      Critical precheck failure on {{ inventory_hostname }}:
+      status={{ precheck_status | default('unknown') }},
+      connectivity={{ windows_connectivity_ok | default(false) }},
+      provider_effective={{ windows_patch_provider_effective | default('unknown') }},
+      wsus_mapping={{ windows_wsus_mapping_status | default('not_validated') }},
+      ps_critical={{ windows_powershell_precheck_critical_failed | default(false) }}.
+      Workflow success path must not continue.
+  tags:
+    - precheck

@@ -1,0 +1,29 @@
+---
+# windows_patch_source — inventory-driven WSUS assignment and registry validate/enforce.
+# Active providers: unknown | wsus.
+# Assignment groups match prefix windows_wsus_ (exact name windows_wsus is not an assignment).
+# Launch/survey windows_patch_provider is NOT authoritative.
+
+windows_patch_provider: unknown
+windows_patch_provider_effective: unknown
+windows_patch_providers_allowed:
+  - unknown
+  - wsus
+
+# validate = read/compare only; enforce = win_regedit then reread.
+# Precheck/Apply/Discovery/Postcheck/Reboot/Report force validate.
+# Dedicated configure_wsus playbook uses inventory mode (validate or enforce).
+windows_wsus_configuration_mode: validate
+windows_wsus_configuration_modes_allowed:
+  - validate
+  - enforce
+
+windows_wsus_require_config_match: true
+windows_wsus_server_url: ""
+windows_wsus_status_url: ""
+
+# Optional WSUS client target group (not AAP canary/wave groups).
+windows_wsus_client_target_group: ""
+windows_wsus_client_targeting_enabled: false
+
+windows_patch_source_phase: resolve

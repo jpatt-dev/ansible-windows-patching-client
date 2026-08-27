@@ -1,0 +1,68 @@
+---
+# Compare current WSUS registry to inventory assignment.
+# mapping_status: missing | mismatch | matched
+# config_match: boolean true only when matched (never false when validation was skipped).
+
+- name: Compare current WSUS registry to approved inventory URLs
+  ansible.builtin.set_fact:
+    windows_wsus_use_wu_server_enabled: >-
+      {{
+        (windows_wsus_current_use_wu_server | default('') | string | trim) in ['1', 'true', 'True']
+      }}
+    windows_wsus_mapping_status: >-
+      {{
+        'missing'
+        if (
+          (windows_wsus_current_server_url | default('') | trim | length) == 0
+          or (windows_wsus_current_status_server_url | default('') | trim | length) == 0
+          or (windows_wsus_current_use_wu_server | default('') | string | trim | length) == 0
+          or (
+            (windows_wsus_client_targeting_active | default(false) | bool)
+            and (
+              (windows_wsus_current_target_group | default('') | trim | length) == 0
+              or (windows_wsus_current_target_group_enabled | default('') | string | trim | length) == 0
+            )
+          )
+        )
+        else (
+          'matched'
+          if (
+            (windows_wsus_current_use_wu_server | default('') | string | trim) in ['1', 'true', 'True']
+            and (
+              (windows_wsus_current_server_url | default('') | trim | lower)
+              == (windows_wsus_effective_server_url | default('') | trim | lower)
+            )
+            and (
+              (windows_wsus_current_status_server_url | default('') | trim | lower)
+              == (windows_wsus_effective_status_url | default('') | trim | lower)
+            )
+            and (
+              not (windows_wsus_client_targeting_active | default(false) | bool)
+              or (
+                (
+                  (windows_wsus_current_target_group | default('') | trim)
+                  == (windows_wsus_client_target_group | default('') | trim)
+                )
+                and (
+                  (windows_wsus_current_target_group_enabled | default('') | string | trim) in ['1', 'true', 'True']
+                )
+              )
+            )
+          )
+          else 'mismatch'
+        )
+      }}
+  changed_when: false
+  tags:
+    - always
+    - wsus
+    - report
+
+- name: Set windows_wsus_config_match boolean from mapping status
+  ansible.builtin.set_fact:
+    windows_wsus_config_match: "{{ windows_wsus_mapping_status == 'matched' }}"
+  changed_when: false
+  tags:
+    - always
+    - wsus
+    - report

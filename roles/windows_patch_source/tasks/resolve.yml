@@ -1,0 +1,25 @@
+---
+- name: Announce resolved patch provider (inventory-derived)
+  ansible.builtin.debug:
+    msg: >-
+      windows_patch_provider_effective={{ windows_patch_provider_effective }}
+      on {{ inventory_hostname }}
+      (assignment_group={{ windows_wsus_assignment_group | default('') }};
+      launch provider ignored). Provider unknown blocks remediation.
+  tags:
+    - always
+    - source
+
+- name: Set remediation blocked when effective provider is unknown
+  ansible.builtin.set_fact:
+    windows_provider_remediation_blocked: "{{ windows_patch_provider_effective == 'unknown' }}"
+    windows_patch_source_status: >-
+      {{
+        'blocked'
+        if (windows_patch_provider_effective == 'unknown')
+        else 'resolved'
+      }}
+  changed_when: false
+  tags:
+    - always
+    - source

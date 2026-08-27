@@ -1,0 +1,12 @@
+# Local validation/lint tooling only (ansible-core, ansible-lint, yamllint, PyYAML).
+# This repository contains no custom Python application code.
+#
+# Install with:
+#   python -m pip install -r requirements.txt
+#
+# Production runtime is AAP + windows-patch-ee — not this venv.
+
+ansible-core>=2.16,<2.18
+ansible-lint>=24.2.0
+yamllint>=1.35.0
+PyYAML>=6.0

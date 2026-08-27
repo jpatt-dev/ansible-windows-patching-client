@@ -1,0 +1,93 @@
+---
+- name: Skip disabled exceptions
+  ansible.builtin.debug:
+    msg: >-
+      Exception {{ windows_exception_item.exception_id | default('unknown') }}
+      ({{ windows_exception_item.name | default('') }}) disabled — skipped.
+  when: not (windows_exception_item.enabled | default(false) | bool)
+  changed_when: false
+  tags:
+    - always
+    - exceptions
+
+- name: Detect malformed expiration_date on enabled exceptions
+  ansible.builtin.set_fact:
+    windows_exceptions_malformed: >-
+      {{
+        windows_exceptions_malformed
+        + [windows_exception_item.exception_id | default('unknown')]
+      }}
+  when:
+    - windows_exception_item.enabled | default(false) | bool
+    - (windows_exception_item.expiration_date | default('') | string | regex_search('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')) is none
+  tags:
+    - always
+    - exceptions
+
+- name: Detect expired enabled exceptions (UTC today via now())
+  ansible.builtin.set_fact:
+    windows_exceptions_expired: >-
+      {{
+        windows_exceptions_expired
+        + [windows_exception_item.exception_id | default('unknown')]
+      }}
+  when:
+    - windows_exception_item.enabled | default(false) | bool
+    - (windows_exception_item.exception_id | default('')) not in (windows_exceptions_malformed | default([]))
+    - (windows_exception_item.expiration_date | default('') | string) < (windows_exception_today_utc | default('1970-01-01'))
+  tags:
+    - always
+    - exceptions
+
+- name: Warn on expired exceptions when policy is warn
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: Exception {{ windows_exception_item.exception_id }} is enabled
+      but expired ({{ windows_exception_item.expiration_date }}; today_utc={{ windows_exception_today_utc }}).
+  when:
+    - windows_exception_item.enabled | default(false) | bool
+    - (windows_exception_item.exception_id | default('')) in (windows_exceptions_expired | default([]))
+    - (windows_exception_expired_policy | default('warn')) == 'warn'
+  tags:
+    - always
+    - exceptions
+
+- name: Fail on expired exceptions when policy is fail
+  ansible.builtin.assert:
+    that:
+      - false
+    fail_msg: >-
+      Exception {{ windows_exception_item.exception_id }} is enabled but expired
+      ({{ windows_exception_item.expiration_date }}). windows_exception_expired_policy=fail.
+  when:
+    - windows_exception_item.enabled | default(false) | bool
+    - (windows_exception_item.exception_id | default('')) in (windows_exceptions_expired | default([]))
+    - (windows_exception_expired_policy | default('warn')) == 'fail'
+  tags:
+    - always
+    - exceptions
+
+- name: Record active non-expired enabled exceptions (report_only default)
+  ansible.builtin.set_fact:
+    windows_exceptions_enabled_active: >-
+      {{
+        windows_exceptions_enabled_active
+        + [windows_exception_item.exception_id | default('unknown')]
+      }}
+    windows_exceptions_applied: >-
+      {{
+        windows_exceptions_applied
+        + [{
+            'exception_id': windows_exception_item.exception_id | default('unknown'),
+            'name': windows_exception_item.name | default(''),
+            'action': windows_exception_item.action | default('report_only'),
+            'owner': windows_exception_item.owner | default('unknown')
+          }]
+      }}
+  when:
+    - windows_exception_item.enabled | default(false) | bool
+    - (windows_exception_item.exception_id | default('')) not in (windows_exceptions_expired | default([]))
+    - (windows_exception_item.exception_id | default('')) not in (windows_exceptions_malformed | default([]))
+  tags:
+    - always
+    - exceptions

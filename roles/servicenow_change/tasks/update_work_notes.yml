@@ -1,0 +1,41 @@
+---
+# EXAMPLE — append a work note to the change record.
+# Replace field name (work_notes) and payload shape per client process.
+
+- name: Skip work notes when message is empty
+  ansible.builtin.debug:
+    msg: >-
+      ServiceNow work notes skipped: snow_work_note_message is empty.
+  when: (snow_work_note_message | default('') | trim | length) == 0
+  changed_when: false
+  tags:
+    - always
+    - servicenow
+
+- name: "EXAMPLE: Update ServiceNow change work notes"
+  ansible.builtin.uri:
+    url: >-
+      {{ snow_effective_instance_url }}/api/now/table/{{ snow_change_table }}/{{ snow_change_id }}
+    method: PATCH
+    headers: "{{ snow_uri_headers }}"
+    url_username: "{{ snow_uri_user if snow_auth_type_normalized == 'basic' else omit }}"
+    url_password: "{{ snow_uri_password if snow_auth_type_normalized == 'basic' else omit }}"
+    force_basic_auth: "{{ snow_auth_type_normalized == 'basic' }}"
+    body_format: json
+    # EXAMPLE body — client must confirm allowed fields and journal behavior.
+    body:
+      work_notes: "{{ snow_work_note_message }}"
+    status_code: [200]
+    return_content: true
+  register: snow_work_notes_result
+  delegate_to: localhost
+  become: false
+  no_log: true
+  when: (snow_work_note_message | default('') | trim | length) > 0
+  failed_when: >-
+    snow_fail_on_invalid_change | default(true) | bool
+    and (snow_work_notes_result.status | default(0)) != 200
+  changed_when: (snow_work_notes_result.status | default(0)) == 200
+  tags:
+    - always
+    - servicenow

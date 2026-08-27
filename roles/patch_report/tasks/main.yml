@@ -1,0 +1,7 @@
+---
+- name: Include patch report record tasks
+  ansible.builtin.include_tasks: record.yml
+  when: (patch_report_phase | default('record')) == 'record'
+  tags:
+    - always
+    - report

@@ -1,0 +1,109 @@
+---
+# Structured service validation (postcheck). Spooler is ignored by default —
+# not every server runs print spooler. Application-specific services are
+# client-defined additions to this list.
+windows_service_validation:
+  - name: W32Time
+    required_state: running
+    critical: true
+  - name: wuauserv
+    required_state: running
+    critical: true
+  - name: BITS
+    required_state: not_disabled
+    critical: true
+  - name: Spooler
+    required_state: ignored
+    critical: false
+
+# Derived name list for precheck probes (existence / soft warning only).
+windows_services_to_check:
+  - W32Time
+  - wuauserv
+  - BITS
+  - Spooler
+
+# Soft disk threshold for precheck warnings (MB). Does not fail the play by default.
+windows_precheck_min_free_disk_mb: 1024
+
+# Default update searches use OS-policy categories only (no drivers/feature/preview).
+windows_updates_search_all_categories: false
+
+# Patch provider is inventory-derived: exactly one windows_wsus_* group → wsus; else unknown.
+# Launch windows_patch_provider is ignored. Active providers: unknown | wsus.
+windows_patch_provider: unknown
+windows_patch_provider_effective: unknown
+windows_patch_providers_allowed:
+  - unknown
+  - wsus
+
+# Optional accept/reject lists for win_updates (omit when empty)
+# windows_patch_accept_list: []
+# windows_patch_reject_list: []
+
+# Active modes: check_only | direct_win_updates
+# Operator surveys use operator_authorize_patch_install (not windows_patch_mode).
+windows_patch_mode: check_only
+windows_patch_modes_allowed:
+  - check_only
+  - direct_win_updates
+
+# Operator-facing runtime decisions (surveyable). Default false.
+# allow_legacy_runtime_controls is never surveyed (CLI extra-vars only).
+operator_authorize_patch_install: false
+operator_allow_pre_patch_reboot: false
+operator_allow_post_patch_reboot: false
+allow_legacy_runtime_controls: false
+patch_apply_enabled: false
+reboot_enabled: false
+
+# Reboot phases (both require reboot_enabled AND the phase-specific flag
+# AND maintenance window). Neither flag implies the other.
+# Operators set operator_allow_pre_patch_reboot / operator_allow_post_patch_reboot.
+pre_patch_reboot_enabled: false
+post_patch_reboot_enabled: false
+reboot_phase: post
+# Inventory-owned policy (Class B). Never surveyed. Fail-closed when unset.
+# Operators may authorize reboot, but AAP will not reboot unless this is true.
+patching_reboot_allowed: false
+# Inventory/group reboot policy per phase. Not surveyable.
+# if_required = reboot only when Windows reports pending_reboot (current default).
+# always = reboot when all safety gates pass, even if pending_reboot is false.
+# Operator authorization remains a separate survey control.
+windows_pre_patch_reboot_mode: if_required
+windows_post_patch_reboot_mode: if_required
+windows_reboot_timeout: 3600
+windows_pre_reboot_delay: 60
+windows_post_reboot_delay: 60
+
+windows_patch_cycle_strategy: single_pass
+
+# Opt-in client PowerShell precheck (off by default)
+windows_powershell_precheck_enabled: false
+windows_powershell_precheck_script: client_precheck.ps1
+
+# OS policy map — caption_regex fail-closed matching (exactly one match).
+# Representative captions: "Microsoft Windows Server 2019 Datacenter",
+# "Microsoft Windows Server 2022 Standard", etc. Unknown OS → unsupported.
+windows_patch_policy_by_os:
+  server_2016:
+    caption_regex: "(?i)Windows Server 2016"
+    supported: true
+    categories:
+      - CriticalUpdates
+      - SecurityUpdates
+      - UpdateRollups
+  server_2019:
+    caption_regex: "(?i)Windows Server 2019"
+    supported: true
+    categories:
+      - CriticalUpdates
+      - SecurityUpdates
+      - UpdateRollups
+  server_2022:
+    caption_regex: "(?i)Windows Server 2022"
+    supported: true
+    categories:
+      - CriticalUpdates
+      - SecurityUpdates
+      - UpdateRollups

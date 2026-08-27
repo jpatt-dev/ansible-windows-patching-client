@@ -1,0 +1,35 @@
+---
+# ServiceNow change integration — OPTIONAL and OFF by default.
+# Safe default disabled: snow_enabled=false (no ServiceNow required).
+#
+# Auth and instance URL come from AAP credentials / injected environment
+# variables — never commit secrets or client-specific URLs to this repo.
+
+snow_enabled: false
+
+# Prefer env SNOW_INSTANCE_URL when empty (set by AAP Credential injection).
+snow_instance_url: ""
+
+# basic | bearer — credentials from env only (see role README).
+snow_auth_type: basic
+
+snow_change_id: ""
+snow_change_task_id: ""
+
+snow_validate_window: true
+snow_update_work_notes: true
+snow_attach_report: false
+snow_fail_on_invalid_change: true
+snow_close_task: false
+
+# validate | work_notes | attach_report | close_task
+snow_phase: validate
+
+snow_work_note_message: ""
+
+# Optional path on the execution node for attach_report (set by calling playbook).
+snow_report_path: ""
+
+# EXAMPLE table names — replace per client ServiceNow process.
+snow_change_table: change_request
+snow_task_table: change_task

@@ -1,0 +1,27 @@
+---
+# ansible-lint configuration for the Windows patching automation.
+# Run with: ansible-lint
+
+profile: moderate
+
+exclude_paths:
+  - collections/
+  - .venv/
+  - venv/
+  - reports/output/
+
+kinds:
+  - playbook: "playbooks/**/*.yml"
+  - tasks: "roles/**/tasks/*.yml"
+  - vars: "inventories/**/group_vars/*.yml"
+  - yaml: "surveys/*.yml"
+
+skip_list:
+  - command-instead-of-shell
+  - var-naming[no-role-prefix]
+
+warn_list:
+  - experimental
+  - no-changed-when
+
+use_default_rules: true

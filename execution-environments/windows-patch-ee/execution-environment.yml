@@ -1,0 +1,18 @@
+---
+# AAP 2.7 Execution Environment definition (ansible-builder v3).
+# Do not put registry credentials or tokens in this file.
+# Collections are declared in requirements.yml — never vendor collections/ into git.
+
+version: 3
+
+images:
+  base_image:
+    name: registry.redhat.io/ansible-automation-platform-27/ee-supported-rhel9:latest
+
+dependencies:
+  galaxy: requirements.yml
+  python: requirements.txt
+  system: bindep.txt
+
+options:
+  package_manager_path: /usr/bin/microdnf

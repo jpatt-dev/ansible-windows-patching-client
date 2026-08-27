@@ -1,0 +1,7 @@
+# Minimal system packages for windows-patch-ee.
+# Prefer the AAP 2.7 supported base image contents.
+# Add lines only when a client build proves a missing OS package is required.
+# Format: package [platforms] (see bindep docs)
+#
+# Example:
+# git [platform:rpm]

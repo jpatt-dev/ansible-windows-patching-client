@@ -1,0 +1,50 @@
+---
+# Fresh pending-reboot probes for the current job (win_reg_stat only).
+# Do not rely on facts from a prior AAP workflow node.
+
+- name: Check Component Based Servicing RebootPending key
+  ansible.windows.win_reg_stat:
+    path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending
+  register: windows_cbs_reboot
+  failed_when: false
+  tags:
+    - reboot
+    - precheck
+
+- name: Check Windows Update RebootRequired key
+  ansible.windows.win_reg_stat:
+    path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired
+  register: windows_wu_reboot
+  failed_when: false
+  tags:
+    - reboot
+    - precheck
+
+- name: Check for pending file rename operation
+  ansible.windows.win_reg_stat:
+    path: HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager
+    name: PendingFileRenameOperations
+  register: windows_pfro_reboot
+  failed_when: false
+  tags:
+    - reboot
+    - precheck
+
+- name: Determine pending reboot state
+  ansible.builtin.set_fact:
+    windows_reboot_required: >-
+      {{
+        (windows_cbs_reboot.exists | default(false))
+        or (windows_wu_reboot.exists | default(false))
+        or (windows_pfro_reboot.exists | default(false))
+      }}
+    pending_reboot: >-
+      {{
+        (windows_cbs_reboot.exists | default(false))
+        or (windows_wu_reboot.exists | default(false))
+        or (windows_pfro_reboot.exists | default(false))
+      }}
+  changed_when: false
+  tags:
+    - reboot
+    - precheck

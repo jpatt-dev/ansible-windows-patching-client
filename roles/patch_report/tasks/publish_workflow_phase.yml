@@ -1,0 +1,77 @@
+---
+# Publish one workflow-global host-keyed phase artifact for AAP Workflow propagation.
+#
+# Input: patch_workflow_phase_key (e.g. apply → patch_phase_apply)
+#
+# Builds:
+#   patch_phase_<key>:
+#     HOSTNAME: <patch_result for that host>
+#
+# set_stats with per_host: false so Controller exposes the map to downstream
+# workflow nodes. Call from a NON-serial play with run_once: true after the
+# phase play has written per-host patch_result into hostvars.
+#
+# Does not invent records for hosts missing patch_result / patch_report_record.
+
+- name: Assert workflow phase key is set
+  ansible.builtin.assert:
+    that:
+      - (patch_workflow_phase_key | default('') | string | trim | length) > 0
+    fail_msg: >-
+      publish_workflow_phase.yml requires patch_workflow_phase_key
+      (e.g. apply, precheck, reboot_pre).
+  tags:
+    - always
+    - report
+
+- name: Resolve workflow-global phase artifact name
+  ansible.builtin.set_fact:
+    patch_workflow_phase_artifact: "patch_phase_{{ patch_workflow_phase_key | trim }}"
+    patch_workflow_phase_map: {}
+  changed_when: false
+  tags:
+    - always
+    - report
+
+- name: Build host-keyed phase map from hostvars patch_result
+  ansible.builtin.set_fact:
+    patch_workflow_phase_map: >-
+      {{
+        patch_workflow_phase_map
+        | combine({
+            item: (
+              hostvars[item].patch_result
+              if (hostvars[item].patch_result is defined)
+              else hostvars[item].patch_report_record
+            )
+          })
+      }}
+  loop: "{{ ansible_play_hosts_all | default([]) }}"
+  when:
+    - hostvars[item] is defined
+    - (hostvars[item].patch_result is defined) or (hostvars[item].patch_report_record is defined)
+  loop_control:
+    label: "{{ item }}"
+  changed_when: false
+  tags:
+    - always
+    - report
+
+- name: Publish workflow-global host-keyed phase artifact
+  ansible.builtin.set_stats:
+    data: "{{ { patch_workflow_phase_artifact: patch_workflow_phase_map } }}"
+    per_host: false
+  tags:
+    - always
+    - report
+
+- name: Report workflow-global phase artifact publication
+  ansible.builtin.debug:
+    msg:
+      - "Published {{ patch_workflow_phase_artifact }} (per_host=false)"
+      - "hosts_in_artifact: {{ patch_workflow_phase_map.keys() | list }}"
+      - "host_count: {{ patch_workflow_phase_map | length }}"
+  changed_when: false
+  tags:
+    - always
+    - report

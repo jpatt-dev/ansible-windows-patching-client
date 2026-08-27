@@ -1,0 +1,62 @@
+---
+# AAP survey spec for "Windows - Pre-Patch Reboot If Required".
+# One operator decision: allow pre-patch reboot. Does not authorize install
+# or post-patch reboot. Internal mapping: reboot_enabled + pre_patch_reboot_enabled.
+name: "Windows Pre-Patch Reboot Survey"
+description: >-
+  Authorize pre-patch reboot when a pending reboot is detected in this job.
+  Defaults false. Targeting is AAP Limit, not a survey field.
+spec:
+  - variable: operator_allow_pre_patch_reboot
+    question_name: "Allow pre-patch reboot when required?"
+    question_description: >-
+      When true, this job may reboot if pending reboot is detected, Limit is
+      approved, and the maintenance window is open. Does not authorize patch
+      install or post-patch reboot.
+    type: multiplechoice
+    choices:
+      - "false"
+      - "true"
+    default: "false"
+    required: true
+
+  - variable: change_ticket_id
+    question_name: "Change ticket ID"
+    type: text
+    default: ""
+    required: false
+
+  - variable: maintenance_window_start
+    question_name: "Maintenance window start UTC"
+    question_description: "ISO-8601 Z, e.g. 2026-08-17T02:00:00Z"
+    type: text
+    default: ""
+    required: false
+
+  - variable: maintenance_window_end
+    question_name: "Maintenance window end UTC"
+    question_description: "ISO-8601 Z, e.g. 2026-08-17T06:00:00Z"
+    type: text
+    default: ""
+    required: false
+
+  - variable: maintenance_window_acknowledged
+    question_name: "Maintenance window acknowledged"
+    type: multiplechoice
+    choices:
+      - "false"
+      - "true"
+    default: "false"
+    required: true
+
+  - variable: snow_enabled
+    question_name: "Enable ServiceNow integration"
+    question_description: >-
+      Credentials remain AAP Credentials. Enable only when a change record
+      should be validated / receive work notes.
+    type: multiplechoice
+    choices:
+      - "false"
+      - "true"
+    default: "false"
+    required: true

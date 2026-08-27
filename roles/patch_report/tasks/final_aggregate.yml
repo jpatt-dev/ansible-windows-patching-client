@@ -1,0 +1,158 @@
+---
+# Aggregate patch_final_result across the Limit population and print stdout summary.
+# Must run from a non-serial play with run_once so aggregation is once per Limit
+# (not once per serial batch).
+
+- name: Build host list of final results
+  ansible.builtin.set_fact:
+    patch_workflow_hosts: "{{ ansible_play_hosts_all | map('extract', hostvars) | selectattr('patch_final_result', 'defined') | map(attribute='patch_final_result') | list }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Compute status counts
+  ansible.builtin.set_fact:
+    patch_workflow_status_counts:
+      compliant: "{{ patch_workflow_hosts | selectattr('final_status', 'equalto', 'compliant') | list | length }}"
+      excluded: "{{ patch_workflow_hosts | selectattr('final_status', 'equalto', 'excluded') | list | length }}"
+      degraded: "{{ patch_workflow_hosts | selectattr('final_status', 'equalto', 'degraded') | list | length }}"
+      failed: "{{ patch_workflow_hosts | selectattr('final_status', 'equalto', 'failed') | list | length }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Initialize excluded and follow-up lists
+  ansible.builtin.set_fact:
+    patch_workflow_excluded_hosts: []
+    patch_workflow_manual_followup_hosts: []
+  changed_when: false
+  tags:
+    - report
+
+- name: Collect excluded hosts
+  ansible.builtin.set_fact:
+    patch_workflow_excluded_hosts: "{{ patch_workflow_excluded_hosts + [{'host': item.host, 'reference': item.patching_exception_reference | default('')}] }}"
+  loop: "{{ patch_workflow_hosts }}"
+  when: (item.final_status | default('')) == 'excluded'
+  loop_control:
+    label: "{{ item.host | default('unknown') }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Collect manual follow-up hosts
+  ansible.builtin.set_fact:
+    patch_workflow_manual_followup_hosts: "{{ patch_workflow_manual_followup_hosts + [item.host] }}"
+  loop: "{{ patch_workflow_hosts }}"
+  when: item.manual_followup_required | default(false) | bool
+  loop_control:
+    label: "{{ item.host | default('unknown') }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Resolve numeric totals only when all values are known
+  ansible.builtin.set_fact:
+    _installed_values: "{{ patch_workflow_hosts | map(attribute='updates_installed') | list }}"
+    _remaining_values: "{{ patch_workflow_hosts | map(attribute='updates_remaining') | list }}"
+    _pre_reboot_values: "{{ patch_workflow_hosts | map(attribute='pre_patch_reboot_performed') | list }}"
+    _post_reboot_values: "{{ patch_workflow_hosts | map(attribute='post_patch_reboot_performed') | list }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Compute known numeric aggregates
+  ansible.builtin.set_fact:
+    _updates_installed_total: >-
+      {{
+        (_installed_values | map('int') | sum)
+        if ((_installed_values | select('equalto', 'not_available') | list | length) == 0)
+        else 'not_available'
+      }}
+    _updates_remaining_total: >-
+      {{
+        (_remaining_values | map('int') | sum)
+        if ((_remaining_values | select('equalto', 'not_available') | list | length) == 0)
+        else 'not_available'
+      }}
+    _reboots_performed_total: >-
+      {{
+        (
+          (_pre_reboot_values | map('bool') | select | list | length)
+          + (_post_reboot_values | map('bool') | select | list | length)
+        )
+        if (
+          (_pre_reboot_values | select('equalto', 'not_available') | list | length) == 0
+          and (_post_reboot_values | select('equalto', 'not_available') | list | length) == 0
+        )
+        else 'not_available'
+      }}
+  changed_when: false
+  tags:
+    - report
+
+- name: Build patch_workflow_report aggregate
+  ansible.builtin.set_fact:
+    patch_workflow_report:
+      schema_version: "1"
+      report_generated_at_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+      change_ticket_id: "{{ change_ticket_id | default('') }}"
+      patch_target_scope: "{{ patch_target_scope | default(ansible_limit | default('')) }}"
+      patch_wave_name: "{{ patch_wave_name | default('unspecified') }}"
+      total_hosts: "{{ patch_workflow_hosts | length }}"
+      status_counts: "{{ patch_workflow_status_counts }}"
+      manual_followup_hosts: "{{ patch_workflow_manual_followup_hosts }}"
+      excluded_hosts: "{{ patch_workflow_excluded_hosts }}"
+      updates_installed_total: "{{ _updates_installed_total }}"
+      updates_remaining_total: "{{ _updates_remaining_total }}"
+      reboots_performed_total: "{{ _reboots_performed_total }}"
+      hosts: "{{ patch_workflow_hosts }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Render machine-readable JSON artifact string
+  ansible.builtin.set_fact:
+    patch_workflow_report_json: "{{ patch_workflow_report | to_json }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Print Final Patch Report header
+  ansible.builtin.debug:
+    msg:
+      - "WINDOWS PATCH WORKFLOW FINAL REPORT"
+      - "Change: {{ change_ticket_id | default('') }}"
+      - "Limit: {{ patch_target_scope | default(ansible_limit | default('')) }}"
+      - "Wave: {{ patch_wave_name | default('unspecified') }}"
+      - "Generated: {{ patch_workflow_report.report_generated_at_utc }}"
+      - "----------------------------------------------------------------"
+      - "Host | Status | Exception | Attempted | Installed | Remaining | PendingReboot | Follow-up"
+  tags:
+    - report
+
+- name: Print Final Patch Report per-host rows
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.host }} | {{ item.final_status }} | {{ (item.patching_exception_reference | default('') | length > 0) | ternary(item.patching_exception_reference, '-') }} | {{ item.patch_attempted }} | {{ item.updates_installed }} | {{ item.updates_remaining }} | {{ item.pending_reboot_final }} | {{ item.manual_followup_required }}
+  loop: "{{ patch_workflow_hosts }}"
+  loop_control:
+    label: "{{ item.host | default('unknown') }}"
+  tags:
+    - report
+
+- name: Print Final Patch Report summary counts
+  ansible.builtin.debug:
+    msg:
+      - "Summary: total={{ patch_workflow_report.total_hosts }} compliant={{ patch_workflow_status_counts.compliant }} excluded={{ patch_workflow_status_counts.excluded }} degraded={{ patch_workflow_status_counts.degraded }} failed={{ patch_workflow_status_counts.failed }} manual_followup={{ patch_workflow_manual_followup_hosts | length }}"
+  tags:
+    - report
+
+- name: Publish aggregate Final Patch Report artifacts
+  ansible.builtin.set_stats:
+    data:
+      patch_workflow_report: "{{ patch_workflow_report }}"
+      patch_workflow_report_json: "{{ patch_workflow_report_json }}"
+    per_host: false
+  tags:
+    - report

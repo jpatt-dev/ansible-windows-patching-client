@@ -1,0 +1,22 @@
+---
+# Structured patch reporting for AAP workflows.
+# Local EE files under /tmp are ephemeral — export for production (see docs).
+
+patch_report_output_dir: "{{ report_dir | default('/tmp/aap-patch-reports') }}"
+patch_report_phase: record
+
+region: ""
+environment: ""
+change_ticket_id: ""
+
+# Optional overrides passed by callers when recording a phase.
+patch_report_precheck_status: ""
+patch_report_patch_status: ""
+patch_report_postcheck_status: ""
+patch_report_phase_name: ""
+patch_report_updates_available: ""
+patch_report_updates_found: ""
+patch_report_updates_installed: ""
+patch_report_reboot_required_override: ""
+patch_report_remediation_required: ""
+patch_report_manual_followup_required: ""

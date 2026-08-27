@@ -1,0 +1,15 @@
+---
+# Ansible collection dependencies (public Galaxy).
+#
+# Install locally (lint/dev only):
+#   ansible-galaxy collection install -r requirements.yml
+#
+# Production runtime collections come from the Execution Environment
+# (execution-environments/windows-patch-ee/) — do not vendor collections/ into git.
+#
+# ServiceNow: this pack uses ansible.builtin.uri stubs. Do not add
+# servicenow.itsm unless a client fork replaces the stubs.
+
+collections:
+  - name: ansible.windows
+    version: ">=2.3.0"

@@ -1,0 +1,81 @@
+---
+# Windows Patch Apply (short name)
+# Installs only when operator_authorize_patch_install is true (normalized to
+# patch_apply_enabled + windows_patch_mode=direct_win_updates) and all other
+# gates pass. Default is dry-run (check_only).
+#
+# CLI (dry-run default):
+#   ansible-playbook -i /path/to/client-inventory \
+#     playbooks/windows/apply.yml
+
+- name: Windows patch apply
+  hosts: windows_hosts
+  gather_facts: false
+  serial: "{{ patch_serial | default(omit) }}"
+  tags:
+    - apply
+    - windows
+    - patching
+
+  pre_tasks:
+    - name: Include shared orchestration validation
+      ansible.builtin.include_role:
+        name: patch_common
+      vars:
+        patch_default_target: windows_hosts
+        patch_enforce_scoped_target: true
+      tags:
+        - always
+
+    - name: Validate ServiceNow change before remediation
+      ansible.builtin.include_role:
+        name: servicenow_change
+      vars:
+        snow_phase: validate
+      run_once: true
+      tags:
+        - always
+        - servicenow
+
+  roles:
+    - role: windows_patch
+      vars:
+        patch_phase: apply
+
+  post_tasks:
+    - name: Update ServiceNow work notes after apply
+      ansible.builtin.include_role:
+        name: servicenow_change
+      vars:
+        snow_phase: work_notes
+        snow_work_note_message: >-
+          AAP Windows patch apply completed for scope
+          {{ patch_target_scope | default('not_available') }}
+          (wave={{ patch_wave_name | default('unspecified') }}).
+      run_once: true
+      tags:
+        - always
+        - servicenow
+
+# Serial-safe workflow-global artifact for Final Patch Report.
+- name: Windows patch apply — publish workflow-global phase artifact
+  hosts: windows_hosts
+  gather_facts: false
+  connection: local
+  tags:
+    - apply
+    - windows
+    - patching
+    - report
+
+  tasks:
+    - name: Publish patch_phase_apply host-keyed artifact
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: publish_workflow_phase.yml
+      vars:
+        patch_workflow_phase_key: apply
+      run_once: true
+      tags:
+        - always
+        - report

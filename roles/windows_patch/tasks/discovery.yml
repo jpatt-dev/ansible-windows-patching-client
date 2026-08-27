@@ -1,0 +1,84 @@
+---
+# Patch discovery — policy-category search for WSUS; unknown = no win_updates.
+# Never installs. Re-collect state in this job (no cross-node facts).
+
+- name: Normalize discovery mode
+  ansible.builtin.set_fact:
+    windows_patch_mode: "{{ windows_patch_mode | default('check_only') | trim | lower }}"
+  tags:
+    - discovery
+
+- name: Include patch source resolve for discovery context (validate only)
+  ansible.builtin.include_role:
+    name: windows_patch_source
+  vars:
+    windows_wsus_configuration_mode: validate
+  tags:
+    - discovery
+    - source
+
+- name: Collect host health for OS policy resolution
+  ansible.builtin.include_tasks: collect_host_health.yml
+  when: windows_patch_provider_effective | default('unknown') == 'wsus'
+  tags:
+    - discovery
+
+- name: Search pending updates using approved OS policy categories
+  ansible.builtin.include_tasks: search_updates_policy.yml
+  tags:
+    - discovery
+    - patching
+
+- name: Note unknown provider skips win_updates discovery search
+  ansible.builtin.debug:
+    msg: >-
+      provider_effective=unknown on {{ inventory_hostname }}: skipping win_updates
+      search (provider-neutral checks only).
+  when: windows_patch_provider_effective | default('unknown') == 'unknown'
+  changed_when: false
+  tags:
+    - discovery
+
+- name: Check pending reboot during discovery
+  ansible.builtin.include_tasks: check_pending_reboot.yml
+  tags:
+    - discovery
+    - reboot
+
+- name: Set discovery outcome facts
+  ansible.builtin.set_fact:
+    updates_found: "{{ windows_updates_policy_count | default(0) | int }}"
+    discovery_status: ok
+  changed_when: false
+  tags:
+    - discovery
+    - report
+
+- name: Report discovery summary
+  ansible.builtin.debug:
+    msg:
+      - "host: {{ inventory_hostname }}"
+      - "patch_provider_effective: {{ windows_patch_provider_effective | default('unknown') }}"
+      - "patch_mode: {{ windows_patch_mode }}"
+      - "os_policy_id: {{ windows_os_policy.policy_id | default('n/a') }}"
+      - "updates_found_policy: {{ updates_found | default(0) }}"
+      - "pending_reboot: {{ pending_reboot | default(false) }}"
+      - "patching_exception_active: {{ patching_exception_active | default(false) }}"
+      - "patching_exception_reference: {{ patching_exception_reference_effective | default('') }}"
+      - "discovery_status: {{ discovery_status }}"
+  tags:
+    - discovery
+    - report
+
+- name: Record discovery patch_result for AAP
+  ansible.builtin.include_role:
+    name: patch_report
+  vars:
+    patch_report_phase: record
+    patch_report_phase_name: discovery
+    patch_report_patch_status: "{{ 'excluded' if (patching_exception_active | default(false) | bool) else '' }}"
+    patch_report_updates_found: "{{ updates_found | default(0) }}"
+    patch_report_updates_available: "{{ updates_found | default(0) }}"
+  tags:
+    - discovery
+    - report

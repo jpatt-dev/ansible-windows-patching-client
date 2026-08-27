@@ -1,0 +1,238 @@
+---
+# Write canonical Final Patch Report files from patch_workflow_report.
+# WARNING: EE paths (e.g. /tmp) are ephemeral — AAP set_stats is primary.
+# Final Report file generation consumes patch_workflow_report, not phase-local
+# patch_result.
+# Caller: non-serial play, run_once: true, connection: local.
+
+- name: Assert patch_workflow_report is available for Final Report write
+  ansible.builtin.assert:
+    that:
+      - patch_workflow_report is defined
+      - patch_workflow_report is mapping
+    fail_msg: >-
+      final_write.yml requires patch_workflow_report from final_aggregate.yml.
+  tags:
+    - report
+
+- name: Resolve Final Report output paths
+  ansible.builtin.set_fact:
+    patch_report_output_dir_effective: "{{ patch_report_output_dir | default(report_dir | default('/tmp/aap-patch-reports')) }}"
+    patch_final_report_timestamp: "{{ now(utc=true, fmt='%Y-%m-%dT%H-%M-%S') }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Set Final Report filenames
+  ansible.builtin.set_fact:
+    patch_final_report_json_path: "{{ patch_report_output_dir_effective }}/windows-final-patch-report-{{ patch_final_report_timestamp }}.json"
+    patch_final_report_csv_path: "{{ patch_report_output_dir_effective }}/windows-final-patch-report-{{ patch_final_report_timestamp }}.csv"
+    patch_final_report_md_path: "{{ patch_report_output_dir_effective }}/windows-final-patch-report-{{ patch_final_report_timestamp }}.md"
+  changed_when: false
+  tags:
+    - report
+
+- name: Initialize Final Report CSV rows
+  ansible.builtin.set_fact:
+    patch_workflow_report_csv_rows:
+      - >-
+        "host","final_status","change_ticket_id","patch_target_scope","patch_wave_name","patching_exception_active","patching_exception_reference","patching_exception_source","patching_reboot_allowed","patch_provider","windows_wsus_assignment_group","wsus_mapping_status","windows_wsus_config_match","os_policy_id","patch_attempted","updates_installed","updates_failed","updates_remaining","pre_patch_reboot_required","pre_patch_reboot_performed","post_patch_reboot_required","post_patch_reboot_performed","pending_reboot_final","postcheck_status","manual_followup_required","application_metadata_status"
+  changed_when: false
+  tags:
+    - report
+
+- name: Append quoted Final Report CSV host rows
+  ansible.builtin.set_fact:
+    patch_workflow_report_csv_rows: >-
+      {{
+        patch_workflow_report_csv_rows
+        + [
+          [
+            item.host | default(''),
+            item.final_status | default(''),
+            item.change_ticket_id | default(''),
+            item.patch_target_scope | default(''),
+            item.patch_wave_name | default(''),
+            item.patching_exception_active | default(''),
+            item.patching_exception_reference | default(''),
+            item.patching_exception_source | default(''),
+            item.patching_reboot_allowed | default(''),
+            item.patch_provider | default(''),
+            item.windows_wsus_assignment_group | default(''),
+            item.wsus_mapping_status | default(''),
+            item.windows_wsus_config_match | default(''),
+            item.os_policy_id | default(''),
+            item.patch_attempted | default(''),
+            item.updates_installed | default(''),
+            item.updates_failed | default(''),
+            item.updates_remaining | default(''),
+            item.pre_patch_reboot_required | default(''),
+            item.pre_patch_reboot_performed | default(''),
+            item.post_patch_reboot_required | default(''),
+            item.post_patch_reboot_performed | default(''),
+            item.pending_reboot_final | default(''),
+            item.postcheck_status | default(''),
+            item.manual_followup_required | default(''),
+            item.application_metadata_status | default('')
+          ]
+          | map('string')
+          | map('regex_replace', '"', '""')
+          | map('regex_replace', '^(.*)$', '"\1"')
+          | join(',')
+        ]
+      }}
+  loop: "{{ patch_workflow_report.hosts | default([]) }}"
+  loop_control:
+    label: "{{ item.host | default('unknown') }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Join Final Report CSV content
+  ansible.builtin.set_fact:
+    patch_workflow_report_csv: "{{ patch_workflow_report_csv_rows | join('\n') }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Ensure Final Report output directory exists
+  ansible.builtin.file:
+    path: "{{ patch_report_output_dir_effective }}"
+    state: directory
+    mode: "0750"
+  delegate_to: localhost
+  become: false
+  failed_when: false
+  tags:
+    - report
+
+- name: Write Final Report JSON from patch_workflow_report
+  ansible.builtin.copy:
+    content: "{{ patch_workflow_report | to_nice_json }}\n"
+    dest: "{{ patch_final_report_json_path }}"
+    mode: "0640"
+  delegate_to: localhost
+  become: false
+  tags:
+    - report
+
+- name: Write Final Report CSV from patch_workflow_report.hosts
+  ansible.builtin.copy:
+    content: "{{ patch_workflow_report_csv }}\n"
+    dest: "{{ patch_final_report_csv_path }}"
+    mode: "0640"
+  delegate_to: localhost
+  become: false
+  tags:
+    - report
+
+- name: Write Final Report Markdown from patch_workflow_report
+  ansible.builtin.copy:
+    content: |
+      # Windows Patch Workflow Final Report
+
+      Generated: {{ patch_workflow_report.report_generated_at_utc | default('not_available') }}
+      Change: {{ patch_workflow_report.change_ticket_id | default('') }}
+      Limit: {{ patch_workflow_report.patch_target_scope | default('') }}
+      Wave: {{ patch_workflow_report.patch_wave_name | default('unspecified') }}
+
+      ## Summary
+
+      | Metric | Value |
+      | --- | --- |
+      | Total Hosts | {{ patch_workflow_report.total_hosts | default(0) }} |
+      | Compliant | {{ patch_workflow_report.status_counts.compliant | default(0) }} |
+      | Excluded | {{ patch_workflow_report.status_counts.excluded | default(0) }} |
+      | Degraded | {{ patch_workflow_report.status_counts.degraded | default(0) }} |
+      | Failed | {{ patch_workflow_report.status_counts.failed | default(0) }} |
+      | Manual Follow-up | {{ patch_workflow_report.manual_followup_hosts | default([]) | length }} |
+      | Updates Installed Total | {{ patch_workflow_report.updates_installed_total | default('not_available') }} |
+      | Updates Remaining Total | {{ patch_workflow_report.updates_remaining_total | default('not_available') }} |
+      | Reboots Performed Total | {{ patch_workflow_report.reboots_performed_total | default('not_available') }} |
+
+      ## Host Summary
+
+      | Host | Status | Exception | Attempted | Installed | Remaining | Pending Reboot | AAP Reboot Allowed | Follow-up |
+      | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+      {% for h in patch_workflow_report.hosts | default([]) %}
+      | {{ h.host }} | {{ h.final_status }} | {{ ((h.patching_exception_reference | default('') | length) > 0) | ternary(h.patching_exception_reference, '-') }} | {{ h.patch_attempted }} | {{ h.updates_installed }} | {{ h.updates_remaining }} | {{ h.pending_reboot_final }} | {{ h.patching_reboot_allowed }} | {{ h.manual_followup_required }} |
+      {% endfor %}
+
+      ## Excluded Hosts
+
+      {% if (patch_workflow_report.excluded_hosts | default([]) | length) == 0 %}
+      None.
+      {% else %}
+      {% for e in patch_workflow_report.excluded_hosts %}
+      - {{ e.host }} — {{ e.reference | default('') }}
+      {% endfor %}
+      {% endif %}
+
+      ## Host Details
+
+      {% for h in patch_workflow_report.hosts | default([]) %}
+      ### {{ h.host }}
+
+      - Final status: {{ h.final_status }}
+      - Exception active: {{ h.patching_exception_active }}
+      - Exception reference: {{ ((h.patching_exception_reference | default('') | length) > 0) | ternary(h.patching_exception_reference, 'none') }}
+      - Exception source: {{ h.patching_exception_source | default('not_available') }}
+      - Patch provider: {{ h.patch_provider | default('not_available') }}
+      - WSUS assignment: {{ h.windows_wsus_assignment_group | default('not_available') }}
+      - WSUS mapping: {{ h.wsus_mapping_status | default('not_available') }}
+      - WSUS config match: {{ h.windows_wsus_config_match | default('not_available') }}
+      - OS policy: {{ h.os_policy_id | default('not_available') }}
+      - Patch attempted: {{ h.patch_attempted | default('not_available') }}
+      - Updates installed: {{ h.updates_installed | default('not_available') }}
+      - Updates failed: {{ h.updates_failed | default('not_available') }}
+      - Updates remaining: {{ h.updates_remaining | default('not_available') }}
+      - Pre-patch reboot required/performed: {{ h.pre_patch_reboot_required | default('not_available') }} / {{ h.pre_patch_reboot_performed | default('not_available') }}
+      - Post-patch reboot required/performed: {{ h.post_patch_reboot_required | default('not_available') }} / {{ h.post_patch_reboot_performed | default('not_available') }}
+      - Pending reboot (final): {{ h.pending_reboot_final | default('not_available') }}
+      - AAP reboot allowed: {{ h.patching_reboot_allowed | default('not_available') }}
+      - Postcheck status: {{ h.postcheck_status | default('not_available') }}
+      - Manual follow-up: {{ h.manual_followup_required | default('not_available') }}
+      - Application metadata: {{ h.application_metadata_status | default('not_available') }}
+      - Upstream artifact status: {{ h.upstream_artifact_status | default('not_available') }}
+
+      {% endfor %}
+
+      ---
+      Note: Historical fields show not_available when upstream phase artifacts
+      were not propagated. EE-local report files are ephemeral; AAP set_stats
+      (patch_workflow_report) is the primary structured artifact.
+    dest: "{{ patch_final_report_md_path }}"
+    mode: "0640"
+  delegate_to: localhost
+  become: false
+  tags:
+    - report
+
+- name: Publish Final Report file path facts for ServiceNow attachment
+  ansible.builtin.set_fact:
+    patch_report_files:
+      - "{{ patch_final_report_json_path }}"
+      - "{{ patch_final_report_md_path }}"
+      - "{{ patch_final_report_csv_path }}"
+    patch_report_primary_path: "{{ patch_final_report_json_path }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Publish Final Report CSV string artifact
+  ansible.builtin.set_stats:
+    data:
+      patch_workflow_report_csv: "{{ patch_workflow_report_csv }}"
+    per_host: false
+  tags:
+    - report
+
+- name: Report Final Report file locations (ephemeral on EE)
+  ansible.builtin.debug:
+    msg:
+      - "WARNING: Final Report files under {{ patch_report_output_dir_effective }} are ephemeral on AAP EEs."
+      - "Primary artifact remains set_stats patch_workflow_report / patch_final_result."
+      - "patch_report_primary_path: {{ patch_report_primary_path }}"
+      - "patch_report_files: {{ patch_report_files }}"
+  tags:
+    - report

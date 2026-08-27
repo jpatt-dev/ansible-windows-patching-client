@@ -1,0 +1,106 @@
+---
+# Structured Windows service validation via win_service_info.
+# required_state: running | not_disabled | ignored
+# ignored → always ok. Missing + critical → fail. Missing + non-critical → ok.
+# running → must exist and state in started|running.
+# not_disabled → must exist and start_mode must not be disabled.
+
+- name: Initialize service validation results
+  ansible.builtin.set_fact:
+    windows_service_validation_results: []
+    windows_failed_service_names: []
+  changed_when: false
+  tags:
+    - always
+    - postcheck
+
+- name: Probe Windows services for validation policy
+  ansible.windows.win_service_info:
+    name: "{{ item.name }}"
+  register: windows_service_validation_raw
+  failed_when: false
+  loop: "{{ windows_service_validation | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags:
+    - always
+    - postcheck
+
+- name: Evaluate each service against policy
+  ansible.builtin.set_fact:
+    windows_service_validation_results: "{{ windows_service_validation_results + [windows_service_eval_row] }}"
+    windows_failed_service_names: >-
+      {{
+        windows_failed_service_names
+        + ([item.item.name] if ((item.item.critical | default(true) | bool) and not (windows_service_row_ok | bool)) else [])
+      }}
+  vars:
+    _svc_exists: >-
+      {{
+        (item.services | default([]) | length) > 0
+        and ((item.services[0].exists | default(true)) | bool)
+      }}
+    _svc_state: >-
+      {{
+        (item.services[0].state | default('unknown') | lower)
+        if (_svc_exists | bool)
+        else 'missing'
+      }}
+    _svc_start_mode: >-
+      {{
+        (item.services[0].start_mode | default('unknown') | lower)
+        if (_svc_exists | bool)
+        else 'missing'
+      }}
+    _req: "{{ item.item.required_state | default('running') | lower }}"
+    _crit: "{{ item.item.critical | default(true) | bool }}"
+    _running_ok: "{{ (_svc_state | string) in ['started', 'running'] }}"
+    _not_disabled_ok: "{{ (_svc_start_mode | string) != 'disabled' }}"
+    windows_service_row_ok: >-
+      {{
+        (_req == 'ignored')
+        or (not (_svc_exists | bool) and not (_crit | bool))
+        or (
+          (_svc_exists | bool)
+          and (
+            ((_req == 'running') and (_running_ok | bool))
+            or ((_req == 'not_disabled') and (_not_disabled_ok | bool))
+            or ((_req not in ['running', 'not_disabled']) and (_running_ok | bool))
+          )
+        )
+      }}
+    windows_service_eval_row:
+      name: "{{ item.item.name }}"
+      required_state: "{{ item.item.required_state | default('running') }}"
+      critical: "{{ item.item.critical | default(true) | bool }}"
+      exists: "{{ _svc_exists | bool }}"
+      state: "{{ _svc_state }}"
+      start_mode: "{{ _svc_start_mode }}"
+      ok: "{{ windows_service_row_ok | bool }}"
+  loop: "{{ windows_service_validation_raw.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name | default('unknown') }}"
+  tags:
+    - always
+    - postcheck
+
+- name: Set critical services ok flag
+  ansible.builtin.set_fact:
+    windows_critical_services_ok: "{{ (windows_failed_service_names | default([]) | length) == 0 }}"
+  changed_when: false
+  tags:
+    - always
+    - postcheck
+    - report
+
+- name: Report Windows service validation summary
+  ansible.builtin.debug:
+    msg: >-
+      Service validation on {{ inventory_hostname }}:
+      critical_ok={{ windows_critical_services_ok | default(true) }},
+      failed={{ windows_failed_service_names | default([]) | join(', ') or 'none' }}.
+  changed_when: false
+  tags:
+    - always
+    - postcheck
+    - report

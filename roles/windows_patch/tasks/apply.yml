@@ -1,0 +1,149 @@
+---
+# Windows apply — WSUS/WUA active path only.
+# unknown: never remediate.
+# wsus + direct_win_updates: win_updates reboot:false + explicit categories after gates.
+# check_only: successful non-install.
+# Apply readiness revalidates in this job (no cross-node fact dependency).
+# patching_exception_active hosts skip remediation (no win_updates; no remediating asserts).
+
+- name: Skip remediating Apply for approved patch-cycle exception
+  ansible.builtin.set_fact:
+    updates_installed: 0
+    reboot_required: false
+    post_patch_reboot_required: false
+    patch_attempted: false
+    windows_apply_status: excluded
+    windows_patch_provider_effective: not_evaluated
+    windows_wsus_assignment_group: not_available
+    windows_wsus_config_match: not_available
+    windows_wsus_mapping_status: not_available
+    windows_os_policy:
+      policy_id: not_available
+      categories: not_available
+  when: patching_exception_active | default(false) | bool
+  changed_when: false
+  tags:
+    - apply
+    - report
+
+- name: Announce patch-cycle exception exclusion during Apply
+  ansible.builtin.debug:
+    msg: >-
+      EXCLUDED: {{ inventory_hostname }} has patching_exception_active=true
+      (reference={{ patching_exception_reference_effective | default('') }};
+      source={{ patching_exception_source | default('workflow_survey') }}).
+      No win_updates install; remediating readiness asserts skipped.
+  when: patching_exception_active | default(false) | bool
+  changed_when: false
+  tags:
+    - apply
+    - report
+
+- name: Run in-job apply readiness validation
+  ansible.builtin.include_tasks: apply_readiness.yml
+  when: not (patching_exception_active | default(false) | bool)
+  tags:
+    - apply
+
+- name: Announce check_only mode (never installs)
+  ansible.builtin.debug:
+    msg: >-
+      CHECK-ONLY: provider_effective={{ windows_patch_provider_effective | default('unknown') }}
+      mode=check_only on {{ inventory_hostname }}. No updates will be installed.
+  when:
+    - not (patching_exception_active | default(false) | bool)
+    - windows_patch_mode == 'check_only'
+  tags:
+    - apply
+
+- name: Install Windows updates via win_updates (WSUS direct only; explicit categories)
+  ansible.windows.win_updates:
+    state: installed
+    category_names: "{{ windows_os_policy.categories }}"
+    reboot: false
+    accept_list: "{{ windows_patch_accept_list | default(omit) }}"
+    reject_list: "{{ windows_patch_reject_list | default(omit) }}"
+  register: windows_update_install
+  when:
+    - not (patching_exception_active | default(false) | bool)
+    - windows_patch_provider_effective | default('unknown') == 'wsus'
+    - windows_patch_mode == 'direct_win_updates'
+    - patch_apply_enabled
+    - maintenance_window_acknowledged
+    - windows_os_policy_supported | default(false) | bool
+    - (windows_os_policy.categories | default([]) | length) > 0
+    - not (pending_reboot | default(false) | bool)
+  tags:
+    - apply
+
+- name: Set Windows apply outcome facts
+  ansible.builtin.set_fact:
+    updates_installed: "{{ windows_update_install.installed_update_count | default(0) | int }}"
+    reboot_required: >-
+      {{
+        (windows_update_install.reboot_required | default(false) | bool)
+        if (windows_update_install is defined and not (windows_update_install is skipped))
+        else false
+      }}
+    post_patch_reboot_required: >-
+      {{
+        (windows_update_install.reboot_required | default(false) | bool)
+        if (windows_update_install is defined and not (windows_update_install is skipped))
+        else false
+      }}
+    patch_attempted: >-
+      {{
+        windows_update_install is defined
+        and not (windows_update_install is skipped)
+      }}
+    windows_apply_status: >-
+      {{
+        'check_only'
+        if (windows_patch_mode == 'check_only')
+        else (
+          'blocked_unknown_provider'
+          if ((windows_patch_provider_effective | default('unknown')) == 'unknown')
+          else 'ok'
+        )
+      }}
+  when: not (patching_exception_active | default(false) | bool)
+  changed_when: false
+  tags:
+    - apply
+    - report
+
+- name: Report Windows apply result
+  ansible.builtin.debug:
+    msg:
+      - "host: {{ inventory_hostname }}"
+      - "patch_provider_effective: {{ windows_patch_provider_effective | default('unknown') }}"
+      - "patch_mode: {{ windows_patch_mode }}"
+      - "windows_apply_status: {{ windows_apply_status }}"
+      - "patch_apply_enabled: {{ patch_apply_enabled }}"
+      - "patching_exception_active: {{ patching_exception_active | default(false) }}"
+      - "patching_exception_reference: {{ patching_exception_reference_effective | default('') }}"
+      - "patch_attempted: {{ patch_attempted | default(false) }}"
+      - "updates_installed: {{ updates_installed | default(0) }}"
+      - "reboot_required_by_install: {{ reboot_required | default(false) }}"
+      - "os_policy_categories: {{ windows_os_policy.categories | default([]) }}"
+      - "windows_wsus_assignment_group: {{ windows_wsus_assignment_group | default('') }}"
+      - "windows_wsus_config_match: {{ windows_wsus_config_match | default('not_validated') }}"
+      - "note: reboot is never forced from Apply (win_updates reboot=false)"
+      - "patch_cycle_strategy: {{ windows_patch_cycle_strategy | default('single_pass') }} (no automatic multi-cycle loop)"
+  tags:
+    - apply
+    - report
+
+- name: Record Windows apply patch_result for AAP
+  ansible.builtin.include_role:
+    name: patch_report
+  vars:
+    patch_report_phase: record
+    patch_report_phase_name: apply
+    patch_report_patch_status: "{{ windows_apply_status }}"
+    patch_report_updates_installed: "{{ updates_installed | default(0) }}"
+    patch_report_updates_found: "{{ windows_update_install.found_update_count | default(updates_installed | default(0)) }}"
+    patch_report_reboot_required_override: "{{ reboot_required | default(false) | bool }}"
+  tags:
+    - apply
+    - report

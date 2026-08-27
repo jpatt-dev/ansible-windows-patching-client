@@ -1,0 +1,81 @@
+---
+# Derive operational target scope from AAP Limit (ansible_limit).
+# Playbook hosts: windows_hosts is the safety boundary; Limit selects the wave.
+
+- name: Normalize operator-facing survey controls to internal gates
+  ansible.builtin.include_tasks: normalize_operator_controls.yml
+  tags:
+    - always
+
+- name: Normalize patch target scope from ansible_limit
+  ansible.builtin.set_fact:
+    patch_ansible_limit: "{{ ansible_limit | default('') | trim }}"
+    patch_target_scope: "{{ ansible_limit | default('') | trim }}"
+  run_once: true
+  changed_when: false
+  tags:
+    - always
+
+- name: Require explicit AAP Limit for patching jobs
+  ansible.builtin.assert:
+    that:
+      - (patch_target_scope | default('') | length) > 0
+      - (patch_target_scope | lower) not in (patch_unsafe_targets | default(['all', '*']) | map('lower') | list)
+    fail_msg: >-
+      Launch this Job Template with an explicit AAP Limit such as windows_canary
+      or windows_wave_1. Blank Limit, 'all', and '*' are not allowed
+      (ansible_limit='{{ patch_ansible_limit | default('') }}').
+  when: patch_require_explicit_limit | default(true) | bool
+  run_once: true
+  tags:
+    - always
+
+- name: Validate approved remediation targets
+  ansible.builtin.include_tasks: validate_approved_target.yml
+  when: patch_enforce_scoped_target | default(false) | bool
+  tags:
+    - always
+
+- name: Resolve temporary patch-cycle host exceptions for this run
+  ansible.builtin.include_role:
+    name: patch_cycle_exception
+  tags:
+    - always
+
+- name: Set orchestration guidance facts
+  ansible.builtin.set_fact:
+    patch_orchestration_guidance:
+      patch_wave_name: "{{ patch_wave_name | default('unspecified') }}"
+      patch_serial: "{{ patch_serial | default(1) }}"
+      patch_batch_size: "{{ patch_batch_size | default(10) }}"
+      job_slice_count: "{{ job_slice_count | default(1) }}"
+      ansible_limit: "{{ patch_ansible_limit | default('') }}"
+      patch_target_scope: "{{ patch_target_scope }}"
+      patch_default_target: "{{ patch_default_target | default('windows_hosts') }}"
+      patch_require_explicit_limit: "{{ patch_require_explicit_limit | default(true) | bool }}"
+      approved_patch_targets: "{{ approved_patch_targets | default([]) }}"
+  run_once: true
+  changed_when: false
+  tags:
+    - always
+    - report
+
+- name: Report ansible_limit and patch_target_scope (read-only)
+  ansible.builtin.debug:
+    msg:
+      - "ansible_limit: {{ patch_ansible_limit | default('') }}"
+      - "patch_target_scope: {{ patch_target_scope | default('') }}"
+      - "playbook_hosts_boundary: {{ patch_default_target | default('windows_hosts') }}"
+  run_once: true
+  changed_when: false
+  tags:
+    - always
+    - report
+
+- name: Report orchestration guidance
+  ansible.builtin.debug:
+    var: patch_orchestration_guidance
+  run_once: true
+  changed_when: false
+  tags:
+    - report

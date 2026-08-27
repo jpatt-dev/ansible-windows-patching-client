@@ -1,0 +1,109 @@
+---
+# Collect host health in *this* job. AAP workflow nodes do not preserve
+# host facts from prior nodes — always re-run these probes when needed.
+# Never print secrets/passwords.
+
+- name: Probe WinRM connectivity (win_ping)
+  ansible.windows.win_ping:
+  register: windows_winrm_ping
+  failed_when: false
+  tags:
+    - precheck
+    - postcheck
+    - always
+
+- name: Set WinRM / connectivity health facts
+  ansible.builtin.set_fact:
+    windows_connectivity_ok: "{{ (windows_winrm_ping.ping | default('')) == 'pong' }}"
+    windows_winrm_health: >-
+      {{
+        'ok'
+        if ((windows_winrm_ping.ping | default('')) == 'pong')
+        else 'failed'
+      }}
+  changed_when: false
+  tags:
+    - precheck
+    - postcheck
+    - always
+
+- name: Collect OS caption, version, and last boot time
+  ansible.windows.win_shell: |
+    $os = Get-CimInstance -ClassName Win32_OperatingSystem
+    [PSCustomObject]@{
+      Caption = $os.Caption
+      Version = $os.Version
+      LastBootUpTime = $os.LastBootUpTime.ToString('o')
+    } | ConvertTo-Json -Compress
+  register: windows_os_boot_raw
+  changed_when: false
+  failed_when: false
+  tags:
+    - precheck
+    - postcheck
+    - always
+
+- name: Set OS and last boot facts
+  ansible.builtin.set_fact:
+    windows_os_info: "{{ windows_os_boot_raw.stdout | default('{}') | from_json }}"
+    windows_os_version: "{{ (windows_os_boot_raw.stdout | default('{}') | from_json).Version | default('unknown') }}"
+    windows_os_caption: "{{ (windows_os_boot_raw.stdout | default('{}') | from_json).Caption | default('unknown') }}"
+    windows_last_boot_time: "{{ (windows_os_boot_raw.stdout | default('{}') | from_json).LastBootUpTime | default('unknown') }}"
+  when: (windows_os_boot_raw.rc | default(1)) == 0
+  changed_when: false
+  tags:
+    - precheck
+    - postcheck
+    - always
+
+- name: Set OS and last boot facts when probe failed
+  ansible.builtin.set_fact:
+    windows_os_version: unknown
+    windows_os_caption: unknown
+    windows_last_boot_time: unknown
+  when: (windows_os_boot_raw.rc | default(1)) != 0
+  changed_when: false
+  tags:
+    - precheck
+    - postcheck
+    - always
+
+- name: Collect free disk space for system drive (MB)
+  ansible.windows.win_shell: |
+    $d = Get-PSDrive -Name C -ErrorAction SilentlyContinue
+    if ($null -eq $d) { Write-Output '0'; exit 1 }
+    [math]::Floor($d.Free / 1MB)
+  register: windows_disk_free_raw
+  changed_when: false
+  failed_when: false
+  tags:
+    - precheck
+    - postcheck
+    - always
+
+- name: Set disk free facts
+  ansible.builtin.set_fact:
+    windows_disk_free_mb: "{{ windows_disk_free_raw.stdout | default('0') | trim | int }}"
+    windows_disk_low: >-
+      {{
+        (windows_disk_free_raw.stdout | default('0') | trim | int)
+        < (windows_precheck_min_free_disk_mb | default(1024) | int)
+      }}
+  changed_when: false
+  tags:
+    - precheck
+    - postcheck
+    - always
+
+- name: Warn when free disk space is below soft threshold
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: {{ inventory_hostname }} free disk
+      {{ windows_disk_free_mb }} MB is below soft threshold
+      {{ windows_precheck_min_free_disk_mb | default(1024) }} MB.
+      Flagging manual_followup_required (soft warning; play continues).
+  when: windows_disk_low | default(false) | bool
+  tags:
+    - precheck
+    - postcheck
+    - report

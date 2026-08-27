@@ -1,0 +1,49 @@
+# Defensive (Git never tracks .git/; listed for client hygiene checklists)
+.git/
+
+# Ansible local / downloaded content (do not commit)
+*.retry
+collections/
+roles/**/files/downloaded/
+.ansible/
+fact_cache/
+
+# Generated reports and local output (never commit client data)
+reports/
+reports/output/
+*.report.json
+*.report.md
+*.report.csv
+backups/
+*.bak
+*.log
+
+# Defensive: no custom Python in this repo; ignore accidental local artifacts
+# (AAP/Ansible runtime Python lives in the Execution Environment, not here.)
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+.pytest_cache/
+.cache/
+
+
+# Secrets / vault (should never be committed in plaintext)
+*vault*.yml
+!*vault*.example.yml
+*.vault
+.vault_pass
+secrets.yml
+*.pem
+*.key
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

@@ -1,0 +1,76 @@
+---
+# Optional ServiceNow change hooks. When snow_enabled=false, skip entirely
+# so local runs do not require ServiceNow.
+
+- name: Skip ServiceNow integration when disabled
+  ansible.builtin.debug:
+    msg: >-
+      ServiceNow integration skipped (snow_enabled=false).
+      Set snow_enabled=true and provide change IDs + AAP credentials to enable.
+  when: not (snow_enabled | default(false) | bool)
+  changed_when: false
+  tags:
+    - always
+    - servicenow
+
+- name: Resolve ServiceNow connection facts from vars and environment
+  ansible.builtin.set_fact:
+    snow_effective_instance_url: >-
+      {{
+        (snow_instance_url | default('') | trim)
+        if ((snow_instance_url | default('') | trim | length) > 0)
+        else (lookup('env', 'SNOW_INSTANCE_URL') | default('', true) | trim)
+      }}
+    snow_auth_type_normalized: "{{ snow_auth_type | default('basic') | trim | lower }}"
+  when: snow_enabled | default(false) | bool
+  no_log: true
+  changed_when: false
+  tags:
+    - always
+    - servicenow
+
+- name: Run ServiceNow preflight validation
+  ansible.builtin.include_tasks: preflight.yml
+  when: snow_enabled | default(false) | bool
+  tags:
+    - always
+    - servicenow
+
+- name: Include ServiceNow validate change tasks
+  ansible.builtin.include_tasks: validate_change.yml
+  when:
+    - snow_enabled | default(false) | bool
+    - (snow_phase | default('validate')) == 'validate'
+  tags:
+    - always
+    - servicenow
+
+- name: Include ServiceNow work notes tasks
+  ansible.builtin.include_tasks: update_work_notes.yml
+  when:
+    - snow_enabled | default(false) | bool
+    - (snow_phase | default('')) == 'work_notes'
+    - snow_update_work_notes | default(true) | bool
+  tags:
+    - always
+    - servicenow
+
+- name: Include ServiceNow attach report tasks
+  ansible.builtin.include_tasks: attach_report.yml
+  when:
+    - snow_enabled | default(false) | bool
+    - (snow_phase | default('')) == 'attach_report'
+    - snow_attach_report | default(false) | bool
+  tags:
+    - always
+    - servicenow
+
+- name: Include ServiceNow close or complete task
+  ansible.builtin.include_tasks: close_or_complete_task.yml
+  when:
+    - snow_enabled | default(false) | bool
+    - (snow_phase | default('')) == 'close_task'
+    - snow_close_task | default(false) | bool
+  tags:
+    - always
+    - servicenow

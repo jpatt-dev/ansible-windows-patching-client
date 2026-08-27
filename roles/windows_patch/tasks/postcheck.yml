@@ -1,0 +1,104 @@
+---
+# Read-only Windows postcheck after apply/reboot. Never installs updates.
+# Re-collects health in this job. Policy-category search only when effective=wsus.
+
+- name: Normalize operator context for postcheck summary
+  ansible.builtin.set_fact:
+    windows_patch_mode: "{{ windows_patch_mode | default('check_only') | trim | lower }}"
+    patch_apply_enabled: "{{ patch_apply_enabled | default(false) | bool }}"
+  tags:
+    - postcheck
+
+- name: Resolve authoritative provider for postcheck branching (validate only)
+  ansible.builtin.include_role:
+    name: windows_patch_source
+  vars:
+    windows_wsus_configuration_mode: validate
+  tags:
+    - postcheck
+    - source
+
+- name: Collect host connectivity, OS, boot, and disk health
+  ansible.builtin.include_tasks: collect_host_health.yml
+  tags:
+    - postcheck
+
+- name: Search pending updates using approved OS policy categories
+  ansible.builtin.include_tasks: search_updates_policy.yml
+  tags:
+    - postcheck
+    - patching
+
+- name: Re-check pending reboot state after patching
+  ansible.builtin.include_tasks: check_pending_reboot.yml
+  tags:
+    - postcheck
+    - reboot
+
+- name: Validate Windows services (existence and required state)
+  ansible.builtin.include_tasks: validate_services.yml
+  tags:
+    - postcheck
+
+- name: Set postcheck status and follow-up flags
+  ansible.builtin.set_fact:
+    updates_found: "{{ windows_updates_policy_count | default(0) | int }}"
+    postcheck_status: >-
+      {{
+        'failed'
+        if (not (windows_connectivity_ok | default(false) | bool))
+        else (
+          'degraded'
+          if (
+            (pending_reboot | default(false) | bool)
+            or not (windows_critical_services_ok | default(true) | bool)
+            or (windows_disk_low | default(false) | bool)
+          )
+          else 'ok'
+        )
+      }}
+    manual_followup_required: >-
+      {{
+        (not (windows_connectivity_ok | default(false) | bool))
+        or (pending_reboot | default(false) | bool)
+        or not (windows_critical_services_ok | default(true) | bool)
+        or (windows_disk_low | default(false) | bool)
+        or ((windows_failed_service_names | default([]) | length) > 0)
+      }}
+  changed_when: false
+  tags:
+    - postcheck
+    - report
+
+- name: Report Windows postcheck summary
+  ansible.builtin.debug:
+    msg:
+      - "host: {{ inventory_hostname }}"
+      - "windows_connectivity_ok: {{ windows_connectivity_ok | default(false) }}"
+      - "pending_reboot: {{ pending_reboot | default(false) }}"
+      - "updates_found_policy: {{ updates_found | default(0) }}"
+      - "os_policy_id: {{ windows_os_policy.policy_id | default('n/a') }}"
+      - "windows_critical_services_ok: {{ windows_critical_services_ok | default(true) }}"
+      - "windows_failed_service_names: {{ windows_failed_service_names | default([]) }}"
+      - "patching_exception_active: {{ patching_exception_active | default(false) }}"
+      - "patching_exception_reference: {{ patching_exception_reference_effective | default('') }}"
+      - "postcheck_status: {{ postcheck_status }}"
+      - "manual_followup_required: {{ manual_followup_required }}"
+  tags:
+    - postcheck
+    - report
+
+- name: Record Windows postcheck patch_result for AAP
+  ansible.builtin.include_role:
+    name: patch_report
+  vars:
+    patch_report_phase: record
+    patch_report_phase_name: postcheck
+    patch_report_patch_status: "{{ 'excluded' if (patching_exception_active | default(false) | bool) else '' }}"
+    patch_report_postcheck_status: "{{ postcheck_status }}"
+    patch_report_updates_found: "{{ updates_found | default(0) }}"
+    patch_report_updates_available: "{{ updates_found | default(0) }}"
+    patch_report_manual_followup_required: "{{ manual_followup_required | default(false) }}"
+  tags:
+    - postcheck
+    - report

@@ -1,0 +1,351 @@
+---
+# Build structured per-host patch_result and publish set_stats for AAP.
+# Never include secrets/passwords. Each workflow node re-publishes fields
+# known in *this* job — earlier-only fields may be n/a unless re-derived.
+
+- name: Resolve change ticket id for report
+  ansible.builtin.set_fact:
+    patch_report_change_ticket_id: >-
+      {{
+        (change_ticket_id | default('') | trim)
+        if ((change_ticket_id | default('') | trim | length) > 0)
+        else (snow_change_id | default('') | trim)
+      }}
+  changed_when: false
+  tags:
+    - always
+    - report
+
+- name: Resolve reboot required for report
+  ansible.builtin.set_fact:
+    patch_report_reboot_required: >-
+      {{
+        (patch_report_reboot_required_override | bool)
+        if (patch_report_reboot_required_override | default('') | string | length > 0)
+        else (
+          (reboot_required | default(false) | bool)
+          or (pending_reboot | default(false) | bool)
+          or (windows_reboot_required | default(false) | bool)
+        )
+      }}
+  changed_when: false
+  tags:
+    - always
+    - report
+
+- name: Resolve updates found count for report
+  ansible.builtin.set_fact:
+    patch_report_updates_found_effective: >-
+      {{
+        patch_report_updates_found
+        if (patch_report_updates_found | default('') | string | length > 0)
+        else (
+          patch_report_updates_available
+          if (patch_report_updates_available | default('') | string | length > 0)
+          else (
+            updates_found
+            if (updates_found is defined)
+            else (
+              windows_update_search.found_update_count | default(0) | int
+              if (windows_update_search is defined)
+              else (
+                windows_postcheck_search.found_update_count | default(0) | int
+                if (windows_postcheck_search is defined)
+                else 0
+              )
+            )
+          )
+        )
+      }}
+  changed_when: false
+  tags:
+    - always
+    - report
+
+- name: Resolve updates installed count for report
+  ansible.builtin.set_fact:
+    patch_report_updates_installed_effective: >-
+      {{
+        patch_report_updates_installed
+        if (patch_report_updates_installed | default('') | string | length > 0)
+        else (updates_installed | default(0) | int)
+      }}
+  changed_when: false
+  tags:
+    - always
+    - report
+
+- name: Resolve remediation / manual follow-up for report
+  ansible.builtin.set_fact:
+    patch_report_remediation_required_effective: >-
+      {{
+        (patch_report_remediation_required | bool)
+        if (patch_report_remediation_required | default('') | string | length > 0)
+        else (
+          (patch_report_reboot_required | bool)
+          or ((patch_report_updates_found_effective | int) > 0)
+        )
+      }}
+    patch_report_manual_followup_effective: >-
+      {{
+        (patch_report_manual_followup_required | bool)
+        if (patch_report_manual_followup_required | default('') | string | length > 0)
+        else (
+          (manual_followup_required | default(false) | bool)
+          or (
+            (patch_report_reboot_required | bool)
+            and not (reboot_enabled | default(false) | bool)
+            and not (reboot_performed | default(false) | bool)
+          )
+        )
+      }}
+  changed_when: false
+  tags:
+    - always
+    - report
+
+- name: Preserve prior phase statuses when not overridden
+  ansible.builtin.set_fact:
+    _pr_precheck: >-
+      {{
+        patch_report_precheck_status
+        if (patch_report_precheck_status | default('') | length > 0)
+        else (patch_result.precheck_status | default(precheck_status | default('n/a')))
+      }}
+    _pr_patch: >-
+      {{
+        patch_report_patch_status
+        if (patch_report_patch_status | default('') | length > 0)
+        else (patch_result.patch_status | default('n/a'))
+      }}
+    _pr_postcheck: >-
+      {{
+        patch_report_postcheck_status
+        if (patch_report_postcheck_status | default('') | length > 0)
+        else (patch_result.postcheck_status | default(postcheck_status | default('n/a')))
+      }}
+  changed_when: false
+  tags:
+    - always
+    - report
+
+- name: Build structured patch_result fact
+  ansible.builtin.set_fact:
+    patch_result:
+      host: "{{ inventory_hostname }}"
+      inventory_hostname: "{{ inventory_hostname }}"
+      ansible_os_family: "{{ ansible_facts['os_family'] | default(ansible_os_family | default('Windows')) }}"
+      windows_patch_provider_effective: "{{ windows_patch_provider_effective | default('unknown') }}"
+      patch_provider: "{{ windows_patch_provider_effective | default(windows_patch_provider | default('unknown')) }}"
+      windows_patch_mode: "{{ windows_patch_mode | default('check_only') }}"
+      patch_mode: "{{ windows_patch_mode | default('check_only') }}"
+      patch_wave_name: "{{ patch_wave_name | default('unspecified') }}"
+      region: "{{ region | default('') }}"
+      environment: "{{ environment | default('') }}"
+      change_ticket_id: "{{ patch_report_change_ticket_id }}"
+      application_code: "{{ application_code | default('') }}"
+      application_metadata_status: "{{ application_metadata_status | default('n/a') }}"
+      application_metadata_source: "{{ application_metadata_source | default('') }}"
+      exception_policy_status: "{{ windows_exception_policy_status | default('n/a') }}"
+      exception_ids_applied: "{{ windows_exceptions_enabled_active | default([]) }}"
+      patching_exception_active: "{{ patching_exception_active | default(false) | bool }}"
+      patching_exception_reference: "{{ patching_exception_reference_effective | default('') }}"
+      patching_exception_source: "{{ patching_exception_source | default('workflow_survey') }}"
+      patch_attempted: >-
+        {{
+          patch_attempted | default(false) | bool
+          if ((patch_report_phase_name | default('')) == 'apply')
+          else 'not_available'
+        }}
+      wsus_mapping_status: "{{ windows_wsus_mapping_status | default('not_available') }}"
+      windows_wsus_config_match: "{{ windows_wsus_config_match | default('not_available') }}"
+      windows_wsus_assignment_group: "{{ windows_wsus_assignment_group | default('') }}"
+      windows_failed_service_names: "{{ windows_failed_service_names | default([]) }}"
+      precheck_status: "{{ _pr_precheck }}"
+      patch_status: "{{ _pr_patch }}"
+      postcheck_status: "{{ _pr_postcheck }}"
+      patch_apply_enabled: "{{ patch_apply_enabled | default(false) | bool }}"
+      pre_patch_reboot_enabled: "{{ pre_patch_reboot_enabled | default(false) | bool }}"
+      post_patch_reboot_enabled: "{{ post_patch_reboot_enabled | default(false) | bool }}"
+      reboot_phase: "{{ reboot_phase | default('') }}"
+      pre_patch_reboot_required: >-
+        {{
+          (reboot_required | default(false) | bool)
+          if ((reboot_phase | default('')) == 'pre')
+          else 'not_available'
+        }}
+      pre_patch_reboot_performed: >-
+        {{
+          (reboot_performed | default(false) | bool)
+          if ((reboot_phase | default('')) == 'pre')
+          else 'not_available'
+        }}
+      post_patch_reboot_required: >-
+        {{
+          (patch_report_reboot_required | bool)
+          if ((patch_report_phase_name | default('')) == 'apply')
+          else (
+            (reboot_required | default(false) | bool)
+            if ((reboot_phase | default('')) == 'post')
+            else 'not_available'
+          )
+        }}
+      post_patch_reboot_performed: >-
+        {{
+          (reboot_performed | default(false) | bool)
+          if ((reboot_phase | default('')) == 'post')
+          else 'not_available'
+        }}
+      os_policy_id: "{{ windows_os_policy.policy_id | default('not_available') }}"
+      update_categories: "{{ windows_os_policy.categories | default('not_available') }}"
+      patch_cycle_strategy: "{{ windows_patch_cycle_strategy | default('single_pass') }}"
+      patch_cycle: "{{ windows_patch_cycle | default(1) | int }}"
+      patch_max_cycles: not_available
+      updates_found: "{{ patch_report_updates_found_effective | int }}"
+      updates_available: "{{ patch_report_updates_found_effective | int }}"
+      updates_installed: "{{ patch_report_updates_installed_effective | int }}"
+      updates_failed: "{{ windows_update_install.failed_update_count | default('not_available') }}"
+      updates_remaining: >-
+        {{
+          'not_available'
+          if ((patch_report_phase_name | default('')) == 'apply')
+          else (
+            patch_report_updates_found_effective | int
+            if (patch_report_phase_name | default('') in ['postcheck', 'compliance', 'discovery', 'precheck'])
+            else 'not_available'
+          )
+        }}
+      reboot_required: "{{ patch_report_reboot_required | bool }}"
+      reboot_performed: "{{ reboot_performed | default(false) | bool }}"
+      patching_reboot_allowed: >-
+        {{
+          patching_reboot_allowed_effective | default(patching_reboot_allowed | default(false) | bool)
+          if ((patch_report_phase_name | default('')) is match('^reboot_'))
+          else 'not_available'
+        }}
+      reboot_skipped_reason: >-
+        {{
+          reboot_skipped_reason | default('')
+          if ((patch_report_phase_name | default('')) is match('^reboot_'))
+          else 'not_available'
+        }}
+      reboot_mode: >-
+        {{
+          windows_reboot_mode_effective | default(reboot_mode | default('not_available'))
+          if ((patch_report_phase_name | default('')) is match('^reboot_'))
+          else 'not_available'
+        }}
+      manual_followup_required: "{{ patch_report_manual_followup_effective | bool }}"
+      remediation_required: "{{ patch_report_remediation_required_effective | bool }}"
+      maintenance_window_status: "{{ maintenance_window_status | default('not_available') }}"
+      git_revision: >-
+        {{
+          lookup('ansible.builtin.env', 'GIT_COMMIT')
+          | default(lookup('ansible.builtin.env', 'CI_COMMIT_SHA') | default('not_available', true), true)
+        }}
+      ee_image: >-
+        {{
+          lookup('ansible.builtin.env', 'EE_IMAGE')
+          | default(lookup('ansible.builtin.env', 'CONTAINER_IMAGE') | default('not_available', true), true)
+        }}
+      tower_job_id: "{{ tower_job_id | default(ansible_job_id | default('')) }}"
+      awx_job_id: "{{ awx_job_id | default('') }}"
+      failed_task: "{{ ansible_failed_task.name | default('') }}"
+      failed_message: "{{ ansible_failed_result.msg | default('') }}"
+      phase: "{{ patch_report_phase_name | default(patch_phase | default('unknown')) }}"
+      timestamp: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+  changed_when: false
+  tags:
+    - always
+    - report
+
+- name: Alias patch_report_record for compatibility
+  ansible.builtin.set_fact:
+    patch_report_record: "{{ patch_result }}"
+  changed_when: false
+  tags:
+    - always
+    - report
+
+- name: Publish operator-facing patch_result stats for AAP workflows
+  ansible.builtin.set_stats:
+    data:
+      host: "{{ patch_result.host }}"
+      windows_patch_provider_effective: "{{ patch_result.windows_patch_provider_effective }}"
+      patch_provider: "{{ patch_result.patch_provider }}"
+      windows_patch_mode: "{{ patch_result.windows_patch_mode }}"
+      patch_mode: "{{ patch_result.patch_mode }}"
+      patch_wave_name: "{{ patch_result.patch_wave_name }}"
+      application_code: "{{ patch_result.application_code }}"
+      application_metadata_status: "{{ patch_result.application_metadata_status }}"
+      exception_policy_status: "{{ patch_result.exception_policy_status }}"
+      exception_ids_applied: "{{ patch_result.exception_ids_applied }}"
+      patching_exception_active: "{{ patch_result.patching_exception_active }}"
+      patching_exception_reference: "{{ patch_result.patching_exception_reference }}"
+      patching_exception_source: "{{ patch_result.patching_exception_source }}"
+      patch_attempted: "{{ patch_result.patch_attempted }}"
+      wsus_mapping_status: "{{ patch_result.wsus_mapping_status }}"
+      windows_wsus_config_match: "{{ patch_result.windows_wsus_config_match }}"
+      windows_wsus_assignment_group: "{{ patch_result.windows_wsus_assignment_group }}"
+      precheck_status: "{{ patch_result.precheck_status }}"
+      patch_status: "{{ patch_result.patch_status }}"
+      patch_apply_enabled: "{{ patch_result.patch_apply_enabled }}"
+      pre_patch_reboot_enabled: "{{ patch_result.pre_patch_reboot_enabled }}"
+      post_patch_reboot_enabled: "{{ patch_result.post_patch_reboot_enabled }}"
+      reboot_phase: "{{ patch_result.reboot_phase }}"
+      pre_patch_reboot_required: "{{ patch_result.pre_patch_reboot_required }}"
+      pre_patch_reboot_performed: "{{ patch_result.pre_patch_reboot_performed }}"
+      post_patch_reboot_required: "{{ patch_result.post_patch_reboot_required }}"
+      post_patch_reboot_performed: "{{ patch_result.post_patch_reboot_performed }}"
+      os_policy_id: "{{ patch_result.os_policy_id }}"
+      update_categories: "{{ patch_result.update_categories }}"
+      patch_cycle_strategy: "{{ patch_result.patch_cycle_strategy }}"
+      patch_cycle: "{{ patch_result.patch_cycle }}"
+      patch_max_cycles: "{{ patch_result.patch_max_cycles }}"
+      updates_found: "{{ patch_result.updates_found }}"
+      updates_installed: "{{ patch_result.updates_installed }}"
+      updates_failed: "{{ patch_result.updates_failed }}"
+      updates_remaining: "{{ patch_result.updates_remaining }}"
+      reboot_required: "{{ patch_result.reboot_required }}"
+      reboot_performed: "{{ patch_result.reboot_performed }}"
+      patching_reboot_allowed: "{{ patch_result.patching_reboot_allowed }}"
+      reboot_skipped_reason: "{{ patch_result.reboot_skipped_reason }}"
+      reboot_mode: "{{ patch_result.reboot_mode }}"
+      postcheck_status: "{{ patch_result.postcheck_status }}"
+      manual_followup_required: "{{ patch_result.manual_followup_required }}"
+      maintenance_window_status: "{{ patch_result.maintenance_window_status }}"
+      git_revision: "{{ patch_result.git_revision }}"
+      ee_image: "{{ patch_result.ee_image }}"
+      change_ticket_id: "{{ patch_result.change_ticket_id }}"
+      tower_job_id: "{{ patch_result.tower_job_id }}"
+      phase: "{{ patch_result.phase }}"
+      inventory_hostname: "{{ patch_result.inventory_hostname }}"
+      updates_available: "{{ patch_result.updates_available }}"
+      remediation_required: "{{ patch_result.remediation_required }}"
+    per_host: true
+  tags:
+    - always
+    - report
+
+- name: Resolve unique phase artifact key for workflow propagation
+  ansible.builtin.set_fact:
+    patch_phase_artifact_key: "patch_phase_{{ patch_report_phase_name | default('unknown') }}"
+  changed_when: false
+  when:
+    - (patch_report_phase_name | default('')) | length > 0
+    - (patch_report_phase_name | default('')) != 'compliance'
+    - (patch_report_phase_name | default('')) != 'final'
+  tags:
+    - always
+    - report
+
+- name: Publish unique phase patch_result artifact for Final Patch Report
+  ansible.builtin.set_stats:
+    data: "{{ { patch_phase_artifact_key: patch_result } }}"
+    per_host: true
+  when:
+    - patch_phase_artifact_key is defined
+    - (patch_phase_artifact_key | default('') | length) > 0
+  tags:
+    - always
+    - report

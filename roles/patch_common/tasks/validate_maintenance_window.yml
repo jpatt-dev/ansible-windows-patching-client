@@ -1,0 +1,100 @@
+---
+# Shared maintenance window validation (UTC ISO-8601 Z).
+# Inputs:
+#   maintenance_window_start / maintenance_window_end : YYYY-MM-DDTHH:MM:SSZ
+#   maintenance_window_acknowledged : bool
+#   patch_maintenance_window_enforce : bool
+#     true  → fail-closed for remediation/reboot actions
+#     false → report status only (check-only / read-only)
+
+- name: Capture current UTC time for maintenance window
+  ansible.builtin.set_fact:
+    maintenance_window_now_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+    maintenance_window_start_norm: "{{ maintenance_window_start | default('') | trim }}"
+    maintenance_window_end_norm: "{{ maintenance_window_end | default('') | trim }}"
+    maintenance_window_ack: "{{ maintenance_window_acknowledged | default(false) | bool }}"
+  changed_when: false
+  tags:
+    - always
+    - maintenance
+
+- name: Classify maintenance window start/end format
+  ansible.builtin.set_fact:
+    maintenance_window_start_ok: >-
+      {{
+        (maintenance_window_start_norm | length) > 0
+        and (maintenance_window_start_norm | regex_search('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$')) is not none
+      }}
+    maintenance_window_end_ok: >-
+      {{
+        (maintenance_window_end_norm | length) > 0
+        and (maintenance_window_end_norm | regex_search('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$')) is not none
+      }}
+  changed_when: false
+  tags:
+    - always
+    - maintenance
+
+- name: Set maintenance_window_status (report)
+  ansible.builtin.set_fact:
+    maintenance_window_status: >-
+      {{
+        'unset'
+        if ((maintenance_window_start_norm | length) == 0 and (maintenance_window_end_norm | length) == 0)
+        else (
+          'malformed'
+          if (not (maintenance_window_start_ok | bool) or not (maintenance_window_end_ok | bool))
+          else (
+            'invalid_order'
+            if (maintenance_window_start_norm >= maintenance_window_end_norm)
+            else (
+              'inside'
+              if (
+                maintenance_window_start_norm <= maintenance_window_now_utc
+                and maintenance_window_now_utc <= maintenance_window_end_norm
+              )
+              else 'outside'
+            )
+          )
+        )
+      }}
+  changed_when: false
+  tags:
+    - always
+    - maintenance
+    - report
+
+- name: Report maintenance window status
+  ansible.builtin.debug:
+    msg: >-
+      maintenance_window status={{ maintenance_window_status }}
+      now={{ maintenance_window_now_utc }}
+      start={{ maintenance_window_start_norm | default('') }}
+      end={{ maintenance_window_end_norm | default('') }}
+      ack={{ maintenance_window_ack }}
+      enforce={{ patch_maintenance_window_enforce | default(false) }}.
+  changed_when: false
+  tags:
+    - always
+    - maintenance
+    - report
+
+- name: Enforce maintenance window for remediation/reboot
+  ansible.builtin.assert:
+    that:
+      - maintenance_window_ack | bool
+      - maintenance_window_start_ok | bool
+      - maintenance_window_end_ok | bool
+      - maintenance_window_start_norm < maintenance_window_end_norm
+      - maintenance_window_start_norm <= maintenance_window_now_utc
+      - maintenance_window_now_utc <= maintenance_window_end_norm
+    fail_msg: >-
+      Maintenance window enforcement failed (status={{ maintenance_window_status }}).
+      Require maintenance_window_acknowledged=true and well-formed UTC ISO-8601
+      start/end (YYYY-MM-DDTHH:MM:SSZ) with start < end and now within the window.
+      now={{ maintenance_window_now_utc }} start={{ maintenance_window_start_norm }}
+      end={{ maintenance_window_end_norm }}.
+  when: patch_maintenance_window_enforce | default(false) | bool
+  tags:
+    - always
+    - maintenance

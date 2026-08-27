@@ -1,0 +1,179 @@
+---
+# Windows Patch Final Report (read-only).
+#
+# Two plays on purpose:
+#   Play 1 — per-host collection (may use serial). Builds patch_final_result.
+#   Play 2 — one Limit-wide aggregation (NO serial, connection: local).
+#
+# Ansible run_once inside a serial play is batch-scoped. Aggregation, file
+# write, and ServiceNow must run exactly once after ALL hosts in the AAP Limit
+# have finished Play 1 — hence the separate non-serial play.
+#
+# Does NOT install updates, reboot, or change WSUS configuration.
+#
+# WARNING: Files under /tmp on the AAP EE are ephemeral convenience only.
+# Primary deliverable is AAP set_stats (patch_final_result / patch_workflow_report).
+#
+# CLI:
+#   ansible-playbook -i /path/to/client-inventory \
+#     playbooks/orchestration/patch_compliance_report.yml \
+#     --limit windows_canary
+
+- name: Windows Final Patch Report — per-host collection
+  hosts: windows_hosts
+  gather_facts: false
+  serial: "{{ patch_serial | default(omit) }}"
+  tags:
+    - report
+    - windows
+    - patching
+
+  tasks:
+    - name: Include shared orchestration validation
+      ansible.builtin.include_role:
+        name: patch_common
+      vars:
+        patch_default_target: windows_hosts
+        patch_enforce_scoped_target: false
+      tags:
+        - always
+
+    - name: Load application metadata (read-only)
+      ansible.builtin.include_role:
+        name: windows_application_metadata
+      tags:
+        - report
+        - application
+
+    - name: Resolve authoritative provider for final report (validate only)
+      ansible.builtin.include_role:
+        name: windows_patch_source
+      vars:
+        windows_wsus_configuration_mode: validate
+      tags:
+        - report
+        - source
+
+    - name: Collect host connectivity, OS, boot, and disk health
+      ansible.builtin.include_role:
+        name: windows_patch
+        tasks_from: collect_host_health.yml
+      tags:
+        - report
+
+    - name: Search pending updates using approved OS policy categories
+      ansible.builtin.include_role:
+        name: windows_patch
+        tasks_from: search_updates_policy.yml
+      tags:
+        - report
+        - patching
+
+    - name: Check pending reboot state for final report
+      ansible.builtin.include_role:
+        name: windows_patch
+        tasks_from: check_pending_reboot.yml
+      tags:
+        - report
+        - reboot
+
+    - name: Validate Windows services (read-only)
+      ansible.builtin.include_role:
+        name: windows_patch
+        tasks_from: validate_services.yml
+      tags:
+        - report
+
+    - name: Derive postcheck-style status for final report context
+      ansible.builtin.set_fact:
+        postcheck_status: >-
+          {{
+            'failed'
+            if (not (windows_connectivity_ok | default(false) | bool))
+            else (
+              'degraded'
+              if (
+                (pending_reboot | default(false) | bool)
+                or not (windows_critical_services_ok | default(true) | bool)
+                or (windows_disk_low | default(false) | bool)
+              )
+              else 'ok'
+            )
+          }}
+        manual_followup_required: >-
+          {{
+            (not (windows_connectivity_ok | default(false) | bool))
+            or (pending_reboot | default(false) | bool)
+            or not (windows_critical_services_ok | default(true) | bool)
+            or (windows_disk_low | default(false) | bool)
+            or ((windows_failed_service_names | default([]) | length) > 0)
+          }}
+      changed_when: false
+      tags:
+        - report
+
+    - name: Build per-host patch_final_result
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+      tags:
+        - report
+
+- name: Windows Final Patch Report — aggregate once per Limit
+  hosts: windows_hosts
+  gather_facts: false
+  connection: local
+  tags:
+    - report
+    - windows
+    - patching
+
+  tasks:
+    - name: Aggregate Final Patch Report and print summary
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+      tags:
+        - report
+
+    - name: Write canonical Final Report JSON/CSV/Markdown from patch_workflow_report
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_write.yml
+      run_once: true
+      tags:
+        - report
+
+    - name: Update ServiceNow work notes after final report
+      ansible.builtin.include_role:
+        name: servicenow_change
+      vars:
+        snow_phase: work_notes
+        snow_work_note_message: >-
+          AAP Windows Final Patch Report generated for scope
+          {{ patch_target_scope | default('not_available') }}
+          (wave={{ patch_wave_name | default('unspecified') }};
+          total={{ patch_workflow_report.total_hosts | default('n/a') }};
+          compliant={{ patch_workflow_report.status_counts.compliant | default('n/a') }};
+          excluded={{ patch_workflow_report.status_counts.excluded | default('n/a') }}).
+      run_once: true
+      tags:
+        - report
+        - servicenow
+
+    - name: Attach Final Report files to ServiceNow change
+      ansible.builtin.include_role:
+        name: servicenow_change
+      vars:
+        snow_phase: attach_report
+        snow_report_path: "{{ item }}"
+      loop: "{{ patch_report_files | default([patch_report_primary_path | default('')]) }}"
+      when:
+        - snow_enabled | default(false) | bool
+        - snow_attach_report | default(false) | bool
+        - (item | default('') | length) > 0
+      run_once: true
+      tags:
+        - report
+        - servicenow

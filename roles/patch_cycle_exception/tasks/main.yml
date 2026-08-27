@@ -1,0 +1,77 @@
+---
+# Resolve temporary patch-cycle host exceptions for THIS workflow run only.
+# Each AAP Job Template must include this role independently (facts do not
+# persist across workflow nodes). Source today: workflow survey.
+# Future: ServiceNow may supply the host list; keep patching_exception_source
+# and downstream patching_exception_active gates unchanged.
+
+- name: Normalize patch-cycle exception survey inputs
+  ansible.builtin.set_fact:
+    patching_exception_reference: "{{ patching_exception_reference | default('') | string | trim }}"
+    patching_exception_hosts_normalized: "{{ (patching_exception_hosts | default('') | string).split(',') | map('trim') | reject('equalto', '') | list | unique | list }}"
+    patching_exception_source: "{{ patching_exception_source | default('workflow_survey') }}"
+  changed_when: false
+  tags:
+    - always
+
+- name: Require exception reference when exception hosts are listed
+  ansible.builtin.assert:
+    that:
+      - (patching_exception_reference | default('') | length) > 0
+    fail_msg: >-
+      patching_exception_reference is required when patching_exception_hosts
+      contains one or more hosts.
+  when: (patching_exception_hosts_normalized | default([]) | length) > 0
+  run_once: true
+  tags:
+    - always
+
+- name: Warn when exception reference is set without exception hosts
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: patching_exception_reference='{{ patching_exception_reference }}'
+      was supplied but patching_exception_hosts is empty. No host is excluded
+      for this run.
+  when:
+    - (patching_exception_hosts_normalized | default([]) | length) == 0
+    - (patching_exception_reference | default('') | length) > 0
+  run_once: true
+  changed_when: false
+  tags:
+    - always
+
+- name: Validate each exception host is in the current AAP Limit population
+  ansible.builtin.assert:
+    that:
+      - item in (ansible_play_hosts_all | default([]))
+    fail_msg: >-
+      Requested patch exception host {{ item }} is not part of the current
+      AAP Limit/target population.
+  loop: "{{ patching_exception_hosts_normalized | default([]) }}"
+  loop_control:
+    label: "{{ item }}"
+  run_once: true
+  tags:
+    - always
+
+- name: Derive per-host patch-cycle exception membership
+  ansible.builtin.set_fact:
+    patching_exception_active: "{{ inventory_hostname in (patching_exception_hosts_normalized | default([])) }}"
+    patching_exception_reference_effective: "{{ (patching_exception_reference | default('')) if (inventory_hostname in (patching_exception_hosts_normalized | default([]))) else '' }}"
+    patching_exception_source: "{{ patching_exception_source | default('workflow_survey') }}"
+  changed_when: false
+  tags:
+    - always
+
+- name: Report patch-cycle exception resolution for this host
+  ansible.builtin.debug:
+    msg:
+      - "host: {{ inventory_hostname }}"
+      - "patching_exception_active: {{ patching_exception_active | default(false) }}"
+      - "patching_exception_reference_effective: {{ patching_exception_reference_effective | default('') }}"
+      - "patching_exception_source: {{ patching_exception_source | default('workflow_survey') }}"
+      - "patching_exception_hosts_normalized: {{ patching_exception_hosts_normalized | default([]) }}"
+  changed_when: false
+  tags:
+    - always
+    - report

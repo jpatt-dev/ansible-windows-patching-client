@@ -1,0 +1,38 @@
+---
+# Configure Windows clients to the WSUS server assigned by inventory group.
+# Never installs Windows updates. Never reboots.
+#
+# Inventory is authoritative (windows_wsus_* group_vars).
+# AAP Limit is the operational targeting mechanism.
+#
+# CLI:
+#   ansible-playbook -i /path/to/client-inventory \
+#     playbooks/windows/configure_wsus.yml --limit windows_canary
+
+- name: Configure WSUS client registry from inventory assignment
+  hosts: windows_hosts
+  gather_facts: false
+  serial: "{{ patch_serial | default(omit) }}"
+  tags:
+    - wsus
+    - windows
+    - configure
+
+  pre_tasks:
+    - name: Include shared orchestration validation
+      ansible.builtin.include_role:
+        name: patch_common
+      vars:
+        patch_default_target: windows_hosts
+        patch_enforce_scoped_target: false
+      tags:
+        - always
+
+  tasks:
+    - name: Resolve WSUS assignment and apply configuration mode from inventory
+      ansible.builtin.include_role:
+        name: windows_patch_source
+      tags:
+        - always
+        - source
+        - wsus

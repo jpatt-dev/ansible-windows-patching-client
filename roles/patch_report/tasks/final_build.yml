@@ -1,0 +1,250 @@
+---
+# Build per-host patch_final_result from fresh end-state + upstream phase artifacts.
+# Workflow-global artifacts are host-keyed maps (per_host: false), e.g.:
+#   patch_phase_apply[inventory_hostname]
+# Missing host entry → not_available (never invent history).
+
+- name: Capture report generation timestamp
+  ansible.builtin.set_fact:
+    patch_report_generated_at_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Resolve upstream phase artifacts for this host
+  ansible.builtin.set_fact:
+    _ua_precheck_present: "{{ (patch_phase_precheck is defined) and (patch_phase_precheck is mapping) and (inventory_hostname in patch_phase_precheck) }}"
+    _ua_reboot_pre_present: "{{ (patch_phase_reboot_pre is defined) and (patch_phase_reboot_pre is mapping) and (inventory_hostname in patch_phase_reboot_pre) }}"
+    _ua_discovery_present: "{{ (patch_phase_discovery is defined) and (patch_phase_discovery is mapping) and (inventory_hostname in patch_phase_discovery) }}"
+    _ua_apply_present: "{{ (patch_phase_apply is defined) and (patch_phase_apply is mapping) and (inventory_hostname in patch_phase_apply) }}"
+    _ua_reboot_post_present: "{{ (patch_phase_reboot_post is defined) and (patch_phase_reboot_post is mapping) and (inventory_hostname in patch_phase_reboot_post) }}"
+    _ua_postcheck_present: "{{ (patch_phase_postcheck is defined) and (patch_phase_postcheck is mapping) and (inventory_hostname in patch_phase_postcheck) }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Extract this host's records from workflow-global phase maps
+  ansible.builtin.set_fact:
+    _upstream_precheck: "{{ patch_phase_precheck[inventory_hostname] if (_ua_precheck_present | bool) else {} }}"
+    _upstream_reboot_pre: "{{ patch_phase_reboot_pre[inventory_hostname] if (_ua_reboot_pre_present | bool) else {} }}"
+    _upstream_discovery: "{{ patch_phase_discovery[inventory_hostname] if (_ua_discovery_present | bool) else {} }}"
+    _upstream_apply: "{{ patch_phase_apply[inventory_hostname] if (_ua_apply_present | bool) else {} }}"
+    _upstream_reboot_post: "{{ patch_phase_reboot_post[inventory_hostname] if (_ua_reboot_post_present | bool) else {} }}"
+    _upstream_postcheck: "{{ patch_phase_postcheck[inventory_hostname] if (_ua_postcheck_present | bool) else {} }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Derive upstream artifact availability status
+  ansible.builtin.set_fact:
+    _upstream_artifacts:
+      precheck: "{{ _ua_precheck_present | bool }}"
+      reboot_pre: "{{ _ua_reboot_pre_present | bool }}"
+      discovery: "{{ _ua_discovery_present | bool }}"
+      apply: "{{ _ua_apply_present | bool }}"
+      reboot_post: "{{ _ua_reboot_post_present | bool }}"
+      postcheck: "{{ _ua_postcheck_present | bool }}"
+    _upstream_present_count: >-
+      {{
+        (
+          ((_ua_precheck_present | bool) | ternary(1, 0))
+          + ((_ua_reboot_pre_present | bool) | ternary(1, 0))
+          + ((_ua_discovery_present | bool) | ternary(1, 0))
+          + ((_ua_apply_present | bool) | ternary(1, 0))
+          + ((_ua_reboot_post_present | bool) | ternary(1, 0))
+          + ((_ua_postcheck_present | bool) | ternary(1, 0))
+        )
+      }}
+  changed_when: false
+  tags:
+    - report
+
+- name: Set upstream_artifact_status complete/partial/none
+  ansible.builtin.set_fact:
+    _upstream_artifact_status: >-
+      {{
+        'complete'
+        if ((_upstream_present_count | int) == 6)
+        else (
+          'none'
+          if ((_upstream_present_count | int) == 0)
+          else 'partial'
+        )
+      }}
+  changed_when: false
+  tags:
+    - report
+
+- name: Report upstream phase artifact availability diagnostics
+  ansible.builtin.debug:
+    msg:
+      - "UPSTREAM PHASE ARTIFACT AVAILABILITY"
+      - "host: {{ inventory_hostname }}"
+      - "patch_phase_precheck: {{ (_ua_precheck_present | bool) | ternary('present', 'missing') }}"
+      - "patch_phase_reboot_pre: {{ (_ua_reboot_pre_present | bool) | ternary('present', 'missing') }}"
+      - "patch_phase_discovery: {{ (_ua_discovery_present | bool) | ternary('present', 'missing') }}"
+      - "patch_phase_apply: {{ (_ua_apply_present | bool) | ternary('present', 'missing') }}"
+      - "patch_phase_reboot_post: {{ (_ua_reboot_post_present | bool) | ternary('present', 'missing') }}"
+      - "patch_phase_postcheck: {{ (_ua_postcheck_present | bool) | ternary('present', 'missing') }}"
+      - "upstream_artifact_status: {{ _upstream_artifact_status }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Resolve upstream history fields with not_available fallback
+  ansible.builtin.set_fact:
+    _final_patch_attempted: >-
+      {{
+        _upstream_apply.patch_attempted
+        if (_upstream_apply is mapping and (_upstream_apply.patch_attempted | default('') | string | length) > 0)
+        else 'not_available'
+      }}
+    _final_updates_installed: >-
+      {{
+        _upstream_apply.updates_installed
+        if (_upstream_apply is mapping and (_upstream_apply.updates_installed | default('') | string | length) > 0
+            and (_upstream_apply.updates_installed | default('') | string) != 'not_available')
+        else 'not_available'
+      }}
+    _final_updates_failed: >-
+      {{
+        _upstream_apply.updates_failed
+        if (_upstream_apply is mapping and (_upstream_apply.updates_failed | default('') | string | length) > 0
+            and (_upstream_apply.updates_failed | default('') | string) != 'not_available')
+        else 'not_available'
+      }}
+    _final_pre_reboot_required: >-
+      {{
+        _upstream_reboot_pre.pre_patch_reboot_required
+        if (_upstream_reboot_pre is mapping and (_upstream_reboot_pre.pre_patch_reboot_required | default('') | string | length) > 0
+            and (_upstream_reboot_pre.pre_patch_reboot_required | default('') | string) != 'not_available')
+        else (
+          _upstream_reboot_pre.reboot_required
+          if (_upstream_reboot_pre is mapping and (_upstream_reboot_pre.reboot_required | default('') | string | length) > 0)
+          else 'not_available'
+        )
+      }}
+    _final_pre_reboot_performed: >-
+      {{
+        _upstream_reboot_pre.pre_patch_reboot_performed
+        if (_upstream_reboot_pre is mapping and (_upstream_reboot_pre.pre_patch_reboot_performed | default('') | string | length) > 0
+            and (_upstream_reboot_pre.pre_patch_reboot_performed | default('') | string) != 'not_available')
+        else (
+          _upstream_reboot_pre.reboot_performed
+          if (_upstream_reboot_pre is mapping and (_upstream_reboot_pre.reboot_performed | default('') | string | length) > 0)
+          else 'not_available'
+        )
+      }}
+    _final_post_reboot_required: >-
+      {{
+        _upstream_reboot_post.post_patch_reboot_required
+        if (_upstream_reboot_post is mapping and (_upstream_reboot_post.post_patch_reboot_required | default('') | string | length) > 0
+            and (_upstream_reboot_post.post_patch_reboot_required | default('') | string) != 'not_available')
+        else (
+          _upstream_reboot_post.reboot_required
+          if (_upstream_reboot_post is mapping and (_upstream_reboot_post.reboot_required | default('') | string | length) > 0)
+          else 'not_available'
+        )
+      }}
+    _final_post_reboot_performed: >-
+      {{
+        _upstream_reboot_post.post_patch_reboot_performed
+        if (_upstream_reboot_post is mapping and (_upstream_reboot_post.post_patch_reboot_performed | default('') | string | length) > 0
+            and (_upstream_reboot_post.post_patch_reboot_performed | default('') | string) != 'not_available')
+        else (
+          _upstream_reboot_post.reboot_performed
+          if (_upstream_reboot_post is mapping and (_upstream_reboot_post.reboot_performed | default('') | string | length) > 0)
+          else 'not_available'
+        )
+      }}
+    _final_postcheck_status: >-
+      {{
+        postcheck_status | default(_upstream_postcheck.postcheck_status | default('not_available'))
+      }}
+  changed_when: false
+  tags:
+    - report
+
+- name: Derive deterministic final_status
+  ansible.builtin.set_fact:
+    _final_status: >-
+      {{
+        'failed'
+        if (
+          (not (windows_connectivity_ok | default(false) | bool))
+          or ((_final_postcheck_status | default('')) == 'failed')
+          or ((_upstream_apply.patch_status | default('')) == 'failed')
+        )
+        else (
+          'excluded'
+          if (patching_exception_active | default(false) | bool)
+          else (
+            'degraded'
+            if (
+              (pending_reboot | default(false) | bool)
+              or ((windows_updates_policy_count | default(0) | int) > 0)
+              or ((_final_postcheck_status | default('')) in ['degraded', 'failed'])
+              or (manual_followup_required | default(false) | bool)
+              or not (windows_critical_services_ok | default(true) | bool)
+              or ((windows_patch_provider_effective | default('unknown')) == 'unknown')
+              or (
+                (windows_patch_provider_effective | default('')) == 'wsus'
+                and (windows_wsus_mapping_status | default('')) != 'matched'
+              )
+            )
+            else 'compliant'
+          )
+        )
+      }}
+  changed_when: false
+  tags:
+    - report
+
+- name: Build patch_final_result for this host
+  ansible.builtin.set_fact:
+    patch_final_result:
+      schema_version: "1"
+      report_generated_at_utc: "{{ patch_report_generated_at_utc }}"
+      host: "{{ inventory_hostname }}"
+      inventory_hostname: "{{ inventory_hostname }}"
+      change_ticket_id: "{{ change_ticket_id | default('') }}"
+      patch_target_scope: "{{ patch_target_scope | default(ansible_limit | default('')) }}"
+      patch_wave_name: "{{ patch_wave_name | default('unspecified') }}"
+      final_status: "{{ _final_status }}"
+      patching_exception_active: "{{ patching_exception_active | default(false) | bool }}"
+      patching_exception_reference: "{{ patching_exception_reference_effective | default('') }}"
+      patching_exception_source: "{{ patching_exception_source | default('workflow_survey') }}"
+      patching_reboot_allowed: "{{ patching_reboot_allowed | default(false) | bool }}"
+      patch_provider: "{{ windows_patch_provider_effective | default('unknown') }}"
+      windows_patch_provider_effective: "{{ windows_patch_provider_effective | default('unknown') }}"
+      windows_wsus_assignment_group: "{{ windows_wsus_assignment_group | default('not_available') }}"
+      wsus_mapping_status: "{{ windows_wsus_mapping_status | default('not_available') }}"
+      windows_wsus_config_match: "{{ windows_wsus_config_match | default('not_available') }}"
+      os_policy_id: "{{ windows_os_policy.policy_id | default('not_available') }}"
+      updates_found_final: "{{ windows_updates_policy_count | default(0) | int }}"
+      updates_remaining: "{{ windows_updates_policy_count | default(0) | int }}"
+      patch_attempted: "{{ _final_patch_attempted }}"
+      updates_installed: "{{ _final_updates_installed }}"
+      updates_failed: "{{ _final_updates_failed }}"
+      pre_patch_reboot_required: "{{ _final_pre_reboot_required }}"
+      pre_patch_reboot_performed: "{{ _final_pre_reboot_performed }}"
+      post_patch_reboot_required: "{{ _final_post_reboot_required }}"
+      post_patch_reboot_performed: "{{ _final_post_reboot_performed }}"
+      pending_reboot_final: "{{ pending_reboot | default(false) | bool }}"
+      postcheck_status: "{{ _final_postcheck_status }}"
+      manual_followup_required: "{{ manual_followup_required | default(false) | bool }}"
+      application_metadata_status: "{{ application_metadata_status | default('n/a') }}"
+      windows_connectivity_ok: "{{ windows_connectivity_ok | default(false) | bool }}"
+      upstream_artifacts: "{{ _upstream_artifacts }}"
+      upstream_artifact_status: "{{ _upstream_artifact_status }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Publish per-host patch_final_result artifact
+  ansible.builtin.set_stats:
+    data:
+      patch_final_result: "{{ patch_final_result }}"
+    per_host: true
+  tags:
+    - report

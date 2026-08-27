@@ -1,0 +1,14 @@
+---
+# AAP survey for "Windows - Final Patch Report".
+# Standalone optional change context only. Workflow supplies shared vars.
+# Never remediates. Do not survey exceptions or authorizations here.
+name: "Windows Final Patch Report Survey"
+description: >-
+  Optional change context for standalone Final Patch Report launches.
+  When launched via the workflow, use workflow survey values.
+spec:
+  - variable: change_ticket_id
+    question_name: "Change ticket ID"
+    type: text
+    default: ""
+    required: false

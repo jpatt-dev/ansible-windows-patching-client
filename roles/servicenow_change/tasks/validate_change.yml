@@ -1,0 +1,67 @@
+---
+# EXAMPLE — validate change before remediation.
+# Replace table name, query fields, and allowed states with the client's
+# ServiceNow process before enabling snow_enabled in production.
+
+- name: "EXAMPLE: Retrieve change request from ServiceNow"
+  ansible.builtin.uri:
+    url: >-
+      {{ snow_effective_instance_url }}/api/now/table/{{ snow_change_table }}/{{ snow_change_id }}
+    method: GET
+    headers: "{{ snow_uri_headers }}"
+    url_username: "{{ snow_uri_user if snow_auth_type_normalized == 'basic' else omit }}"
+    url_password: "{{ snow_uri_password if snow_auth_type_normalized == 'basic' else omit }}"
+    force_basic_auth: "{{ snow_auth_type_normalized == 'basic' }}"
+    status_code: [200]
+    return_content: true
+  register: snow_change_lookup
+  delegate_to: localhost
+  become: false
+  no_log: true
+  failed_when: false
+  changed_when: false
+  tags:
+    - always
+    - servicenow
+
+- name: Fail when change lookup is invalid and strict mode is enabled
+  ansible.builtin.assert:
+    that:
+      - snow_change_lookup.status | default(0) == 200
+    fail_msg: >-
+      ServiceNow change validation failed for snow_change_id={{ snow_change_id }}.
+      HTTP status={{ snow_change_lookup.status | default('n/a') }}.
+      Confirm instance URL, credentials, table, and change ID mapping with the client.
+      Set snow_fail_on_invalid_change=false to warn instead of failing.
+  when: snow_fail_on_invalid_change | default(true) | bool
+  tags:
+    - always
+    - servicenow
+
+- name: Warn when change lookup is invalid and strict mode is disabled
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: ServiceNow change validation did not succeed
+      (status={{ snow_change_lookup.status | default('n/a') }}).
+      Continuing because snow_fail_on_invalid_change=false.
+  when:
+    - not (snow_fail_on_invalid_change | default(true) | bool)
+    - (snow_change_lookup.status | default(0)) != 200
+  tags:
+    - always
+    - servicenow
+
+- name: "EXAMPLE: Note maintenance window validation placeholder"
+  ansible.builtin.debug:
+    msg: >-
+      EXAMPLE: When snow_validate_window=true, map client fields such as
+      start_date / end_date (or custom window fields) against
+      maintenance_window_start / maintenance_window_end. Replace this
+      stub with client-specific field checks before production use.
+  when:
+    - snow_validate_window | default(true) | bool
+    - snow_change_lookup.status | default(0) == 200
+  changed_when: false
+  tags:
+    - always
+    - servicenow
