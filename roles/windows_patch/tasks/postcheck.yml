@@ -12,8 +12,6 @@
 - name: Resolve authoritative provider for postcheck branching (validate only)
   ansible.builtin.include_role:
     name: windows_patch_source
-  vars:
-    windows_wsus_configuration_mode: validate
   tags:
     - postcheck
     - source

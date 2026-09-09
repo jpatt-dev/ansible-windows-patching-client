@@ -188,8 +188,7 @@
               or not (windows_critical_services_ok | default(true) | bool)
               or ((windows_patch_provider_effective | default('unknown')) == 'unknown')
               or (
-                (windows_patch_provider_effective | default('')) == 'wsus'
-                and (windows_wsus_mapping_status | default('')) != 'matched'
+                (windows_wsus_validation_status | default('missing')) != 'valid'
               )
             )
             else 'compliant'
@@ -203,7 +202,7 @@
 - name: Build patch_final_result for this host
   ansible.builtin.set_fact:
     patch_final_result:
-      schema_version: "1"
+      schema_version: "2"
       report_generated_at_utc: "{{ patch_report_generated_at_utc }}"
       host: "{{ inventory_hostname }}"
       inventory_hostname: "{{ inventory_hostname }}"
@@ -217,9 +216,11 @@
       patching_reboot_allowed: "{{ patching_reboot_allowed | default(false) | bool }}"
       patch_provider: "{{ windows_patch_provider_effective | default('unknown') }}"
       windows_patch_provider_effective: "{{ windows_patch_provider_effective | default('unknown') }}"
-      windows_wsus_assignment_group: "{{ windows_wsus_assignment_group | default('not_available') }}"
-      wsus_mapping_status: "{{ windows_wsus_mapping_status | default('not_available') }}"
-      windows_wsus_config_match: "{{ windows_wsus_config_match | default('not_available') }}"
+      windows_wsus_configured: "{{ windows_wsus_configured | default(false) }}"
+      windows_wsus_validation_status: "{{ windows_wsus_validation_status | default('not_available') }}"
+      windows_wsus_server_effective: "{{ windows_wsus_server_effective | default('not_available') }}"
+      windows_wsus_status_server_effective: "{{ windows_wsus_status_server_effective | default('not_available') }}"
+      windows_wsus_use_server_effective: "{{ windows_wsus_use_server_effective | default('not_available') }}"
       os_policy_id: "{{ windows_os_policy.policy_id | default('not_available') }}"
       updates_found_final: "{{ windows_updates_policy_count | default(0) | int }}"
       updates_remaining: "{{ windows_updates_policy_count | default(0) | int }}"

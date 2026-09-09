@@ -36,7 +36,7 @@
   ansible.builtin.set_fact:
     patch_workflow_report_csv_rows:
       - >-
-        "host","final_status","change_ticket_id","patch_target_scope","patch_wave_name","patching_exception_active","patching_exception_reference","patching_exception_source","patching_reboot_allowed","patch_provider","windows_wsus_assignment_group","wsus_mapping_status","windows_wsus_config_match","os_policy_id","patch_attempted","updates_installed","updates_failed","updates_remaining","pre_patch_reboot_required","pre_patch_reboot_performed","post_patch_reboot_required","post_patch_reboot_performed","pending_reboot_final","postcheck_status","manual_followup_required","application_metadata_status"
+        "host","final_status","change_ticket_id","patch_target_scope","patch_wave_name","patching_exception_active","patching_exception_reference","patching_exception_source","patching_reboot_allowed","patch_provider","windows_wsus_configured","windows_wsus_validation_status","windows_wsus_server_effective","windows_wsus_status_server_effective","windows_wsus_use_server_effective","os_policy_id","patch_attempted","updates_installed","updates_failed","updates_remaining","pre_patch_reboot_required","pre_patch_reboot_performed","post_patch_reboot_required","post_patch_reboot_performed","pending_reboot_final","postcheck_status","manual_followup_required","application_metadata_status"
   changed_when: false
   tags:
     - report
@@ -58,9 +58,11 @@
             item.patching_exception_source | default(''),
             item.patching_reboot_allowed | default(''),
             item.patch_provider | default(''),
-            item.windows_wsus_assignment_group | default(''),
-            item.wsus_mapping_status | default(''),
-            item.windows_wsus_config_match | default(''),
+            item.windows_wsus_configured | default(''),
+            item.windows_wsus_validation_status | default(''),
+            item.windows_wsus_server_effective | default(''),
+            item.windows_wsus_status_server_effective | default(''),
+            item.windows_wsus_use_server_effective | default(''),
             item.os_policy_id | default(''),
             item.patch_attempted | default(''),
             item.updates_installed | default(''),
@@ -178,9 +180,11 @@
       - Exception reference: {{ ((h.patching_exception_reference | default('') | length) > 0) | ternary(h.patching_exception_reference, 'none') }}
       - Exception source: {{ h.patching_exception_source | default('not_available') }}
       - Patch provider: {{ h.patch_provider | default('not_available') }}
-      - WSUS assignment: {{ h.windows_wsus_assignment_group | default('not_available') }}
-      - WSUS mapping: {{ h.wsus_mapping_status | default('not_available') }}
-      - WSUS config match: {{ h.windows_wsus_config_match | default('not_available') }}
+      - WSUS configured: {{ h.windows_wsus_configured | default('not_available') }}
+      - WSUS validation: {{ h.windows_wsus_validation_status | default('not_available') }}
+      - WSUS server: {{ h.windows_wsus_server_effective | default('not_available') }}
+      - WSUS status server: {{ h.windows_wsus_status_server_effective | default('not_available') }}
+      - UseWUServer: {{ h.windows_wsus_use_server_effective | default('not_available') }}
       - OS policy: {{ h.os_policy_id | default('not_available') }}
       - Patch attempted: {{ h.patch_attempted | default('not_available') }}
       - Updates installed: {{ h.updates_installed | default('not_available') }}

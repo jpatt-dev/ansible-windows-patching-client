@@ -14,8 +14,6 @@
 - name: Resolve patch provider / WSUS source context (validate only)
   ansible.builtin.include_role:
     name: windows_patch_source
-  vars:
-    windows_wsus_configuration_mode: validate
   tags:
     - precheck
     - source
@@ -75,12 +73,7 @@
         if (
           (windows_powershell_precheck_critical_failed | default(false) | bool)
           or (
-            (windows_patch_provider_effective | default('unknown') == 'unknown')
-            and (patch_apply_enabled | default(false) | bool)
-          )
-          or (
-            (windows_patch_provider_effective | default('unknown') == 'wsus')
-            and (windows_wsus_mapping_status | default('') != 'matched')
+            (windows_wsus_validation_status | default('missing')) != 'valid'
           )
         )
         else (
@@ -106,8 +99,7 @@
         )
         or (windows_patch_provider_effective | default('unknown') == 'unknown')
         or (
-          (windows_patch_provider_effective | default('unknown') == 'wsus')
-          and (windows_wsus_mapping_status | default('') != 'matched')
+          (windows_wsus_validation_status | default('missing')) != 'valid'
         )
       }}
     updates_found: "{{ windows_updates_policy_count | default(windows_update_search.found_update_count | default(0)) | int }}"
@@ -139,10 +131,12 @@
       - "pending_reboot: {{ pending_reboot | default(false) }}"
       - "updates_found: {{ updates_found | default(0) }}"
       - "windows_patch_provider_effective: {{ windows_patch_provider_effective | default('unknown') }}"
-      - "windows_wsus_assignment_group: {{ windows_wsus_assignment_group | default('') }}"
+      - "windows_wsus_configured: {{ windows_wsus_configured | default(false) }}"
+      - "windows_wsus_validation_status: {{ windows_wsus_validation_status | default('missing') }}"
+      - "windows_wsus_server_effective: {{ windows_wsus_server_effective | default('') }}"
+      - "windows_wsus_status_server_effective: {{ windows_wsus_status_server_effective | default('') }}"
+      - "windows_wsus_use_server_effective: {{ windows_wsus_use_server_effective | default('') }}"
       - "windows_patch_mode: {{ windows_patch_mode }}"
-      - "windows_wsus_mapping_status: {{ windows_wsus_mapping_status | default('not_validated') }}"
-      - "windows_wsus_config_match: {{ windows_wsus_config_match | default('not_validated') }}"
       - "patch_wave_name: {{ patch_wave_name | default('unspecified') }}"
       - "change_ticket_id: {{ change_ticket_id | default('') }}"
       - "application_code: {{ application_code | default('') }}"
@@ -188,7 +182,8 @@
       status={{ precheck_status | default('unknown') }},
       connectivity={{ windows_connectivity_ok | default(false) }},
       provider_effective={{ windows_patch_provider_effective | default('unknown') }},
-      wsus_mapping={{ windows_wsus_mapping_status | default('not_validated') }},
+      wsus_validation={{ windows_wsus_validation_status | default('missing') }},
+      WUServer={{ windows_wsus_server_effective | default('') }},
       ps_critical={{ windows_powershell_precheck_critical_failed | default(false) }}.
       Workflow success path must not continue.
   tags:

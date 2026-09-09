@@ -69,8 +69,6 @@
 - name: Resolve authoritative provider and source context in this job (validate only)
   ansible.builtin.include_role:
     name: windows_patch_source
-  vars:
-    windows_wsus_configuration_mode: validate
   tags:
     - apply
     - source
@@ -87,8 +85,10 @@
       - windows_patch_mode == 'check_only'
     fail_msg: >-
       windows_patch_provider_effective=unknown cannot remediate
-      (mode={{ windows_patch_mode }}). Place the host in exactly one
-      windows_wsus_* assignment group, or use windows_patch_mode=check_only.
+      (mode={{ windows_patch_mode }};
+      wsus_validation={{ windows_wsus_validation_status | default('missing') }}).
+      The host must already have a valid WSUS client configuration, or use
+      windows_patch_mode=check_only.
   when: windows_patch_provider_effective | default('unknown') == 'unknown'
   tags:
     - apply
@@ -99,7 +99,7 @@
       - windows_patch_provider_effective == 'wsus'
     fail_msg: >-
       direct_win_updates requires windows_patch_provider_effective=wsus
-      (exactly one windows_wsus_* assignment group; got '{{ windows_patch_provider_effective }}').
+      (valid WSUS client configuration on the host; got '{{ windows_patch_provider_effective }}').
   when: windows_patch_mode == 'direct_win_updates'
   tags:
     - apply
@@ -151,42 +151,23 @@
   tags:
     - apply
 
-- name: Fail when WSUS assignment URL is missing for remediating apply
+- name: Fail when host does not have a valid WSUS configuration
   ansible.builtin.assert:
     that:
-      - (windows_wsus_effective_server_url | default('') | length) > 0
-      - (windows_wsus_assignment_groups | default([]) | length) == 1
+      - windows_wsus_validation_status | default('missing') == 'valid'
+      - windows_wsus_configured | default(false) | bool
     fail_msg: >-
-      WSUS assignment readiness failed for {{ inventory_hostname }}.
-      Require exactly one windows_wsus_* group and group_vars URLs.
+      WSUS validation failed for {{ inventory_hostname }}
+      (status={{ windows_wsus_validation_status | default('missing') }},
+      configured={{ windows_wsus_configured | default(false) }},
+      WUServer={{ windows_wsus_server_effective | default('') }},
+      WUStatusServer={{ windows_wsus_status_server_effective | default('') }},
+      UseWUServer={{ windows_wsus_use_server_effective | default('') }}).
+      Direct patching requires a usable WSUS client configuration already
+      present on the host. This repository does not assign or configure WSUS.
   when:
-    - windows_patch_provider_effective == 'wsus'
     - windows_patch_mode == 'direct_win_updates'
     - patch_apply_enabled
-  tags:
-    - apply
-
-- name: Fail when WSUS host config does not match inventory assignment
-  ansible.builtin.assert:
-    that:
-      - windows_wsus_mapping_status | default('') == 'matched'
-      - (windows_wsus_config_match is sameas true) or ((windows_wsus_config_match | default('') | string | lower) == 'true')
-    fail_msg: >-
-      WSUS config match failed for {{ inventory_hostname }}
-      (assignment={{ windows_wsus_assignment_group | default('') }},
-      mapping={{ windows_wsus_mapping_status | default('unknown') }},
-      config_match={{ windows_wsus_config_match | default('unknown') }},
-      expected_WUServer={{ windows_wsus_effective_server_url | default('') }},
-      actual_WUServer={{ windows_wsus_current_server_url | default('') }},
-      UseWUServer={{ windows_wsus_current_use_wu_server | default('') }}).
-      Direct patching must not proceed through an unintended update source.
-      Run playbooks/windows/configure_wsus.yml (enforce) to set registry;
-      Precheck and Apply validate only and do not repair drift.
-  when:
-    - windows_patch_provider_effective == 'wsus'
-    - windows_patch_mode == 'direct_win_updates'
-    - patch_apply_enabled
-    - windows_wsus_require_config_match | default(true) | bool
   tags:
     - apply
 

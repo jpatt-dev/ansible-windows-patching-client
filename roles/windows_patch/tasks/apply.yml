@@ -14,9 +14,11 @@
     patch_attempted: false
     windows_apply_status: excluded
     windows_patch_provider_effective: not_evaluated
-    windows_wsus_assignment_group: not_available
-    windows_wsus_config_match: not_available
-    windows_wsus_mapping_status: not_available
+    windows_wsus_configured: not_available
+    windows_wsus_validation_status: not_available
+    windows_wsus_server_effective: not_available
+    windows_wsus_status_server_effective: not_available
+    windows_wsus_use_server_effective: not_available
     windows_os_policy:
       policy_id: not_available
       categories: not_available
@@ -126,8 +128,9 @@
       - "updates_installed: {{ updates_installed | default(0) }}"
       - "reboot_required_by_install: {{ reboot_required | default(false) }}"
       - "os_policy_categories: {{ windows_os_policy.categories | default([]) }}"
-      - "windows_wsus_assignment_group: {{ windows_wsus_assignment_group | default('') }}"
-      - "windows_wsus_config_match: {{ windows_wsus_config_match | default('not_validated') }}"
+      - "windows_wsus_configured: {{ windows_wsus_configured | default(false) }}"
+      - "windows_wsus_validation_status: {{ windows_wsus_validation_status | default('missing') }}"
+      - "windows_wsus_server_effective: {{ windows_wsus_server_effective | default('') }}"
       - "note: reboot is never forced from Apply (win_updates reboot=false)"
       - "patch_cycle_strategy: {{ windows_patch_cycle_strategy | default('single_pass') }} (no automatic multi-cycle loop)"
   tags:

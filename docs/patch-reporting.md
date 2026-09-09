@@ -58,8 +58,11 @@ durable Controller storage unless exported elsewhere.
 | `patching_exception_active` | Temporary cycle exception |
 | `patching_exception_reference` | Exception/request ID |
 | `patching_reboot_allowed` | Inventory reboot policy (reboot phases and Final Report) |
-| `windows_wsus_assignment_group` | Inventory WSUS group |
-| `windows_wsus_config_match` | Registry matches inventory assignment |
+| `windows_wsus_configured` | True when required WSUS policy values are present (`valid` or `invalid`) |
+| `windows_wsus_validation_status` | `valid`, `missing`, or `invalid` |
+| `windows_wsus_server_effective` | Discovered `WUServer` from the host |
+| `windows_wsus_status_server_effective` | Discovered `WUStatusServer` from the host |
+| `windows_wsus_use_server_effective` | Discovered `UseWUServer` from the host |
 
 ## Status Interpretation
 
@@ -69,5 +72,5 @@ Final Report precedence: `failed` → `excluded` → `degraded` → `compliant`.
 | --- | --- |
 | `failed` | Connectivity failed, Apply `patch_status=failed`, or postcheck `failed` |
 | `excluded` | Temporary patch-cycle exception. Remaining updates or pending reboot stay `excluded`. |
-| `degraded` | Non-excluded host needs attention (pending reboot, remaining updates, WSUS mismatch, unknown provider, follow-up, or postcheck issues) |
+| `degraded` | Non-excluded host needs attention (pending reboot, remaining updates, invalid/missing WSUS, unknown provider, follow-up, or postcheck issues) |
 | `compliant` | Non-excluded host: provider/WSUS OK, no remaining updates, no pending reboot, postcheck acceptable |

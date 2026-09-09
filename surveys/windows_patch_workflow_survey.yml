@@ -1,6 +1,6 @@
 ---
 # AAP workflow survey for Windows Patch Workflow / Windows Canary Patch Workflow.
-# Per-run operator decisions only. Inventory remains authoritative for WSUS/provider.
+# Per-run operator decisions only. Do not survey WSUS URLs or provider.
 # Targeting is AAP Limit (required). Do not survey host lists or emergency bypass.
 #
 # Confirm workflow survey-variable and Limit propagation during

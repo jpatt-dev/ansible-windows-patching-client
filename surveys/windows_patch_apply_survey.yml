@@ -10,7 +10,7 @@ spec:
   - variable: operator_authorize_patch_install
     question_name: "Authorize patch installation?"
     question_description: >-
-      When true, Apply may install updates only if WSUS match, approved Limit,
+      When true, Apply may install updates only if WSUS validation is valid, approved Limit,
       OS policy, and maintenance window also pass. Does not authorize reboot.
     type: multiplechoice
     choices:

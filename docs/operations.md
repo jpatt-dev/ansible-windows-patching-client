@@ -2,7 +2,7 @@
 
 ## Normal Patch Cycle
 
-1. **Precheck** — Read-only. Resolves WSUS assignment, inspects health, searches
+1. **Precheck** — Read-only. Validates the host WSUS configuration, inspects health, searches
    updates, and records pending reboot. Fails the job on critical conditions.
 2. **Pre-Patch Reboot If Required** — Reboots when this phase's inventory reboot
    mode and every reboot control pass. `if_required` (default) reboots only when
@@ -17,7 +17,10 @@
 7. **Final Patch Report** — Consumes upstream phase artifacts and runs fresh
    read-only end-state checks. See [patch-reporting.md](patch-reporting.md).
 
-Configure WSUS is run separately when registry assignment must be written.
+WSUS client configuration is owned by the client's provisioning/post-provisioning
+process. The Windows patching repository validates the effective WSUS
+configuration before patch discovery or remediation but does not assign or
+configure WSUS servers.
 
 ## Variable Ownership
 
@@ -27,7 +30,7 @@ are defined in the separate Controller configuration-as-code repository.
 | Layer | Owns |
 | --- | --- |
 | Git | Playbooks, roles, safety policy, approved target list |
-| Inventory | Hosts, groups, WSUS URLs/mode, `patching_reboot_allowed`, reboot mode |
+| Inventory | Hosts, groups, `patching_reboot_allowed`, reboot mode |
 | Limit | Patch wave / launch population |
 | Survey | Per-run authorization, maintenance window, temporary exceptions |
 | Credential | Windows and external-service secrets |
@@ -42,39 +45,41 @@ All Windows patch jobs require an explicit AAP Limit. Blank Limit, `all`, and
 Apply and reboot jobs also require the Limit to be in `approved_patch_targets`
 (`windows_canary`, `windows_wave_1`). `windows_hosts` is not an approved wave.
 
-## WSUS Assignment
+## WSUS Validation
 
-Provider is inventory-derived. Assignment groups match `windows_wsus_*`.
+WSUS client configuration is owned by the client's provisioning/post-provisioning
+process. This repository only reads the host registry and validates it.
 
-| Inventory membership | Result |
+A host is `valid` when:
+
+- `WUServer` exists and is non-empty
+- `WUStatusServer` exists and is non-empty
+- `UseWUServer` is `1`
+- both values are structurally valid `http://` or `https://` URLs
+- `WUServer` and `WUStatusServer` match (case-insensitive)
+
+| Validation status | Result |
 | --- | --- |
-| Exactly one `windows_wsus_*` group | Provider `wsus` |
-| No assignment group | Provider `unknown`; remediation blocked |
-| More than one assignment group | Job fails closed |
+| `valid` | Provider `wsus`; `windows_wsus_configured` is true |
+| `missing` | Required registry values absent; `windows_wsus_configured` is false; provider `unknown` |
+| `invalid` | Values present but not a usable WSUS client config; `windows_wsus_configured` is true; provider `unknown` |
 
-URLs come from assignment group_vars (`windows_wsus_server_url`,
-`windows_wsus_status_url`). Operators do not choose a WSUS server in a survey.
+Operators do not choose a WSUS server in a survey. Leftover inventory
+`windows_wsus_*` groups or URL group_vars are unused and do not affect
+provider or gates.
 
-Configure WSUS can write the client registry when inventory mode is `enforce`.
-Recurring patch jobs (`validate` only) compare registry to inventory and do not
-repair drift.
-
-Compared values:
-
-- `WUServer`
-- `WUStatusServer`
-- `UseWUServer` (must be `1`)
-
-Precheck fails when a WSUS-assigned host is not `matched`. Remediating Apply
-fails closed unless `windows_wsus_config_match` is true.
+Precheck fails when validation is not `valid`. Remediating Apply fails closed
+unless the host already has a valid WSUS configuration. This repository does
+not write WSUS registry values.
 
 ## Patch Authorization
 
 `operator_authorize_patch_install` controls whether Apply can remediate.
 
 When false, Apply stays non-installing. When true, Apply still fails unless
-WSUS match, approved Limit, supported OS policy, maintenance window, and no
-pending reboot also pass. Install authorization does not authorize reboot.
+WSUS validation is `valid`, approved Limit, supported OS policy, maintenance
+window, and no pending reboot also pass. Install authorization does not
+authorize reboot.
 
 ## Reboots
 
@@ -128,9 +133,7 @@ Precheck reports window status and does not enforce it.
 | --- | --- |
 | Missing, blank, `all`, or `*` Limit | Job fails |
 | Apply/reboot Limit not in `approved_patch_targets` | Job fails |
-| Multiple `windows_wsus_*` groups | Job fails closed |
-| No `windows_wsus_*` group | Provider `unknown`; Apply cannot remediate. Precheck fails if install is authorized. |
-| WSUS registry mismatch | Precheck fails. Remediating Apply fails. Run Configure WSUS (`enforce`) to repair. |
+| Missing or invalid WSUS client configuration | Precheck fails. Remediating Apply fails. Repair WSUS in provisioning; this repository does not configure it. |
 | Pending reboot before remediating Apply | Apply fails closed. It does not reboot. |
 | Invalid or closed maintenance window | Remediating Apply and actual reboot operations fail |
 | Invalid `windows_*_patch_reboot_mode` | Reboot job fails closed |

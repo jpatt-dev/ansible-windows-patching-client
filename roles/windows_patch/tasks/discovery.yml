@@ -11,8 +11,6 @@
 - name: Include patch source resolve for discovery context (validate only)
   ansible.builtin.include_role:
     name: windows_patch_source
-  vars:
-    windows_wsus_configuration_mode: validate
   tags:
     - discovery
     - source

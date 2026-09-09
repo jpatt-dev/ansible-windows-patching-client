@@ -27,17 +27,19 @@ Precheck
 → Final Patch Report
 ```
 
-Each node is a separate AAP job. Pending reboot, WSUS assignment, exceptions,
+Each node is a separate AAP job. Pending reboot, WSUS validation, exceptions,
 and other critical state are re-evaluated in the job that needs them.
 
-Configure WSUS is a separate job template. It is not part of this chain.
+WSUS client configuration is owned by the client's provisioning/post-provisioning
+process. This repository validates the effective WSUS configuration before patch
+discovery or remediation but does not assign or configure WSUS servers.
 
 ## Repository Structure
 
 ```
 README.md
 docs/
-playbooks/windows/            # Precheck, reboot, discovery, apply, postcheck, Configure WSUS
+playbooks/windows/            # Precheck, reboot, discovery, apply, postcheck
 playbooks/orchestration/     # Final Patch Report
 roles/
 surveys/                     # transitional; final survey ownership moves to Controller CaC
@@ -49,7 +51,7 @@ execution-environments/
 | Layer | Owns |
 | --- | --- |
 | Git | Stable automation logic and policy |
-| AAP Inventory | Infrastructure truth (hosts, groups, WSUS assignment, reboot policy) |
+| AAP Inventory | Infrastructure truth (hosts, groups, reboot policy) |
 | AAP Limit | Hosts targeted for the run |
 | Workflow survey | Per-run operator authorization |
 | AAP Credential | Authentication and secrets |
@@ -60,7 +62,8 @@ Normal patch operations do not require Git changes.
 
 - Explicit Limit required. Blank, `all`, and `*` fail.
 - Remediation Limits must be in the approved patch target list.
-- WSUS assignment is inventory-derived (`windows_wsus_*`).
+- WSUS client configuration is validated on the host. This repository does not assign or configure WSUS servers.
+- Apply fails closed when WSUS validation is not `valid`.
 - Maintenance window is enforced for Apply and actual reboots.
 - `operator_authorize_patch_install` must be true to install.
 - Pre-patch and post-patch reboot each require their own operator flag.

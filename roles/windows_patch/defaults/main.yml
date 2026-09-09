@@ -29,7 +29,7 @@ windows_precheck_min_free_disk_mb: 1024
 # Default update searches use OS-policy categories only (no drivers/feature/preview).
 windows_updates_search_all_categories: false
 
-# Patch provider is inventory-derived: exactly one windows_wsus_* group → wsus; else unknown.
+# Patch provider is derived from the host WSUS registry: valid config → wsus; else unknown.
 # Launch windows_patch_provider is ignored. Active providers: unknown | wsus.
 windows_patch_provider: unknown
 windows_patch_provider_effective: unknown

@@ -1,0 +1,63 @@
+---
+# Validate the host's existing WSUS client configuration.
+# Status: missing | invalid | valid
+# valid requires non-empty WUServer and WUStatusServer, UseWUServer == 1,
+# structurally valid http(s) URLs, and case-insensitive URL equality.
+
+- name: Derive WSUS validation status and effective provider from host registry
+  ansible.builtin.set_fact:
+    windows_wsus_server_effective: "{{ windows_wsus_current_server_url | default('') | trim }}"
+    windows_wsus_status_server_effective: "{{ windows_wsus_current_status_server_url | default('') | trim }}"
+    windows_wsus_use_server_effective: "{{ windows_wsus_current_use_wu_server | default('') | string | trim }}"
+    windows_wsus_validation_status: >-
+      {{
+        'missing'
+        if (
+          (windows_wsus_current_server_url | default('') | trim | length) == 0
+          or (windows_wsus_current_status_server_url | default('') | trim | length) == 0
+          or (windows_wsus_current_use_wu_server | default('') | string | trim | length) == 0
+        )
+        else (
+          'valid'
+          if (
+            (windows_wsus_current_use_wu_server | default('') | string | trim) == '1'
+            and ((windows_wsus_current_server_url | default('') | trim) is match(windows_wsus_url_regex))
+            and ((windows_wsus_current_status_server_url | default('') | trim) is match(windows_wsus_url_regex))
+            and (
+              (windows_wsus_current_server_url | default('') | trim | lower)
+              == (windows_wsus_current_status_server_url | default('') | trim | lower)
+            )
+          )
+          else 'invalid'
+        )
+      }}
+  changed_when: false
+  tags:
+    - always
+    - wsus
+    - report
+
+- name: Derive WSUS configured flag and provider from validation status
+  ansible.builtin.set_fact:
+    windows_wsus_configured: >-
+      {{
+        windows_wsus_validation_status
+        in ['valid', 'invalid']
+      }}
+    windows_patch_provider_effective: >-
+      {{
+        'wsus'
+        if (windows_wsus_validation_status == 'valid')
+        else 'unknown'
+      }}
+    windows_patch_provider: >-
+      {{
+        'wsus'
+        if (windows_wsus_validation_status == 'valid')
+        else 'unknown'
+      }}
+  changed_when: false
+  tags:
+    - always
+    - wsus
+    - report

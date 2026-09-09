@@ -28,7 +28,6 @@ inventory, define groups:
 | `windows_hosts` | Playbook `hosts:` boundary. Not a patch wave. |
 | `windows_canary` | Approved Limit target |
 | `windows_wave_1` | Approved Limit target |
-| `windows_wsus_*` | WSUS assignment (URL and mode in group_vars) |
 
 AAP **Limit** selects the hosts that actually run. Effective hosts are
 `windows_hosts` ∩ Limit.
@@ -36,9 +35,12 @@ AAP **Limit** selects the hosts that actually run. Effective hosts are
 Do not put the Inventory object name in Limit. Do not put a group name in the
 job template Inventory field. Do not survey a host list.
 
-Each host must belong to **exactly one** `windows_wsus_*` assignment group.
 Wave groups (`windows_canary`, `windows_wave_1`) control when a host is
-patched, not where updates come from.
+patched. WSUS client configuration is owned by the client's
+provisioning/post-provisioning process. This repository validates the
+effective WSUS configuration before patch discovery or remediation but does
+not assign or configure WSUS servers. Leftover `windows_wsus_*` inventory
+groups do not affect provider or gates.
 
 Inventory/group_vars may set `windows_pre_patch_reboot_mode` and
 `windows_post_patch_reboot_mode` (`if_required` default, or `always`).
@@ -60,7 +62,6 @@ Production templates: **Prompt on launch** for Limit only
 
 | Job Template | Playbook | Survey |
 | --- | --- | --- |
-| Windows - Configure WSUS | `playbooks/windows/configure_wsus.yml` | none |
 | Windows - Precheck | `playbooks/windows/precheck.yml` | yes |
 | Windows - Pre-Patch Reboot If Required | `playbooks/windows/pre_patch_reboot_if_required.yml` | yes |
 | Windows - Patch Discovery | `playbooks/windows/patch_discovery.yml` | yes |
@@ -69,8 +70,10 @@ Production templates: **Prompt on launch** for Limit only
 | Windows - Postcheck | `playbooks/windows/postcheck.yml` | yes |
 | Windows - Final Patch Report | `playbooks/orchestration/patch_compliance_report.yml` | yes |
 
-Configure WSUS never installs updates and never reboots. Mode
-(`validate` or `enforce`) comes from inventory, not a survey.
+Do not create a Configure WSUS job template against this repository. This
+project does not assign or write WSUS client registry values. If an external
+Controller configuration still lists `playbooks/windows/configure_wsus.yml`,
+remove that job template.
 
 ## Workflow
 

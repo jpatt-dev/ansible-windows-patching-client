@@ -94,7 +94,7 @@
 - name: Build patch_workflow_report aggregate
   ansible.builtin.set_fact:
     patch_workflow_report:
-      schema_version: "1"
+      schema_version: "2"
       report_generated_at_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
       change_ticket_id: "{{ change_ticket_id | default('') }}"
       patch_target_scope: "{{ patch_target_scope | default(ansible_limit | default('')) }}"

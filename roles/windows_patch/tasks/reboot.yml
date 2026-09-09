@@ -46,8 +46,6 @@
 - name: Resolve authoritative provider for reboot reporting (validate only)
   ansible.builtin.include_role:
     name: windows_patch_source
-  vars:
-    windows_wsus_configuration_mode: validate
   tags:
     - reboot
     - source
