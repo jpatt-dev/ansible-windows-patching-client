@@ -1,0 +1,105 @@
+---
+# Windows full patch transaction (single play / single job).
+# Runs the existing windows_patch phases in order on each host.
+# Ineligible hosts (precheck blocked/failed) skip remediation but remain
+# in the play for reporting. Does not use meta: end_host.
+#
+# CLI:
+#   ansible-playbook -i /path/to/client-inventory \
+#     playbooks/windows/full_patch.yml
+
+- name: Windows full patch transaction
+  hosts: windows_hosts
+  gather_facts: false
+  serial: "{{ patch_serial | default(1) }}"
+  tags:
+    - windows
+    - patching
+
+  tasks:
+    - name: Include shared orchestration validation
+      ansible.builtin.include_role:
+        name: patch_common
+      vars:
+        patch_default_target: windows_hosts
+        patch_enforce_scoped_target: true
+      tags:
+        - always
+
+    - name: Run Windows precheck
+      ansible.builtin.include_role:
+        name: windows_patch
+        apply:
+          ignore_errors: true
+      vars:
+        patch_phase: precheck
+
+    - name: Preserve precheck phase result
+      ansible.builtin.set_fact:
+        patch_phase_precheck: "{{ { inventory_hostname: patch_result } }}"
+      changed_when: false
+
+    - name: Determine host eligibility from precheck status
+      ansible.builtin.set_fact:
+        patch_host_eligible: "{{ (precheck_status | default('failed')) in ['passed', 'warning'] }}"
+      changed_when: false
+
+    - name: Continue patch lifecycle for eligible hosts
+      when: patch_host_eligible | bool
+      block:
+        - name: Run Windows pre-patch reboot
+          ansible.builtin.include_role:
+            name: windows_patch
+          vars:
+            patch_phase: reboot
+            reboot_phase: pre
+
+        - name: Preserve pre-patch reboot phase result
+          ansible.builtin.set_fact:
+            patch_phase_reboot_pre: "{{ { inventory_hostname: patch_result } }}"
+          changed_when: false
+
+        - name: Run Windows discovery
+          ansible.builtin.include_role:
+            name: windows_patch
+          vars:
+            patch_phase: discovery
+
+        - name: Preserve discovery phase result
+          ansible.builtin.set_fact:
+            patch_phase_discovery: "{{ { inventory_hostname: patch_result } }}"
+          changed_when: false
+
+        - name: Run Windows apply
+          ansible.builtin.include_role:
+            name: windows_patch
+          vars:
+            patch_phase: apply
+
+        - name: Preserve apply phase result
+          ansible.builtin.set_fact:
+            patch_phase_apply: "{{ { inventory_hostname: patch_result } }}"
+          changed_when: false
+
+        - name: Run Windows post-patch reboot
+          ansible.builtin.include_role:
+            name: windows_patch
+          vars:
+            patch_phase: reboot
+            reboot_phase: post
+
+        - name: Preserve post-patch reboot phase result
+          ansible.builtin.set_fact:
+            patch_phase_reboot_post: "{{ { inventory_hostname: patch_result } }}"
+          changed_when: false
+
+        - name: Run Windows postcheck
+          ansible.builtin.include_role:
+            name: windows_patch
+          vars:
+            patch_phase: postcheck
+
+        - name: Preserve postcheck phase result
+          ansible.builtin.set_fact:
+            patch_phase_postcheck: "{{ { inventory_hostname: patch_result } }}"
+          changed_when: false
