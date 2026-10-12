@@ -47,8 +47,6 @@
     patch_orchestration_guidance:
       patch_wave_name: "{{ patch_wave_name | default('unspecified') }}"
       patch_serial: "{{ patch_serial | default(1) }}"
-      patch_batch_size: "{{ patch_batch_size | default(10) }}"
-      job_slice_count: "{{ job_slice_count | default(1) }}"
       ansible_limit: "{{ patch_ansible_limit | default('') }}"
       patch_target_scope: "{{ patch_target_scope }}"
       patch_default_target: "{{ patch_default_target | default('windows_hosts') }}"

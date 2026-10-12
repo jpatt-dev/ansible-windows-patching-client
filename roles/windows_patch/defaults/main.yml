@@ -26,6 +26,10 @@ windows_services_to_check:
 # Soft disk threshold for precheck warnings (MB). Does not fail the play by default.
 windows_precheck_min_free_disk_mb: 1024
 
+# Standalone Precheck fails the host after reporting when status is failed/blocked.
+# full_patch.yml sets this false so those hosts remain in the play for reporting.
+windows_precheck_fail_on_blocked: true
+
 # Default update searches use OS-policy categories only (no drivers/feature/preview).
 windows_updates_search_all_categories: false
 
@@ -49,11 +53,9 @@ windows_patch_modes_allowed:
   - direct_win_updates
 
 # Operator-facing runtime decisions (surveyable). Default false.
-# allow_legacy_runtime_controls is never surveyed (CLI extra-vars only).
 operator_authorize_patch_install: false
 operator_allow_pre_patch_reboot: false
 operator_allow_post_patch_reboot: false
-allow_legacy_runtime_controls: false
 patch_apply_enabled: false
 reboot_enabled: false
 
@@ -75,8 +77,6 @@ windows_post_patch_reboot_mode: if_required
 windows_reboot_timeout: 3600
 windows_pre_reboot_delay: 60
 windows_post_reboot_delay: 60
-
-windows_patch_cycle_strategy: single_pass
 
 # Opt-in client PowerShell precheck (off by default)
 windows_powershell_precheck_enabled: false

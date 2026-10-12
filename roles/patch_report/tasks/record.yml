@@ -1,7 +1,7 @@
 ---
 # Build structured per-host patch_result and publish set_stats for AAP.
-# Never include secrets/passwords. Each workflow node re-publishes fields
-# known in *this* job — earlier-only fields may be n/a unless re-derived.
+# Never include secrets/passwords. Fields known in this job only —
+# earlier-only fields may be n/a unless re-derived.
 
 - name: Resolve change ticket id for report
   ansible.builtin.set_fact:
@@ -140,17 +140,10 @@
       windows_patch_mode: "{{ windows_patch_mode | default('check_only') }}"
       patch_mode: "{{ windows_patch_mode | default('check_only') }}"
       patch_wave_name: "{{ patch_wave_name | default('unspecified') }}"
-      region: "{{ region | default('') }}"
-      environment: "{{ environment | default('') }}"
       change_ticket_id: "{{ patch_report_change_ticket_id }}"
-      application_code: "{{ application_code | default('') }}"
-      application_metadata_status: "{{ application_metadata_status | default('n/a') }}"
-      application_metadata_source: "{{ application_metadata_source | default('') }}"
-      exception_policy_status: "{{ windows_exception_policy_status | default('n/a') }}"
-      exception_ids_applied: "{{ windows_exceptions_enabled_active | default([]) }}"
       patching_exception_active: "{{ patching_exception_active | default(false) | bool }}"
       patching_exception_reference: "{{ patching_exception_reference_effective | default('') }}"
-      patching_exception_source: "{{ patching_exception_source | default('workflow_survey') }}"
+      patching_exception_source: "{{ patching_exception_source | default('inventory') }}"
       patch_attempted: >-
         {{
           patch_attempted | default(false) | bool
@@ -200,9 +193,6 @@
         }}
       os_policy_id: "{{ windows_os_policy.policy_id | default('not_available') }}"
       update_categories: "{{ windows_os_policy.categories | default('not_available') }}"
-      patch_cycle_strategy: "{{ windows_patch_cycle_strategy | default('single_pass') }}"
-      patch_cycle: "{{ windows_patch_cycle | default(1) | int }}"
-      patch_max_cycles: not_available
       updates_found: "{{ patch_report_updates_found_effective | int }}"
       updates_available: "{{ patch_report_updates_found_effective | int }}"
       updates_installed: "{{ patch_report_updates_installed_effective | int }}"
@@ -261,15 +251,7 @@
     - always
     - report
 
-- name: Alias patch_report_record for compatibility
-  ansible.builtin.set_fact:
-    patch_report_record: "{{ patch_result }}"
-  changed_when: false
-  tags:
-    - always
-    - report
-
-- name: Publish operator-facing patch_result stats for AAP workflows
+- name: Publish operator-facing patch_result stats for AAP
   ansible.builtin.set_stats:
     data:
       host: "{{ patch_result.host }}"
@@ -278,10 +260,6 @@
       windows_patch_mode: "{{ patch_result.windows_patch_mode }}"
       patch_mode: "{{ patch_result.patch_mode }}"
       patch_wave_name: "{{ patch_result.patch_wave_name }}"
-      application_code: "{{ patch_result.application_code }}"
-      application_metadata_status: "{{ patch_result.application_metadata_status }}"
-      exception_policy_status: "{{ patch_result.exception_policy_status }}"
-      exception_ids_applied: "{{ patch_result.exception_ids_applied }}"
       patching_exception_active: "{{ patch_result.patching_exception_active }}"
       patching_exception_reference: "{{ patch_result.patching_exception_reference }}"
       patching_exception_source: "{{ patch_result.patching_exception_source }}"
@@ -303,9 +281,6 @@
       post_patch_reboot_performed: "{{ patch_result.post_patch_reboot_performed }}"
       os_policy_id: "{{ patch_result.os_policy_id }}"
       update_categories: "{{ patch_result.update_categories }}"
-      patch_cycle_strategy: "{{ patch_result.patch_cycle_strategy }}"
-      patch_cycle: "{{ patch_result.patch_cycle }}"
-      patch_max_cycles: "{{ patch_result.patch_max_cycles }}"
       updates_found: "{{ patch_result.updates_found }}"
       updates_installed: "{{ patch_result.updates_installed }}"
       updates_failed: "{{ patch_result.updates_failed }}"
@@ -327,29 +302,6 @@
       updates_available: "{{ patch_result.updates_available }}"
       remediation_required: "{{ patch_result.remediation_required }}"
     per_host: true
-  tags:
-    - always
-    - report
-
-- name: Resolve unique phase artifact key for workflow propagation
-  ansible.builtin.set_fact:
-    patch_phase_artifact_key: "patch_phase_{{ patch_report_phase_name | default('unknown') }}"
-  changed_when: false
-  when:
-    - (patch_report_phase_name | default('')) | length > 0
-    - (patch_report_phase_name | default('')) != 'compliance'
-    - (patch_report_phase_name | default('')) != 'final'
-  tags:
-    - always
-    - report
-
-- name: Publish unique phase patch_result artifact for Final Patch Report
-  ansible.builtin.set_stats:
-    data: "{{ { patch_phase_artifact_key: patch_result } }}"
-    per_host: true
-  when:
-    - patch_phase_artifact_key is defined
-    - (patch_phase_artifact_key | default('') | length) > 0
   tags:
     - always
     - report

@@ -1,4 +1,0 @@
-windows_patch_exceptions: []
-
-# fail | warn when an enabled exception is expired in production-like envs
-windows_exception_expired_policy: warn

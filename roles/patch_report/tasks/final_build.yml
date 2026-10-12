@@ -1,8 +1,10 @@
 ---
-# Build per-host patch_final_result from fresh end-state + upstream phase artifacts.
-# Workflow-global artifacts are host-keyed maps (per_host: false), e.g.:
+# Build per-host patch_final_result from current host facts + phase history maps.
+# full_patch.yml preserves host-local maps after each phase, e.g.:
 #   patch_phase_apply[inventory_hostname]
 # Missing host entry → not_available (never invent history).
+# Do not infer patch_attempted, updates_installed, or reboot_performed from
+# final machine state.
 
 - name: Capture report generation timestamp
   ansible.builtin.set_fact:
@@ -23,7 +25,7 @@
   tags:
     - report
 
-- name: Extract this host's records from workflow-global phase maps
+- name: Extract this host's records from preserved phase maps
   ansible.builtin.set_fact:
     _upstream_precheck: "{{ patch_phase_precheck[inventory_hostname] if (_ua_precheck_present | bool) else {} }}"
     _upstream_reboot_pre: "{{ patch_phase_reboot_pre[inventory_hostname] if (_ua_reboot_pre_present | bool) else {} }}"
@@ -159,39 +161,337 @@
       }}
     _final_postcheck_status: >-
       {{
-        postcheck_status | default(_upstream_postcheck.postcheck_status | default('not_available'))
+        _upstream_postcheck.postcheck_status
+        if (_ua_postcheck_present | bool and (_upstream_postcheck.postcheck_status | default('') | string | length) > 0)
+        else (postcheck_status | default('not_available'))
       }}
   changed_when: false
   tags:
     - report
 
-- name: Derive deterministic final_status
+- name: Normalize canonical reporting inputs
   ansible.builtin.set_fact:
-    _final_status: >-
+    _rpt_exempt: "{{ (patching_exception_enabled | default(false) | bool) or (patching_exception_active | default(false) | bool) }}"
+    _rpt_unreachable: "{{ (not (windows_connectivity_ok | default(false) | bool)) or (windows_winrm_ping.unreachable | default(false) | bool) }}"
+    _rpt_eligible: "{{ patch_host_eligible | default(false) | bool }}"
+    _rpt_precheck_status: "{{ precheck_status | default(_upstream_precheck.precheck_status | default('missing')) }}"
+    _rpt_lifecycle_failed: "{{ patch_lifecycle_failed | default(false) | bool }}"
+    _rpt_attempted: >-
       {{
-        'failed'
+        (_final_patch_attempted | bool)
+        if ((_final_patch_attempted | default('not_available') | string) not in ['not_available', ''])
+        else false
+      }}
+    _rpt_installed: >-
+      {{
+        (_final_updates_installed | int)
+        if ((_final_updates_installed | default('not_available') | string) not in ['not_available', ''])
+        else 0
+      }}
+    _rpt_failed_updates: >-
+      {{
+        (_final_updates_failed | int)
+        if ((_final_updates_failed | default('not_available') | string) not in ['not_available', ''])
+        else 0
+      }}
+    _rpt_remaining_known: >-
+      {{
+        (windows_update_search is defined)
+        and (windows_update_search is mapping)
+        and (not (windows_update_search.skipped | default(false) | bool))
+        and (not (windows_update_search.failed | default(false) | bool))
+        and (windows_update_search.found_update_count is defined)
+        and (windows_connectivity_ok | default(false) | bool)
+      }}
+    _rpt_remaining: >-
+      {{
+        (windows_update_search.found_update_count | int)
         if (
-          (not (windows_connectivity_ok | default(false) | bool))
-          or ((_final_postcheck_status | default('')) == 'failed')
-          or ((_upstream_apply.patch_status | default('')) == 'failed')
+          (windows_update_search is defined)
+          and (windows_update_search is mapping)
+          and (windows_update_search.found_update_count is defined)
         )
+        else 'not_available'
+      }}
+    _rpt_apply_failed: >-
+      {{
+        ((_upstream_apply.patch_status | default('')) == 'failed')
+        or (
+          ((_final_updates_failed | default('not_available') | string) not in ['not_available', ''])
+          and ((_final_updates_failed | int) > 0)
+        )
+      }}
+    _rpt_postcheck_unhealthy: >-
+      {{
+        (not (windows_critical_services_ok | default(true) | bool))
+        or (windows_disk_low | default(false) | bool)
+        or ((_final_postcheck_status | default('')) == 'failed')
+      }}
+    _rpt_pending_reboot: "{{ pending_reboot | default(false) | bool }}"
+    _rpt_hostname: "{{ windows_hostname | default(inventory_hostname) }}"
+    _rpt_fqdn: "{{ windows_fqdn | default('') }}"
+    _rpt_os_release: >-
+      {{
+        windows_os_caption
+        if ((windows_os_caption | default('unknown') | string) not in ['unknown', ''])
+        else ''
+      }}
+    _rpt_os_build: "{{ windows_os_build | default('') }}"
+    _rpt_location: "{{ patch_location | default('') }}"
+    _rpt_aap_job_id: "{{ tower_job_id | default(awx_job_id | default('')) }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Derive remaining-update evidence flags
+  ansible.builtin.set_fact:
+    _rpt_remaining_zero: >-
+      {{
+        (_rpt_remaining_known | bool)
+        and ((_rpt_remaining | default('not_available') | string) != 'not_available')
+        and ((_rpt_remaining | int) == 0)
+      }}
+    _rpt_remaining_positive: >-
+      {{
+        (_rpt_remaining_known | bool)
+        and ((_rpt_remaining | default('not_available') | string) != 'not_available')
+        and ((_rpt_remaining | int) > 0)
+      }}
+  changed_when: false
+  tags:
+    - report
+
+- name: Derive business patched boolean from Apply history only
+  ansible.builtin.set_fact:
+    _rpt_patched: "{{ (_ua_apply_present | bool) and (_rpt_attempted | bool) and ((_rpt_installed | int) > 0) }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Derive canonical result, reason, and reason_code
+  ansible.builtin.set_fact:
+    _rpt_result: >-
+      {{
+        'exempt'
+        if (_rpt_exempt | bool)
         else (
-          'excluded'
-          if (patching_exception_active | default(false) | bool)
+          'failed'
+          if (_rpt_unreachable | bool)
           else (
-            'degraded'
+            'failed'
             if (
-              (pending_reboot | default(false) | bool)
-              or ((windows_updates_policy_count | default(0) | int) > 0)
-              or ((_final_postcheck_status | default('')) in ['degraded', 'failed'])
-              or (manual_followup_required | default(false) | bool)
-              or not (windows_critical_services_ok | default(true) | bool)
-              or ((windows_patch_provider_effective | default('unknown')) == 'unknown')
-              or (
-                (windows_wsus_validation_status | default('missing')) != 'valid'
+              (_rpt_lifecycle_failed | bool)
+              or (_rpt_apply_failed | bool)
+              or ((_final_postcheck_status | default('')) == 'failed')
+            )
+            else (
+              'blocked'
+              if (
+                (not (_rpt_eligible | bool))
+                and ((_rpt_precheck_status | default('missing')) in ['blocked', 'failed'])
+              )
+              else (
+                'unknown'
+                if (not (_rpt_eligible | bool))
+                else (
+                  'unknown'
+                  if ((_rpt_patched | bool) and (not (_ua_postcheck_present | bool)))
+                  else (
+                    'degraded'
+                    if ((_rpt_patched | bool) and (_rpt_postcheck_unhealthy | bool))
+                    else (
+                      'degraded'
+                      if ((_rpt_patched | bool) and (_rpt_remaining_positive | bool))
+                      else (
+                        'degraded'
+                        if ((_rpt_patched | bool) and (_rpt_pending_reboot | bool))
+                        else (
+                          'success'
+                          if (
+                            (_rpt_patched | bool)
+                            and (_ua_postcheck_present | bool)
+                            and (_rpt_remaining_zero | bool)
+                            and (not (_rpt_pending_reboot | bool))
+                            and (not (_rpt_postcheck_unhealthy | bool))
+                          )
+                          else (
+                            'already_compliant'
+                            if ((not (_rpt_patched | bool)) and (_rpt_remaining_zero | bool))
+                            else (
+                              'blocked'
+                              if (
+                                (not (_rpt_patched | bool))
+                                and (_rpt_remaining_positive | bool)
+                                and (not (_rpt_attempted | bool))
+                              )
+                              else (
+                                'failed'
+                                if (
+                                  (not (_rpt_patched | bool))
+                                  and (_rpt_remaining_positive | bool)
+                                  and (_rpt_attempted | bool)
+                                  and ((_rpt_installed | int) == 0)
+                                )
+                                else 'unknown'
+                              )
+                            )
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
               )
             )
-            else 'compliant'
+          )
+        )
+      }}
+  changed_when: false
+  tags:
+    - report
+
+- name: Derive readable reason and stable reason_code
+  ansible.builtin.set_fact:
+    _rpt_reason_code: >-
+      {{
+        'PATCH_EXEMPTION'
+        if (_rpt_result == 'exempt')
+        else (
+          'UNREACHABLE'
+          if (_rpt_result == 'failed' and (_rpt_unreachable | bool))
+          else (
+            'REBOOT_FAILED'
+            if (
+              (_rpt_result == 'failed')
+              and (_rpt_lifecycle_failed | bool)
+              and (
+                (
+                  (_ua_apply_present | bool)
+                  and (not (_ua_reboot_post_present | bool))
+                )
+                or (
+                  (_rpt_eligible | bool)
+                  and (not (_ua_reboot_pre_present | bool))
+                  and (not (_ua_apply_present | bool))
+                )
+              )
+            )
+            else (
+              'PATCH_INSTALL_FAILED'
+              if (_rpt_result == 'failed' and not (_rpt_unreachable | bool))
+              else (
+                'PRECHECK_BLOCKED'
+                if (
+                  (_rpt_result == 'blocked')
+                  and ((_rpt_precheck_status | default('')) in ['blocked', 'failed'])
+                )
+                else (
+                  'INSTALL_NOT_AUTHORIZED'
+                  if (_rpt_result == 'blocked')
+                  else (
+                    'POSTCHECK_DEGRADED'
+                    if (_rpt_result == 'degraded' and (_rpt_postcheck_unhealthy | bool))
+                    else (
+                      'PARTIAL_PATCH'
+                      if (_rpt_result == 'degraded' and (_rpt_remaining_positive | bool))
+                      else (
+                        'PENDING_REBOOT'
+                        if (_rpt_result == 'degraded')
+                        else (
+                          'NO_APPLICABLE_UPDATES'
+                          if (_rpt_result == 'already_compliant')
+                          else (
+                            'PATCH_SUCCEEDED'
+                            if (_rpt_result == 'success')
+                            else (
+                              'POSTCHECK_MISSING'
+                              if (
+                                (_rpt_result == 'unknown')
+                                and (_rpt_patched | bool)
+                                and (not (_ua_postcheck_present | bool))
+                              )
+                              else 'UNKNOWN_RESULT'
+                            )
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      }}
+    _rpt_reason: >-
+      {{
+        'Approved exemption'
+        if (_rpt_result == 'exempt')
+        else (
+          'Host unreachable'
+          if (_rpt_result == 'failed' and (_rpt_unreachable | bool))
+          else (
+            'Pre-patch reboot failed'
+            if (
+              (_rpt_result == 'failed')
+              and (_rpt_lifecycle_failed | bool)
+              and (_rpt_eligible | bool)
+              and (not (_ua_reboot_pre_present | bool))
+              and (not (_ua_apply_present | bool))
+            )
+            else (
+              'Post-patch reboot failed'
+              if (
+                (_rpt_result == 'failed')
+                and (_rpt_lifecycle_failed | bool)
+                and (_ua_apply_present | bool)
+                and (not (_ua_reboot_post_present | bool))
+              )
+              else (
+                'Update installation failed'
+                if (_rpt_result == 'failed' and not (_rpt_unreachable | bool))
+                else (
+                  'Precheck blocked remediation'
+                  if (
+                    (_rpt_result == 'blocked')
+                    and ((_rpt_precheck_status | default('')) in ['blocked', 'failed'])
+                  )
+                  else (
+                    'Patch installation was not authorized'
+                    if (_rpt_result == 'blocked')
+                    else (
+                      'Postcheck detected unhealthy services'
+                      if (_rpt_result == 'degraded' and (_rpt_postcheck_unhealthy | bool))
+                      else (
+                        'Updates remain after installation'
+                        if (_rpt_result == 'degraded' and (_rpt_remaining_positive | bool))
+                        else (
+                          'Updates installed; reboot still pending'
+                          if (_rpt_result == 'degraded')
+                          else (
+                            'No applicable updates'
+                            if (_rpt_result == 'already_compliant')
+                            else (
+                              'Updates installed successfully'
+                              if (_rpt_result == 'success')
+                              else (
+                                'Postcheck evidence is missing'
+                                if (
+                                  (_rpt_result == 'unknown')
+                                  and (_rpt_patched | bool)
+                                  and (not (_ua_postcheck_present | bool))
+                                )
+                                else 'Reliable execution outcome cannot be established'
+                              )
+                            )
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            )
           )
         )
       }}
@@ -202,17 +502,30 @@
 - name: Build patch_final_result for this host
   ansible.builtin.set_fact:
     patch_final_result:
-      schema_version: "2"
+      schema_version: "3"
       report_generated_at_utc: "{{ patch_report_generated_at_utc }}"
+      hostname: "{{ _rpt_hostname }}"
+      fqdn: "{{ _rpt_fqdn }}"
+      os_release: "{{ _rpt_os_release }}"
+      os_build: "{{ _rpt_os_build }}"
+      location: "{{ _rpt_location }}"
       host: "{{ inventory_hostname }}"
       inventory_hostname: "{{ inventory_hostname }}"
       change_ticket_id: "{{ change_ticket_id | default('') }}"
+      aap_job_id: "{{ _rpt_aap_job_id }}"
+      aap_limit: "{{ patch_target_scope | default(ansible_limit | default('')) }}"
       patch_target_scope: "{{ patch_target_scope | default(ansible_limit | default('')) }}"
+      patch_wave: "{{ patch_wave_name | default('unspecified') }}"
       patch_wave_name: "{{ patch_wave_name | default('unspecified') }}"
-      final_status: "{{ _final_status }}"
-      patching_exception_active: "{{ patching_exception_active | default(false) | bool }}"
+      result: "{{ _rpt_result }}"
+      reason: "{{ _rpt_reason }}"
+      reason_code: "{{ _rpt_reason_code }}"
+      final_status: "{{ _rpt_result }}"
+      patched: "{{ _rpt_patched | bool }}"
+      exempt: "{{ _rpt_exempt | bool }}"
+      patching_exception_active: "{{ _rpt_exempt | bool }}"
       patching_exception_reference: "{{ patching_exception_reference_effective | default('') }}"
-      patching_exception_source: "{{ patching_exception_source | default('workflow_survey') }}"
+      patching_exception_source: "{{ patching_exception_source | default('inventory') }}"
       patching_reboot_allowed: "{{ patching_reboot_allowed | default(false) | bool }}"
       patch_provider: "{{ windows_patch_provider_effective | default('unknown') }}"
       windows_patch_provider_effective: "{{ windows_patch_provider_effective | default('unknown') }}"
@@ -222,8 +535,8 @@
       windows_wsus_status_server_effective: "{{ windows_wsus_status_server_effective | default('not_available') }}"
       windows_wsus_use_server_effective: "{{ windows_wsus_use_server_effective | default('not_available') }}"
       os_policy_id: "{{ windows_os_policy.policy_id | default('not_available') }}"
-      updates_found_final: "{{ windows_updates_policy_count | default(0) | int }}"
-      updates_remaining: "{{ windows_updates_policy_count | default(0) | int }}"
+      updates_found_final: "{{ _rpt_remaining if (_rpt_remaining_known | bool) else 'not_available' }}"
+      updates_remaining: "{{ _rpt_remaining if (_rpt_remaining_known | bool) else 'not_available' }}"
       patch_attempted: "{{ _final_patch_attempted }}"
       updates_installed: "{{ _final_updates_installed }}"
       updates_failed: "{{ _final_updates_failed }}"
@@ -231,11 +544,14 @@
       pre_patch_reboot_performed: "{{ _final_pre_reboot_performed }}"
       post_patch_reboot_required: "{{ _final_post_reboot_required }}"
       post_patch_reboot_performed: "{{ _final_post_reboot_performed }}"
+      pending_reboot: "{{ pending_reboot | default(false) | bool }}"
       pending_reboot_final: "{{ pending_reboot | default(false) | bool }}"
       postcheck_status: "{{ _final_postcheck_status }}"
+      precheck_status: "{{ _rpt_precheck_status }}"
       manual_followup_required: "{{ manual_followup_required | default(false) | bool }}"
-      application_metadata_status: "{{ application_metadata_status | default('n/a') }}"
       windows_connectivity_ok: "{{ windows_connectivity_ok | default(false) | bool }}"
+      tower_job_id: "{{ tower_job_id | default('') }}"
+      awx_job_id: "{{ awx_job_id | default('') }}"
       upstream_artifacts: "{{ _upstream_artifacts }}"
       upstream_artifact_status: "{{ _upstream_artifact_status }}"
   changed_when: false

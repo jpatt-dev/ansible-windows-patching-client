@@ -1,9 +1,19 @@
 # Patch Reporting
 
-## Phase Results
+The structured AAP/JSON result is the authoritative source of truth. CSV is the
+concise operational report. Markdown is the human-readable summary.
 
-Each workflow node is an independent AAP job. Host facts do not carry forward.
-Each phase records its own result for:
+Do not infer historical actions from final machine state. A compliant host does
+not prove AAP patched it. A rebooted host does not prove AAP performed the
+reboot.
+
+SMTP/email is not implemented in this repository. Report files are suitable for
+a later `report_email` consumer.
+
+## Phase history
+
+`playbooks/windows/full_patch.yml` preserves host-local phase history in the
+same AAP job after each phase, before the next phase overwrites `patch_result`:
 
 | Phase | Artifact key |
 | --- | --- |
@@ -15,62 +25,180 @@ Each phase records its own result for:
 | Postcheck | `patch_phase_postcheck` |
 
 A host is treated as present for a phase only when that map exists and contains
-the inventory hostname. Missing history is `not_available`. It is not inferred
-from later end-state.
+the inventory hostname. Missing history is `not_available`.
 
-## Final Patch Report
+Blocked, failed, or exempt hosts that skip later phases keep only the phases
+that actually ran.
 
-Final Patch Report:
+Standalone Precheck publishes per-host `patch_result` only. It does not build
+the final aggregate report.
 
-- Consumes available upstream phase artifacts
-- Performs fresh read-only final-state checks (connectivity, WSUS validate,
-  update search, pending reboot, exception resolution)
-- Builds per-host `patch_final_result`
-- Builds aggregate `patch_workflow_report`
+## Canonical per-host result
 
-It does not install updates, reboot, or change WSUS configuration.
+Full Patch builds `patch_final_result` after each host lifecycle, then
+aggregates once in Play 2.
 
-## Durable Evidence
+`patched` means this AAP execution installed one or more updates, proven by
+Apply history (`patch_attempted` and `updates_installed > 0`). It is not inferred
+from a healthy final machine.
 
-AAP Job Details / Artifacts (`set_stats`) are the authoritative structured
-result.
+`already_compliant` means no installation was needed / no applicable updates
+remained. It requires a successful update search that returned zero applicable
+updates. Missing, skipped, or failed search evidence is `unknown`, not
+`already_compliant`. It is not a synonym of `success`.
 
-Human-readable output is available in job output.
+Exemption uses inventory `patching_exception_enabled` and/or
+`patching_exception_active`. It does not use a surveyed host list.
 
-JSON, CSV, and Markdown files written inside the Execution Environment
-(default `/tmp/aap-patch-reports`) are convenience exports. They are not
-durable Controller storage unless exported elsewhere.
+### Canonical `result` values
 
-## Important Fields
-
-| Field | Meaning |
+| Result | Meaning |
 | --- | --- |
-| `host` | Inventory hostname |
-| `change_ticket_id` | Change ticket from the workflow survey |
-| `patch_status` / `final_status` | Phase result or Final Report status |
-| `updates_found` | Updates found in that job |
-| `updates_installed` | Installed in Apply; otherwise `0` or `not_available` |
-| `updates_remaining` | Remaining after the measuring job |
-| `reboot_required` | Pending reboot detected in that job |
-| `reboot_performed` | Reboot actually completed |
-| `reboot_mode` | Effective reboot policy for that reboot phase (`if_required` or `always`) |
-| `manual_followup_required` | Operator follow-up needed |
-| `patching_exception_active` | Temporary cycle exception |
-| `patching_exception_reference` | Exception/request ID |
-| `patching_reboot_allowed` | Inventory reboot policy (reboot phases and Final Report) |
-| `windows_wsus_configured` | True when required WSUS policy values are present (`valid` or `invalid`) |
-| `windows_wsus_validation_status` | `valid`, `missing`, or `invalid` |
-| `windows_wsus_server_effective` | Discovered `WUServer` from the host |
-| `windows_wsus_status_server_effective` | Discovered `WUStatusServer` from the host |
-| `windows_wsus_use_server_effective` | Discovered `UseWUServer` from the host |
+| `success` | This execution installed updates, postcheck evidence is present and healthy, no applicable updates remain, and no reboot is pending |
+| `already_compliant` | No patch installation was needed |
+| `exempt` | Inventory exemption prevented remediation |
+| `blocked` | Precheck or safety policy prevented remediation |
+| `failed` | A required patch/reboot/remediation operation failed |
+| `degraded` | Updates were installed (`patched: true`) but postcheck is unhealthy, updates remain, or a reboot is still pending |
+| `unknown` | A reliable execution outcome cannot be established |
 
-## Status Interpretation
+`reboot_required` / `pending_reboot` are attributes, not results. Warnings stay
+in details unless they meet a terminal result above.
 
-Final Report precedence: `failed` → `excluded` → `degraded` → `compliant`.
+Precedence: exempt → unreachable/failed → precheck blocked → patched without
+postcheck unknown → patched+unhealthy/partial/pending-reboot degraded → patched
+success (postcheck present, remaining=0, not pending) → no remaining updates
+already_compliant → remaining updates not installed blocked → otherwise unknown.
 
-| Status | Meaning |
+`patched` stays true whenever Apply history proves installs, even when `result`
+is `degraded`, `failed`, or `unknown`.
+
+### Identity and location
+
+| Field | Source |
 | --- | --- |
-| `failed` | Connectivity failed, Apply `patch_status=failed`, or postcheck `failed` |
-| `excluded` | Temporary patch-cycle exception. Remaining updates or pending reboot stay `excluded`. |
-| `degraded` | Non-excluded host needs attention (pending reboot, remaining updates, invalid/missing WSUS, unknown provider, follow-up, or postcheck issues) |
-| `compliant` | Non-excluded host: provider/WSUS OK, no remaining updates, no pending reboot, postcheck acceptable |
+| `hostname` | Windows CSName when collected; otherwise inventory hostname |
+| `fqdn` | Windows DNS hostname + domain when collected |
+| `os_release` | Windows OS caption (final/post-patch collection) |
+| `os_build` | Windows build including UBR when collected (`BuildNumber.UBR`); `BuildNumber` only when UBR is unavailable |
+| `location` | Optional inventory/group_vars `patch_location` |
+
+`patch_location` is a generic label. Examples: `Lexington Datacenter`, `London`,
+`vCenter-East`, `Azure-East-US`, `Physical`. If unset, the report uses an empty
+string. This repository does not integrate with vCenter.
+
+### Reason codes
+
+| Code | Typical reason text |
+| --- | --- |
+| `PATCH_SUCCEEDED` | Updates installed successfully |
+| `NO_APPLICABLE_UPDATES` | No applicable updates |
+| `PATCH_EXEMPTION` | Approved exemption |
+| `PRECHECK_BLOCKED` | Precheck blocked remediation |
+| `INSTALL_NOT_AUTHORIZED` | Patch installation was not authorized |
+| `PATCH_INSTALL_FAILED` | Update installation failed |
+| `REBOOT_FAILED` | Pre-patch or post-patch reboot failed |
+| `POSTCHECK_DEGRADED` | Postcheck detected unhealthy services |
+| `PARTIAL_PATCH` | Updates remain after installation |
+| `PENDING_REBOOT` | Updates installed; reboot still pending |
+| `POSTCHECK_MISSING` | Postcheck evidence is missing |
+| `UNREACHABLE` | Host unreachable |
+| `UNKNOWN_RESULT` | Reliable execution outcome cannot be established |
+
+### Required host examples
+
+Exempt:
+
+```
+patched: false
+exempt: true
+result: exempt
+```
+
+Blocked:
+
+```
+patched: false
+exempt: false
+result: blocked
+```
+
+Already compliant:
+
+```
+patched: false
+result: already_compliant
+```
+
+Degraded after a successful install:
+
+```
+patched: true
+result: degraded
+```
+
+## Business CSV
+
+Primary CSV columns:
+
+1. Hostname
+2. FQDN
+3. OS Release
+4. Post-Patch Kernel/Build
+5. Location
+6. Patched
+7. Exempt
+8. Result
+9. Reason
+10. Updates Installed
+11. Updates Remaining
+12. Change Ticket
+13. Patch Wave
+
+CSV fields are RFC 4180 quoted. Commas, double quotes, and empty strings are
+preserved. Internal WSUS registry details, gate booleans, reboot-authorization
+controls, and artifact internals stay in JSON/AAP output only.
+
+## Aggregate summary
+
+Primary counts:
+
+- Systems Targeted / Total Systems
+- Systems Patched (`patched: true`, including degraded hosts that were patched)
+- Systems Not Patched
+
+Not Patched breakdown:
+
+- Exempt
+- Already Compliant
+- Blocked
+- Failed
+- Unknown
+
+`Systems Patched + Systems Not Patched = Total Systems`.
+
+Every host in the targeted play population appears in CSV, JSON, and Markdown.
+If `patch_final_result` is missing, the aggregate inserts a minimal
+`result: unknown` row (`UNKNOWN_RESULT` / "Final result was not produced for
+this host"). Degraded hosts that were patched are counted under Systems Patched.
+
+Structured JSON `status_counts` and the Markdown result-counts section expose
+all canonical results: `success`, `already_compliant`, `exempt`, `blocked`,
+`failed`, `degraded`, `unknown`. Those extra result counts are not added to
+the primary CSV.
+
+## JSON / AAP structured result
+
+JSON remains richer than CSV. Useful audit fields include AAP job ID, Limit,
+patch wave, change ticket, timestamps, `patch_attempted`, updates
+installed/failed, reboot required/performed, precheck/postcheck, exemption
+information, reason code, and WSUS/provider evidence.
+
+AAP `set_stats` publishes:
+
+- per-host `patch_final_result`
+- aggregate `patch_workflow_report` / `patch_workflow_report_json`
+- convenience `patch_workflow_report_csv`
+
+Files under `/tmp/aap-patch-reports` inside the Execution Environment are
+ephemeral convenience exports.

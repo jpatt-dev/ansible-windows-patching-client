@@ -1,8 +1,7 @@
 ---
 # Write canonical Final Patch Report files from patch_workflow_report.
 # WARNING: EE paths (e.g. /tmp) are ephemeral — AAP set_stats is primary.
-# Final Report file generation consumes patch_workflow_report, not phase-local
-# patch_result.
+# CSV is the concise business report. JSON remains the richer artifact.
 # Caller: non-serial play, run_once: true, connection: local.
 
 - name: Assert patch_workflow_report is available for Final Report write
@@ -32,67 +31,35 @@
   tags:
     - report
 
-- name: Initialize Final Report CSV rows
+- name: Render Final Report CSV with RFC 4180 quoting
   ansible.builtin.set_fact:
-    patch_workflow_report_csv_rows:
-      - >-
-        "host","final_status","change_ticket_id","patch_target_scope","patch_wave_name","patching_exception_active","patching_exception_reference","patching_exception_source","patching_reboot_allowed","patch_provider","windows_wsus_configured","windows_wsus_validation_status","windows_wsus_server_effective","windows_wsus_status_server_effective","windows_wsus_use_server_effective","os_policy_id","patch_attempted","updates_installed","updates_failed","updates_remaining","pre_patch_reboot_required","pre_patch_reboot_performed","post_patch_reboot_required","post_patch_reboot_performed","pending_reboot_final","postcheck_status","manual_followup_required","application_metadata_status"
+    patch_workflow_report_csv: |
+      "Hostname","FQDN","OS Release","Post-Patch Kernel/Build","Location","Patched","Exempt","Result","Reason","Updates Installed","Updates Remaining","Change Ticket","Patch Wave"
+      {% for item in patch_workflow_report.hosts | default([]) %}
+      {% set _csv_fields = [
+        item.hostname | default(item.host | default('')),
+        item.fqdn | default(''),
+        item.os_release | default(''),
+        item.os_build | default(''),
+        item.location | default(''),
+        item.patched | default(false),
+        item.exempt | default(false),
+        item.result | default(''),
+        item.reason | default(''),
+        item.updates_installed | default(''),
+        item.updates_remaining | default(''),
+        item.change_ticket_id | default(''),
+        item.patch_wave | default(item.patch_wave_name | default(''))
+      ] %}
+      {% for f in _csv_fields %}"{{ f | string | replace('"', '""') }}"{% if not loop.last %},{% endif %}{% endfor %}{{ '\n' }}
+      {% endfor %}
   changed_when: false
   tags:
     - report
 
-- name: Append quoted Final Report CSV host rows
+- name: Normalize Final Report CSV trailing whitespace
   ansible.builtin.set_fact:
-    patch_workflow_report_csv_rows: >-
-      {{
-        patch_workflow_report_csv_rows
-        + [
-          [
-            item.host | default(''),
-            item.final_status | default(''),
-            item.change_ticket_id | default(''),
-            item.patch_target_scope | default(''),
-            item.patch_wave_name | default(''),
-            item.patching_exception_active | default(''),
-            item.patching_exception_reference | default(''),
-            item.patching_exception_source | default(''),
-            item.patching_reboot_allowed | default(''),
-            item.patch_provider | default(''),
-            item.windows_wsus_configured | default(''),
-            item.windows_wsus_validation_status | default(''),
-            item.windows_wsus_server_effective | default(''),
-            item.windows_wsus_status_server_effective | default(''),
-            item.windows_wsus_use_server_effective | default(''),
-            item.os_policy_id | default(''),
-            item.patch_attempted | default(''),
-            item.updates_installed | default(''),
-            item.updates_failed | default(''),
-            item.updates_remaining | default(''),
-            item.pre_patch_reboot_required | default(''),
-            item.pre_patch_reboot_performed | default(''),
-            item.post_patch_reboot_required | default(''),
-            item.post_patch_reboot_performed | default(''),
-            item.pending_reboot_final | default(''),
-            item.postcheck_status | default(''),
-            item.manual_followup_required | default(''),
-            item.application_metadata_status | default('')
-          ]
-          | map('string')
-          | map('regex_replace', '"', '""')
-          | map('regex_replace', '^(.*)$', '"\1"')
-          | join(',')
-        ]
-      }}
-  loop: "{{ patch_workflow_report.hosts | default([]) }}"
-  loop_control:
-    label: "{{ item.host | default('unknown') }}"
-  changed_when: false
-  tags:
-    - report
-
-- name: Join Final Report CSV content
-  ansible.builtin.set_fact:
-    patch_workflow_report_csv: "{{ patch_workflow_report_csv_rows | join('\n') }}"
+    patch_workflow_report_csv: "{{ patch_workflow_report_csv | trim }}"
   changed_when: false
   tags:
     - report
@@ -120,7 +87,7 @@
 
 - name: Write Final Report CSV from patch_workflow_report.hosts
   ansible.builtin.copy:
-    content: "{{ patch_workflow_report_csv }}\n"
+    content: "{{ patch_workflow_report_csv | trim }}\n"
     dest: "{{ patch_final_report_csv_path }}"
     mode: "0640"
   delegate_to: localhost
@@ -131,41 +98,49 @@
 - name: Write Final Report Markdown from patch_workflow_report
   ansible.builtin.copy:
     content: |
-      # Windows Patch Workflow Final Report
+      # Windows Full Patch Final Report
 
       Generated: {{ patch_workflow_report.report_generated_at_utc | default('not_available') }}
       Change: {{ patch_workflow_report.change_ticket_id | default('') }}
       Limit: {{ patch_workflow_report.patch_target_scope | default('') }}
-      Wave: {{ patch_workflow_report.patch_wave_name | default('unspecified') }}
+      Wave: {{ patch_workflow_report.patch_wave | default(patch_workflow_report.patch_wave_name | default('unspecified')) }}
 
       ## Summary
 
-      | Metric | Value |
-      | --- | --- |
-      | Total Hosts | {{ patch_workflow_report.total_hosts | default(0) }} |
-      | Compliant | {{ patch_workflow_report.status_counts.compliant | default(0) }} |
-      | Excluded | {{ patch_workflow_report.status_counts.excluded | default(0) }} |
-      | Degraded | {{ patch_workflow_report.status_counts.degraded | default(0) }} |
-      | Failed | {{ patch_workflow_report.status_counts.failed | default(0) }} |
-      | Manual Follow-up | {{ patch_workflow_report.manual_followup_hosts | default([]) | length }} |
-      | Updates Installed Total | {{ patch_workflow_report.updates_installed_total | default('not_available') }} |
-      | Updates Remaining Total | {{ patch_workflow_report.updates_remaining_total | default('not_available') }} |
-      | Reboots Performed Total | {{ patch_workflow_report.reboots_performed_total | default('not_available') }} |
+      Systems Targeted:       {{ patch_workflow_report.total_systems | default(0) }}
+      Systems Patched:        {{ patch_workflow_report.systems_patched | default(0) }}
+      Systems Not Patched:    {{ patch_workflow_report.systems_not_patched | default(0) }}
+
+      Not Patched:
+        Exempt:               {{ patch_workflow_report.not_patched_breakdown.exempt | default(0) }}
+        Already Compliant:    {{ patch_workflow_report.not_patched_breakdown.already_compliant | default(0) }}
+        Blocked:              {{ patch_workflow_report.not_patched_breakdown.blocked | default(0) }}
+        Failed:               {{ patch_workflow_report.not_patched_breakdown.failed | default(0) }}
+        Unknown:              {{ patch_workflow_report.not_patched_breakdown.unknown | default(0) }}
+
+      Result counts:
+        success:              {{ patch_workflow_report.status_counts.success | default(0) }}
+        already_compliant:    {{ patch_workflow_report.status_counts.already_compliant | default(0) }}
+        exempt:               {{ patch_workflow_report.status_counts.exempt | default(0) }}
+        blocked:              {{ patch_workflow_report.status_counts.blocked | default(0) }}
+        failed:               {{ patch_workflow_report.status_counts.failed | default(0) }}
+        degraded:             {{ patch_workflow_report.status_counts.degraded | default(0) }}
+        unknown:              {{ patch_workflow_report.status_counts.unknown | default(0) }}
 
       ## Host Summary
 
-      | Host | Status | Exception | Attempted | Installed | Remaining | Pending Reboot | AAP Reboot Allowed | Follow-up |
+      | Hostname | FQDN | Result | Patched | Exempt | Reason | Installed | Remaining | Location |
       | --- | --- | --- | --- | --- | --- | --- | --- | --- |
       {% for h in patch_workflow_report.hosts | default([]) %}
-      | {{ h.host }} | {{ h.final_status }} | {{ ((h.patching_exception_reference | default('') | length) > 0) | ternary(h.patching_exception_reference, '-') }} | {{ h.patch_attempted }} | {{ h.updates_installed }} | {{ h.updates_remaining }} | {{ h.pending_reboot_final }} | {{ h.patching_reboot_allowed }} | {{ h.manual_followup_required }} |
+      | {{ h.hostname | default(h.host) }} | {{ h.fqdn | default('') }} | {{ h.result }} | {{ h.patched }} | {{ h.exempt }} | {{ h.reason }} | {{ h.updates_installed }} | {{ h.updates_remaining }} | {{ h.location | default('') }} |
       {% endfor %}
 
-      ## Excluded Hosts
+      ## Exempt Hosts
 
-      {% if (patch_workflow_report.excluded_hosts | default([]) | length) == 0 %}
+      {% if (patch_workflow_report.exempt_hosts | default([]) | length) == 0 %}
       None.
       {% else %}
-      {% for e in patch_workflow_report.excluded_hosts %}
+      {% for e in patch_workflow_report.exempt_hosts %}
       - {{ e.host }} — {{ e.reference | default('') }}
       {% endfor %}
       {% endif %}
@@ -173,38 +148,40 @@
       ## Host Details
 
       {% for h in patch_workflow_report.hosts | default([]) %}
-      ### {{ h.host }}
+      ### {{ h.hostname | default(h.host) }}
 
-      - Final status: {{ h.final_status }}
-      - Exception active: {{ h.patching_exception_active }}
-      - Exception reference: {{ ((h.patching_exception_reference | default('') | length) > 0) | ternary(h.patching_exception_reference, 'none') }}
-      - Exception source: {{ h.patching_exception_source | default('not_available') }}
-      - Patch provider: {{ h.patch_provider | default('not_available') }}
-      - WSUS configured: {{ h.windows_wsus_configured | default('not_available') }}
-      - WSUS validation: {{ h.windows_wsus_validation_status | default('not_available') }}
-      - WSUS server: {{ h.windows_wsus_server_effective | default('not_available') }}
-      - WSUS status server: {{ h.windows_wsus_status_server_effective | default('not_available') }}
-      - UseWUServer: {{ h.windows_wsus_use_server_effective | default('not_available') }}
-      - OS policy: {{ h.os_policy_id | default('not_available') }}
+      - Result: {{ h.result }}
+      - Reason: {{ h.reason }} ({{ h.reason_code }})
+      - Patched: {{ h.patched }}
+      - Exempt: {{ h.exempt }}
+      - FQDN: {{ h.fqdn | default('') }}
+      - OS release: {{ h.os_release | default('') }}
+      - OS build: {{ h.os_build | default('') }}
+      - Location: {{ h.location | default('') }}
+      - Change ticket: {{ h.change_ticket_id | default('') }}
+      - AAP job: {{ h.aap_job_id | default('') }}
+      - Patch wave: {{ h.patch_wave | default(h.patch_wave_name | default('')) }}
       - Patch attempted: {{ h.patch_attempted | default('not_available') }}
       - Updates installed: {{ h.updates_installed | default('not_available') }}
       - Updates failed: {{ h.updates_failed | default('not_available') }}
       - Updates remaining: {{ h.updates_remaining | default('not_available') }}
       - Pre-patch reboot required/performed: {{ h.pre_patch_reboot_required | default('not_available') }} / {{ h.pre_patch_reboot_performed | default('not_available') }}
       - Post-patch reboot required/performed: {{ h.post_patch_reboot_required | default('not_available') }} / {{ h.post_patch_reboot_performed | default('not_available') }}
-      - Pending reboot (final): {{ h.pending_reboot_final | default('not_available') }}
-      - AAP reboot allowed: {{ h.patching_reboot_allowed | default('not_available') }}
+      - Pending reboot: {{ h.pending_reboot | default(h.pending_reboot_final | default('not_available')) }}
       - Postcheck status: {{ h.postcheck_status | default('not_available') }}
+      - Precheck status: {{ h.precheck_status | default('not_available') }}
+      - Exception reference: {{ ((h.patching_exception_reference | default('') | length) > 0) | ternary(h.patching_exception_reference, 'none') }}
+      - Patch provider: {{ h.patch_provider | default('not_available') }}
+      - WSUS validation: {{ h.windows_wsus_validation_status | default('not_available') }}
       - Manual follow-up: {{ h.manual_followup_required | default('not_available') }}
-      - Application metadata: {{ h.application_metadata_status | default('not_available') }}
       - Upstream artifact status: {{ h.upstream_artifact_status | default('not_available') }}
 
       {% endfor %}
 
       ---
-      Note: Historical fields show not_available when upstream phase artifacts
-      were not propagated. EE-local report files are ephemeral; AAP set_stats
-      (patch_workflow_report) is the primary structured artifact.
+      JSON / AAP set_stats is the authoritative structured artifact.
+      CSV is the concise operational report. Historical fields show
+      not_available when that phase did not run. EE-local files are ephemeral.
     dest: "{{ patch_final_report_md_path }}"
     mode: "0640"
   delegate_to: localhost

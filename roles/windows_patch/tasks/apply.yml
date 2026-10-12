@@ -33,7 +33,7 @@
     msg: >-
       EXCLUDED: {{ inventory_hostname }} has patching_exception_active=true
       (reference={{ patching_exception_reference_effective | default('') }};
-      source={{ patching_exception_source | default('workflow_survey') }}).
+      source={{ patching_exception_source | default('inventory') }}).
       No win_updates install; remediating readiness asserts skipped.
   when: patching_exception_active | default(false) | bool
   changed_when: false
@@ -132,7 +132,6 @@
       - "windows_wsus_validation_status: {{ windows_wsus_validation_status | default('missing') }}"
       - "windows_wsus_server_effective: {{ windows_wsus_server_effective | default('') }}"
       - "note: reboot is never forced from Apply (win_updates reboot=false)"
-      - "patch_cycle_strategy: {{ windows_patch_cycle_strategy | default('single_pass') }} (no automatic multi-cycle loop)"
   tags:
     - apply
     - report

@@ -5,9 +5,11 @@
 patch_report_output_dir: "{{ report_dir | default('/tmp/aap-patch-reports') }}"
 patch_report_phase: record
 
-region: ""
-environment: ""
 change_ticket_id: ""
+
+# Optional inventory/group_vars location label for reporting. Not surveyed.
+# Examples: Lexington Datacenter, London, Azure-East-US, Physical
+patch_location: ""
 
 # Optional overrides passed by callers when recording a phase.
 patch_report_precheck_status: ""

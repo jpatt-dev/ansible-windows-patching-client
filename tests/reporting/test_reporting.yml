@@ -1,0 +1,199 @@
+---
+# Local reporting tests. Does not contact Windows hosts.
+#   ANSIBLE_ROLES_PATH=roles ansible-playbook tests/reporting/test_reporting.yml
+
+- name: CSV quoting through final_write.yml
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_report_output_dir: "{{ lookup('ansible.builtin.env', 'TEMP') | default('/tmp', true) }}/aap-patch-report-tests"
+    patch_workflow_report:
+      schema_version: "3"
+      report_generated_at_utc: "2026-01-01T00:00:00Z"
+      change_ticket_id: CHG001
+      patch_target_scope: mock
+      patch_wave: wave_1
+      patch_wave_name: wave_1
+      total_systems: 4
+      systems_patched: 1
+      systems_not_patched: 3
+      not_patched_breakdown:
+        exempt: 0
+        already_compliant: 0
+        blocked: 0
+        failed: 0
+        unknown: 0
+      status_counts:
+        success: 1
+        already_compliant: 0
+        exempt: 0
+        blocked: 0
+        failed: 0
+        degraded: 0
+        unknown: 0
+      exempt_hosts: []
+      hosts:
+        - hostname: WINHOST01
+          host: WINHOST01
+          fqdn: winhost01.example.com
+          os_release: Microsoft Windows Server 2019 Datacenter
+          os_build: "17763.7553"
+          location: Lexington Datacenter
+          patched: true
+          exempt: false
+          result: success
+          reason: Updates installed successfully
+          reason_code: PATCH_SUCCEEDED
+          updates_installed: 2
+          updates_remaining: 0
+          change_ticket_id: CHG001
+          patch_wave: wave_1
+        - hostname: 'HOST "QUOTED"'
+          host: quoted-host
+          fqdn: ""
+          os_release: 'Windows Server 2022, Datacenter'
+          os_build: "20348.1"
+          location: "London, UK"
+          patched: false
+          exempt: false
+          result: already_compliant
+          reason: 'Reason with "quotes"'
+          reason_code: NO_APPLICABLE_UPDATES
+          updates_installed: 0
+          updates_remaining: 0
+          change_ticket_id: CHG001
+          patch_wave: wave_1
+        - hostname: HOST,COMMA
+          host: comma-host
+          fqdn: ""
+          os_release: ""
+          os_build: ""
+          location: ""
+          patched: false
+          exempt: false
+          result: unknown
+          reason: ""
+          reason_code: UNKNOWN_RESULT
+          updates_installed: not_available
+          updates_remaining: not_available
+          change_ticket_id: ""
+          patch_wave: wave_1
+  tasks:
+    - name: Render CSV and companion report files
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_write.yml
+
+    - name: Read generated CSV
+      ansible.builtin.slurp:
+        src: "{{ patch_final_report_csv_path }}"
+      register: _csv_slurp
+
+    - name: Parse generated CSV lines
+      ansible.builtin.set_fact:
+        _csv_text: "{{ _csv_slurp.content | b64decode }}"
+        _csv_lines: "{{ (_csv_slurp.content | b64decode | trim).splitlines() }}"
+
+    - name: Assert CSV quoting preserves field values
+      ansible.builtin.assert:
+        that:
+          - (_csv_lines | length) == 4
+          - _csv_lines[0] is match('^"Hostname","FQDN"')
+          - ('"WINHOST01"' in _csv_lines[1])
+          - ('"Microsoft Windows Server 2019 Datacenter"' in _csv_lines[1])
+          - ('"17763.7553"' in _csv_lines[1])
+          - ('"HOST ""QUOTED"""' in _csv_lines[2])
+          - ('"Windows Server 2022, Datacenter"' in _csv_lines[2])
+          - ('"London, UK"' in _csv_lines[2])
+          - ('"Reason with ""quotes"""' in _csv_lines[2])
+          - _csv_lines[3] is match('^"HOST,COMMA",""')
+          - patch_workflow_report_csv == (_csv_text | trim)
+        fail_msg: Generated CSV quoting did not preserve field values.
+
+- name: Seed mock hosts for aggregate completeness
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add hosts with patch_final_result
+      ansible.builtin.add_host:
+        name: "{{ item.name }}"
+        groups: mock_report_hosts
+        ansible_connection: local
+        patch_final_result: "{{ item.result }}"
+      loop:
+        - name: win-ok
+          result:
+            inventory_hostname: win-ok
+            hostname: win-ok
+            host: win-ok
+            result: success
+            patched: true
+            exempt: false
+            reason: Updates installed successfully
+            reason_code: PATCH_SUCCEEDED
+            updates_installed: 3
+            updates_remaining: 0
+            updates_failed: 0
+            patch_attempted: true
+            pre_patch_reboot_performed: false
+            post_patch_reboot_performed: true
+            patching_exception_reference: ""
+            manual_followup_required: false
+            change_ticket_id: CHG001
+            patch_wave: wave_1
+        - name: win-exempt
+          result:
+            inventory_hostname: win-exempt
+            hostname: win-exempt
+            host: win-exempt
+            result: exempt
+            patched: false
+            exempt: true
+            reason: Approved exemption
+            reason_code: PATCH_EXEMPTION
+            updates_installed: not_available
+            updates_remaining: not_available
+            updates_failed: not_available
+            patch_attempted: not_available
+            pre_patch_reboot_performed: not_available
+            post_patch_reboot_performed: not_available
+            patching_exception_reference: EXC-1
+            manual_followup_required: false
+            change_ticket_id: CHG001
+            patch_wave: wave_1
+
+    - name: Add host without patch_final_result
+      ansible.builtin.add_host:
+        name: win-missing
+        groups: mock_report_hosts
+        ansible_connection: local
+
+- name: Aggregate completeness for the targeted population
+  hosts: mock_report_hosts
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: wave_1
+  tasks:
+    - name: Run aggregate reporting
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+
+    - name: Assert every targeted host is in the aggregate
+      ansible.builtin.assert:
+        that:
+          - (patch_workflow_report.hosts | length) == 3
+          - (patch_workflow_report.total_systems | int) == 3
+          - ((patch_workflow_report.systems_patched | int) + (patch_workflow_report.systems_not_patched | int)) == (patch_workflow_report.total_systems | int)
+          - (patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-missing') | list | length) == 1
+          - (patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-missing') | first).result == 'unknown'
+          - (patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-missing') | first).reason == 'Final result was not produced for this host'
+          - (patch_workflow_report.status_counts.unknown | int) >= 1
+          - (patch_workflow_report.not_patched_breakdown.unknown | int) >= 1
+        fail_msg: Aggregate report is missing targeted hosts or count invariant failed.
+      run_once: true

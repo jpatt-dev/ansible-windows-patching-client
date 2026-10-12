@@ -1,8 +1,12 @@
 ---
-# Windows full patch transaction (single play / single job).
-# Runs the existing windows_patch phases in order on each host.
-# Ineligible hosts (precheck blocked/failed) skip remediation but remain
-# in the play for reporting. Does not use meta: end_host.
+# Production single-job entrypoint for the complete Windows patch lifecycle.
+# Play 1 runs precheck through per-host final reporting (serial).
+# Play 2 aggregates the Limit population (non-serial, local).
+# Standalone troubleshooting entrypoint is playbooks/windows/precheck.yml.
+# Ineligible hosts (precheck blocked/failed/missing/unknown) skip remediation
+# but remain in the play for reporting. Does not use meta: end_host.
+# ignore_unreachable keeps Ansible-unreachable hosts in the play so final_build
+# can still record result=failed / reason_code=UNREACHABLE.
 #
 # CLI:
 #   ansible-playbook -i /path/to/client-inventory \
@@ -12,6 +16,7 @@
   hosts: windows_hosts
   gather_facts: false
   serial: "{{ patch_serial | default(1) }}"
+  ignore_unreachable: true
   tags:
     - windows
     - patching
@@ -29,24 +34,34 @@
     - name: Run Windows precheck
       ansible.builtin.include_role:
         name: windows_patch
-        apply:
-          ignore_errors: true
       vars:
         patch_phase: precheck
+        windows_precheck_fail_on_blocked: false
 
     - name: Preserve precheck phase result
       ansible.builtin.set_fact:
         patch_phase_precheck: "{{ { inventory_hostname: patch_result } }}"
+      when: (patch_result.phase | default('')) == 'precheck'
       changed_when: false
 
     - name: Determine host eligibility from precheck status
       ansible.builtin.set_fact:
-        patch_host_eligible: "{{ (precheck_status | default('failed')) in ['passed', 'warning'] }}"
+        patch_host_eligible: "{{ (precheck_status | default('missing')) in ['passed', 'warning'] }}"
       changed_when: false
 
     - name: Continue patch lifecycle for eligible hosts
       when: patch_host_eligible | bool
       block:
+        - name: Validate ServiceNow change before remediation
+          ansible.builtin.include_role:
+            name: servicenow_change
+          vars:
+            snow_phase: validate
+          run_once: true
+          tags:
+            - always
+            - servicenow
+
         - name: Run Windows pre-patch reboot
           ansible.builtin.include_role:
             name: windows_patch
@@ -57,6 +72,7 @@
         - name: Preserve pre-patch reboot phase result
           ansible.builtin.set_fact:
             patch_phase_reboot_pre: "{{ { inventory_hostname: patch_result } }}"
+          when: (patch_result.phase | default('')) == 'reboot_pre'
           changed_when: false
 
         - name: Run Windows discovery
@@ -68,6 +84,7 @@
         - name: Preserve discovery phase result
           ansible.builtin.set_fact:
             patch_phase_discovery: "{{ { inventory_hostname: patch_result } }}"
+          when: (patch_result.phase | default('')) == 'discovery'
           changed_when: false
 
         - name: Run Windows apply
@@ -79,6 +96,7 @@
         - name: Preserve apply phase result
           ansible.builtin.set_fact:
             patch_phase_apply: "{{ { inventory_hostname: patch_result } }}"
+          when: (patch_result.phase | default('')) == 'apply'
           changed_when: false
 
         - name: Run Windows post-patch reboot
@@ -91,6 +109,7 @@
         - name: Preserve post-patch reboot phase result
           ansible.builtin.set_fact:
             patch_phase_reboot_post: "{{ { inventory_hostname: patch_result } }}"
+          when: (patch_result.phase | default('')) == 'reboot_post'
           changed_when: false
 
         - name: Run Windows postcheck
@@ -102,4 +121,114 @@
         - name: Preserve postcheck phase result
           ansible.builtin.set_fact:
             patch_phase_postcheck: "{{ { inventory_hostname: patch_result } }}"
+          when: (patch_result.phase | default('')) == 'postcheck'
           changed_when: false
+
+      rescue:
+        - name: Record remediation lifecycle failure without ending the host
+          ansible.builtin.set_fact:
+            patch_lifecycle_failed: true
+            patch_lifecycle_failed_message: >-
+              {{ ansible_failed_result.msg | default('Windows full patch remediation lifecycle failed') }}
+          when: ansible_failed_result is defined
+          changed_when: false
+
+        - name: Report remediation lifecycle failure for later host reporting
+          ansible.builtin.debug:
+            msg: >-
+              Remediation lifecycle failed on {{ inventory_hostname }}.
+              Remaining phases were not run. Final reporting will use preserved
+              phase history only ({{ patch_lifecycle_failed_message }}).
+          changed_when: false
+
+    - name: Collect final host identity and health for reporting
+      ansible.builtin.include_role:
+        name: windows_patch
+        tasks_from: collect_host_health.yml
+      tags:
+        - report
+
+    - name: Refresh pending reboot for final reporting when the host is reachable
+      ansible.builtin.include_role:
+        name: windows_patch
+        tasks_from: check_pending_reboot.yml
+      when: windows_connectivity_ok | default(false) | bool
+      tags:
+        - report
+
+    - name: Build per-host patch_final_result
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+      tags:
+        - report
+
+    - name: Update ServiceNow work notes after host final result
+      ansible.builtin.include_role:
+        name: servicenow_change
+      vars:
+        snow_phase: work_notes
+        snow_work_note_message: >-
+          AAP Windows full patch host result for {{ inventory_hostname }}:
+          eligible={{ patch_host_eligible | default(false) }},
+          result={{ patch_final_result.result | default(patch_final_result.final_status | default('not_available')) }},
+          patched={{ patch_final_result.patched | default(false) }},
+          scope={{ patch_target_scope | default('not_available') }}
+          (wave={{ patch_wave_name | default('unspecified') }}).
+      tags:
+        - always
+        - servicenow
+
+- name: Windows full patch - aggregate reporting
+  hosts: windows_hosts
+  connection: local
+  gather_facts: false
+  tags:
+    - report
+    - windows
+    - patching
+
+  tasks:
+    - name: Aggregate Final Patch Report and print summary
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+      tags:
+        - report
+
+    - name: Write canonical Final Report JSON/CSV/Markdown from patch_workflow_report
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_write.yml
+      run_once: true
+      tags:
+        - report
+
+    - name: Attach Final Report files to ServiceNow change
+      ansible.builtin.include_role:
+        name: servicenow_change
+      vars:
+        snow_phase: attach_report
+        snow_report_path: "{{ item }}"
+      loop: "{{ patch_report_files | default([patch_report_primary_path | default('')]) }}"
+      when:
+        - snow_enabled | default(false) | bool
+        - snow_attach_report | default(false) | bool
+        - (item | default('') | length) > 0
+      run_once: true
+      tags:
+        - report
+        - servicenow
+
+    - name: Fail after reporting if any host remediation lifecycle failed
+      ansible.builtin.assert:
+        that:
+          - (ansible_play_hosts_all | map('extract', hostvars, 'patch_lifecycle_failed') | select('defined') | select | list | length) == 0
+        fail_msg: >-
+          One or more hosts failed during Full Patch remediation after Precheck.
+          Per-host and aggregate reports were still generated from preserved
+          phase history. See patch_final_result / patch_workflow_report.
+      run_once: true
+      tags:
+        - report

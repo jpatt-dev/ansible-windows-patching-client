@@ -1,14 +1,14 @@
 ---
-# AAP workflow survey for Windows Patch Workflow / Windows Canary Patch Workflow.
+# AAP survey for Windows - Full Patch (playbooks/windows/full_patch.yml).
 # Per-run operator decisions only. Do not survey WSUS URLs or provider.
 # Targeting is AAP Limit (required). Do not survey host lists or emergency bypass.
 #
-# Confirm workflow survey-variable and Limit propagation during
-# deployment acceptance testing.
-name: "Windows Patch Workflow Survey"
+# Confirm survey-variable and Limit propagation during deployment acceptance
+# testing.
+name: "Windows Full Patch Survey"
 description: >-
-  Shared per-run authorization and maintenance context for the Windows patch
-  workflow. All remediation defaults are false.
+  Per-run authorization and maintenance context for the Windows full patch
+  job. All remediation defaults are false.
 spec:
   - variable: change_ticket_id
     question_name: "Change ticket ID"
@@ -71,21 +71,11 @@ spec:
     default: "false"
     required: true
 
-  - variable: patching_exception_hosts
-    question_name: "Patch Exception Hosts"
-    question_description: >-
-      Comma-separated inventory hostnames with an approved temporary exception
-      for this patch cycle. Example: win-host-02.example.com. Leave blank when
-      there are no exceptions.
-    type: text
-    default: ""
-    required: false
-
   - variable: patching_exception_reference
     question_name: "Patch Exception Reference"
     question_description: >-
-      Approved exception/request reference. Required by the playbook when Patch
-      Exception Hosts is populated. Example: EXC-12345.
+      Optional approved exception/request reference recorded when inventory
+      exemption is active. Example: EXC-12345.
     type: text
     default: ""
     required: false

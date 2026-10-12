@@ -2,20 +2,47 @@
 
 ## Normal Patch Cycle
 
+Primary operational playbook: `playbooks/windows/full_patch.yml` runs the
+complete lifecycle in one AAP Job Template.
+
+```
+Precheck
+→ eligibility
+→ Pre-Reboot
+→ Discovery
+→ Apply
+→ Post-Reboot
+→ Postcheck
+→ per-host final report / ITSM update
+→ final aggregate report
+```
+
 1. **Precheck** — Read-only. Validates the host WSUS configuration, inspects health, searches
-   updates, and records pending reboot. Fails the job on critical conditions.
-2. **Pre-Patch Reboot If Required** — Reboots when this phase's inventory reboot
-   mode and every reboot control pass. `if_required` (default) reboots only when
-   Windows reports pending reboot. `always` reboots when those safety gates pass
-   even if pending reboot is false.
-3. **Discovery** — Search-only update discovery against WSUS. Never installs.
-4. **Apply** — Installs only when `operator_authorize_patch_install` is true and
+   updates, and records pending reboot. Inside Full Patch this does not fail the
+   job on blocked/failed status; those hosts are marked ineligible.
+2. **Eligibility** — `passed` and `warning` continue. `blocked`, `failed`,
+   missing, and unknown skip remediation and remain available for reporting.
+3. **Pre-Reboot** — Reboots when this phase's inventory reboot mode and every
+   reboot control pass. `if_required` (default) reboots only when Windows reports
+   pending reboot. `always` reboots when those safety gates pass even if pending
+   reboot is false.
+4. **Discovery** — Search-only update discovery against WSUS. Never installs.
+5. **Apply** — Installs only when `operator_authorize_patch_install` is true and
    in-job readiness gates pass. `win_updates` always uses `reboot: false`.
-5. **Post-Patch Reboot If Required** — Same reboot rules as the pre-patch phase
-   (`if_required` or `always`), with its own operator flag.
-6. **Postcheck** — Read-only validation after apply/reboot.
-7. **Final Patch Report** — Consumes upstream phase artifacts and runs fresh
-   read-only end-state checks. See [patch-reporting.md](patch-reporting.md).
+6. **Post-Reboot** — Same reboot rules as the pre-patch phase (`if_required` or
+   `always`), with its own operator flag.
+7. **Postcheck** — Read-only validation after apply/reboot.
+8. **Per-host final report / ITSM update** — Builds `patch_final_result` from
+   preserved phase history and current host facts. `patched` is true only when
+   Apply history proves this job installed updates. Updates ServiceNow work notes
+   when `snow_enabled=true`.
+9. **Final aggregate report** — One Limit-wide JSON/CSV/Markdown and AAP
+   `set_stats` artifact after every host in the Limit has finished Play 1.
+   CSV is the concise operational report; JSON is the richer authoritative
+   artifact. See [patch-reporting.md](patch-reporting.md).
+
+Standalone troubleshooting/readiness: `playbooks/windows/precheck.yml`. That
+playbook is fail-closed and never remediates.
 
 WSUS client configuration is owned by the client's provisioning/post-provisioning
 process. The Windows patching repository validates the effective WSUS
@@ -30,7 +57,7 @@ are defined in the separate Controller configuration-as-code repository.
 | Layer | Owns |
 | --- | --- |
 | Git | Playbooks, roles, safety policy, approved target list |
-| Inventory | Hosts, groups, `patching_reboot_allowed`, reboot mode |
+| Inventory | Hosts, groups, `patching_reboot_allowed`, reboot mode, optional `patch_location` |
 | Limit | Patch wave / launch population |
 | Survey | Per-run authorization, maintenance window, temporary exceptions |
 | Credential | Windows and external-service secrets |
@@ -42,8 +69,9 @@ All Windows patch jobs require an explicit AAP Limit. Blank Limit, `all`, and
 
 `windows_hosts` is only the playbook `hosts:` boundary.
 
-Apply and reboot jobs also require the Limit to be in `approved_patch_targets`
+Full Patch also requires the Limit to be in `approved_patch_targets`
 (`windows_canary`, `windows_wave_1`). `windows_hosts` is not an approved wave.
+Standalone Precheck does not enforce that approved-target list.
 
 ## WSUS Validation
 
@@ -68,9 +96,9 @@ Operators do not choose a WSUS server in a survey. Leftover inventory
 `windows_wsus_*` groups or URL group_vars are unused and do not affect
 provider or gates.
 
-Precheck fails when validation is not `valid`. Remediating Apply fails closed
-unless the host already has a valid WSUS configuration. This repository does
-not write WSUS registry values.
+Standalone Precheck fails when validation is not `valid`. Remediating Apply
+fails closed unless the host already has a valid WSUS configuration. This
+repository does not write WSUS registry values.
 
 ## Patch Authorization
 
@@ -99,22 +127,20 @@ inventory policy (`if_required` or `always`). They are not survey controls.
 Inventory policy wins over survey authorization. A survey cannot normally
 override `patching_reboot_allowed: false`.
 
-If reboot is required but inventory denies it, the reboot job skips the reboot,
+If reboot is required but inventory denies it, the reboot phase skips the reboot,
 sets `manual_followup_required`, and does not fail solely for that reason.
 
 ## Temporary Patch Exceptions
 
-Supplied per patch cycle through the workflow survey:
+Exemption is inventory-derived. Set per host or group:
 
-- `patching_exception_hosts` — comma-separated inventory hostnames
-- `patching_exception_reference` — required when hosts are listed
+- `patching_exception_enabled` — true when the host is exempt
+- `patching_exception_active` — equivalent inventory truth used by reporting and remediation gates
 
-Each listed host must be in the current Limit. The excluded host is still
-inspected and reported. Remediation and reboot are skipped
-(`patch_status` / `final_status` = `excluded`).
+The exempt host is still inspected and reported. Remediation and reboot are skipped
+(`patched: false`, `exempt: true`, `result: exempt`).
 
-Exceptions do not persist to the next launch. Do not remove excepted hosts from
-inventory groups.
+Do not use a surveyed host list for Full Patch reporting.
 
 ## Maintenance Window
 
@@ -132,14 +158,14 @@ Precheck reports window status and does not enforce it.
 | Condition | Result |
 | --- | --- |
 | Missing, blank, `all`, or `*` Limit | Job fails |
-| Apply/reboot Limit not in `approved_patch_targets` | Job fails |
-| Missing or invalid WSUS client configuration | Precheck fails. Remediating Apply fails. Repair WSUS in provisioning; this repository does not configure it. |
+| Full Patch Limit not in `approved_patch_targets` | Job fails |
+| Missing or invalid WSUS client configuration | Standalone Precheck fails. Full Patch marks the host ineligible and continues reporting. Remediating Apply fails. Repair WSUS in provisioning; this repository does not configure it. |
 | Pending reboot before remediating Apply | Apply fails closed. It does not reboot. |
 | Invalid or closed maintenance window | Remediating Apply and actual reboot operations fail |
-| Invalid `windows_*_patch_reboot_mode` | Reboot job fails closed |
+| Invalid `windows_*_patch_reboot_mode` | Reboot phase fails closed |
 | `patching_reboot_allowed: false` | Reboot skipped; `manual_followup_required`. Job does not fail solely for this. |
-| Temporary exception | Host reported as `excluded`; install and reboot skipped |
-| Client PowerShell precheck failed (when enabled) | Precheck fails. Remediating Apply fails. |
+| Temporary exception | Host reported as `exempt`; `patched: false`; install and reboot skipped |
+| Client PowerShell precheck failed (when enabled) | Standalone Precheck fails. Full Patch marks the host ineligible. Remediating Apply fails. |
 | Unsupported OS policy | Remediating Apply fails |
 
 ## PowerShell Client Precheck
@@ -160,3 +186,7 @@ When enabled, malformed output, execution failure, `critical_failed=true`, or
 Integration is optional. `snow_enabled` defaults to `false`. The ServiceNow
 role is an adapter boundary. The client-specific ServiceNow contract is
 implemented separately.
+
+When enabled, Full Patch validates the change once before eligible remediation
+and updates work notes after each host's final result. It does not emit
+per-phase ServiceNow chatter.

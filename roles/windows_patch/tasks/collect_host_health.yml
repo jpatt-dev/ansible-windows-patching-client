@@ -27,12 +27,33 @@
     - postcheck
     - always
 
-- name: Collect OS caption, version, and last boot time
+- name: Collect OS caption, version, build, hostname, FQDN, and last boot time
   ansible.windows.win_shell: |
     $os = Get-CimInstance -ClassName Win32_OperatingSystem
+    $cs = Get-CimInstance -ClassName Win32_ComputerSystem
+    $fqdn = if ($cs.PartOfDomain -and $cs.DNSHostName -and $cs.Domain) {
+      "$($cs.DNSHostName).$($cs.Domain)"
+    } else {
+      $cs.DNSHostName
+    }
+    $ubr = $null
+    try {
+      $ubr = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name UBR -ErrorAction Stop).UBR
+    } catch {
+      $ubr = $null
+    }
+    $fullBuild = [string]$os.BuildNumber
+    if ($null -ne $ubr -and "$ubr" -ne '') {
+      $fullBuild = "$($os.BuildNumber).$ubr"
+    }
     [PSCustomObject]@{
       Caption = $os.Caption
       Version = $os.Version
+      BuildNumber = $os.BuildNumber
+      UBR = $ubr
+      FullBuild = $fullBuild
+      CSName = $os.CSName
+      FQDN = $fqdn
       LastBootUpTime = $os.LastBootUpTime.ToString('o')
     } | ConvertTo-Json -Compress
   register: windows_os_boot_raw
@@ -42,12 +63,23 @@
     - precheck
     - postcheck
     - always
+    - report
 
 - name: Set OS and last boot facts
   ansible.builtin.set_fact:
     windows_os_info: "{{ windows_os_boot_raw.stdout | default('{}') | from_json }}"
     windows_os_version: "{{ (windows_os_boot_raw.stdout | default('{}') | from_json).Version | default('unknown') }}"
     windows_os_caption: "{{ (windows_os_boot_raw.stdout | default('{}') | from_json).Caption | default('unknown') }}"
+    windows_os_build: >-
+      {{
+        (windows_os_boot_raw.stdout | default('{}') | from_json).FullBuild
+        | default(
+          (windows_os_boot_raw.stdout | default('{}') | from_json).BuildNumber | default('', true),
+          true
+        )
+      }}
+    windows_hostname: "{{ (windows_os_boot_raw.stdout | default('{}') | from_json).CSName | default(inventory_hostname, true) }}"
+    windows_fqdn: "{{ (windows_os_boot_raw.stdout | default('{}') | from_json).FQDN | default('', true) }}"
     windows_last_boot_time: "{{ (windows_os_boot_raw.stdout | default('{}') | from_json).LastBootUpTime | default('unknown') }}"
   when: (windows_os_boot_raw.rc | default(1)) == 0
   changed_when: false
@@ -55,11 +87,15 @@
     - precheck
     - postcheck
     - always
+    - report
 
 - name: Set OS and last boot facts when probe failed
   ansible.builtin.set_fact:
     windows_os_version: unknown
     windows_os_caption: unknown
+    windows_os_build: ""
+    windows_hostname: "{{ inventory_hostname }}"
+    windows_fqdn: ""
     windows_last_boot_time: unknown
   when: (windows_os_boot_raw.rc | default(1)) != 0
   changed_when: false
@@ -67,6 +103,7 @@
     - precheck
     - postcheck
     - always
+    - report
 
 - name: Collect free disk space for system drive (MB)
   ansible.windows.win_shell: |
