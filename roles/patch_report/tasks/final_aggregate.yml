@@ -51,6 +51,7 @@
       patch_attempted: not_available
       pre_patch_reboot_performed: not_available
       post_patch_reboot_performed: not_available
+      pending_reboot: not_available
       change_ticket_id: "{{ change_ticket_id | default('') }}"
       patch_wave: "{{ patch_wave_name | default('unspecified') }}"
       patch_wave_name: "{{ patch_wave_name | default('unspecified') }}"
@@ -93,6 +94,7 @@
       already_compliant: "{{ _rpt_not_patched_hosts | selectattr('result', 'equalto', 'already_compliant') | list | length }}"
       blocked: "{{ _rpt_not_patched_hosts | selectattr('result', 'equalto', 'blocked') | list | length }}"
       failed: "{{ _rpt_not_patched_hosts | selectattr('result', 'equalto', 'failed') | list | length }}"
+      degraded: "{{ _rpt_not_patched_hosts | selectattr('result', 'equalto', 'degraded') | list | length }}"
       unknown: "{{ _rpt_not_patched_hosts | selectattr('result', 'equalto', 'unknown') | list | length }}"
   changed_when: false
   tags:
@@ -220,6 +222,7 @@
       - "  Already Compliant:    {{ patch_workflow_report.not_patched_breakdown.already_compliant }}"
       - "  Blocked:              {{ patch_workflow_report.not_patched_breakdown.blocked }}"
       - "  Failed:               {{ patch_workflow_report.not_patched_breakdown.failed }}"
+      - "  Degraded:             {{ patch_workflow_report.not_patched_breakdown.degraded }}"
       - "  Unknown:              {{ patch_workflow_report.not_patched_breakdown.unknown }}"
       - "----------------------------------------------------------------"
       - "Hostname | Result | Patched | Exempt | Reason | Installed | Remaining"

@@ -205,6 +205,15 @@
       tags:
         - report
 
+    - name: Email Windows patching report
+      ansible.builtin.include_role:
+        name: report_email
+      when: report_email_enabled | default(false) | bool
+      run_once: true
+      tags:
+        - report
+        - email
+
     - name: Attach Final Report files to ServiceNow change
       ansible.builtin.include_role:
         name: servicenow_change

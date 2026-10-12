@@ -31,35 +31,32 @@
   tags:
     - report
 
-- name: Render Final Report CSV with RFC 4180 quoting
+- name: Initialize Final Report CSV header
   ansible.builtin.set_fact:
-    patch_workflow_report_csv: |
-      "Hostname","FQDN","OS Release","Post-Patch Kernel/Build","Location","Patched","Exempt","Result","Reason","Updates Installed","Updates Remaining","Change Ticket","Patch Wave"
-      {% for item in patch_workflow_report.hosts | default([]) %}
-      {% set _csv_fields = [
-        item.hostname | default(item.host | default('')),
-        item.fqdn | default(''),
-        item.os_release | default(''),
-        item.os_build | default(''),
-        item.location | default(''),
-        item.patched | default(false),
-        item.exempt | default(false),
-        item.result | default(''),
-        item.reason | default(''),
-        item.updates_installed | default(''),
-        item.updates_remaining | default(''),
-        item.change_ticket_id | default(''),
-        item.patch_wave | default(item.patch_wave_name | default(''))
-      ] %}
-      {% for f in _csv_fields %}"{{ f | string | replace('"', '""') }}"{% if not loop.last %},{% endif %}{% endfor %}{{ '\n' }}
-      {% endfor %}
+    _csv_lines:
+      - '"Hostname","FQDN","OS Release","Post-Patch Kernel/Build","Location","Patched","Exempt","Result","Reason","Updates Installed","Updates Remaining","Change Ticket","Patch Wave","Reason Code","Pending Reboot","Manual Follow-up Required"'
   changed_when: false
   tags:
     - report
 
-- name: Normalize Final Report CSV trailing whitespace
+- name: Append quoted Final Report CSV host rows
   ansible.builtin.set_fact:
-    patch_workflow_report_csv: "{{ patch_workflow_report_csv | trim }}"
+    _csv_lines: "{{ _csv_lines + [_csv_row] }}"
+  vars:
+    _csv_row: >-
+      "{{ item.hostname | default(item.host | default('')) | string | replace('"', '""') }}","{{ item.fqdn | default('') | string | replace('"', '""') }}","{{ item.os_release | default('') | string | replace('"', '""') }}","{{ item.os_build | default('') | string | replace('"', '""') }}","{{ item.location | default('') | string | replace('"', '""') }}","{{ item.patched | default(false) | string | replace('"', '""') }}","{{ item.exempt | default(false) | string | replace('"', '""') }}","{{ item.result | default('') | string | replace('"', '""') }}","{{ item.reason | default('') | string | replace('"', '""') }}","{{ item.updates_installed | default('') | string | replace('"', '""') }}","{{ item.updates_remaining | default('') | string | replace('"', '""') }}","{{ item.change_ticket_id | default('') | string | replace('"', '""') }}","{{ item.patch_wave | default(item.patch_wave_name | default('')) | string | replace('"', '""') }}","{{ item.reason_code | default('') | string | replace('"', '""') }}","{{ (item.pending_reboot if (item.pending_reboot is defined) else 'not_available') | string | replace('"', '""') }}","{{ item.manual_followup_required | default(false) | string | replace('"', '""') }}"
+  loop: "{{ patch_workflow_report.hosts | default([]) }}"
+  loop_control:
+    label: "{{ item.hostname | default(item.host | default('unknown')) }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Join Final Report CSV lines
+  ansible.builtin.set_fact:
+    patch_workflow_report_csv: "{{ (_csv_lines | join(csv_newline)) ~ csv_newline }}"
+  vars:
+    csv_newline: "\n"
   changed_when: false
   tags:
     - report
@@ -87,7 +84,7 @@
 
 - name: Write Final Report CSV from patch_workflow_report.hosts
   ansible.builtin.copy:
-    content: "{{ patch_workflow_report_csv | trim }}\n"
+    content: "{{ patch_workflow_report_csv }}"
     dest: "{{ patch_final_report_csv_path }}"
     mode: "0640"
   delegate_to: localhost
@@ -116,6 +113,7 @@
         Already Compliant:    {{ patch_workflow_report.not_patched_breakdown.already_compliant | default(0) }}
         Blocked:              {{ patch_workflow_report.not_patched_breakdown.blocked | default(0) }}
         Failed:               {{ patch_workflow_report.not_patched_breakdown.failed | default(0) }}
+        Degraded:             {{ patch_workflow_report.not_patched_breakdown.degraded | default(0) }}
         Unknown:              {{ patch_workflow_report.not_patched_breakdown.unknown | default(0) }}
 
       Result counts:
@@ -129,10 +127,10 @@
 
       ## Host Summary
 
-      | Hostname | FQDN | Result | Patched | Exempt | Reason | Installed | Remaining | Location |
-      | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+      | Hostname | FQDN | Result | Patched | Exempt | Pending Reboot | Follow-up | Reason | Installed | Remaining | Location |
+      | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
       {% for h in patch_workflow_report.hosts | default([]) %}
-      | {{ h.hostname | default(h.host) }} | {{ h.fqdn | default('') }} | {{ h.result }} | {{ h.patched }} | {{ h.exempt }} | {{ h.reason }} | {{ h.updates_installed }} | {{ h.updates_remaining }} | {{ h.location | default('') }} |
+      | {{ h.hostname | default(h.host) }} | {{ h.fqdn | default('') }} | {{ h.result }} | {{ h.patched }} | {{ h.exempt }} | {{ h.pending_reboot if (h.pending_reboot is defined) else 'not_available' }} | {{ h.manual_followup_required | default(false) }} | {{ h.reason }} | {{ h.updates_installed }} | {{ h.updates_remaining }} | {{ h.location | default('') }} |
       {% endfor %}
 
       ## Exempt Hosts

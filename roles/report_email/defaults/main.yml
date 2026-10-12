@@ -1,0 +1,20 @@
+---
+# Optional SMTP delivery of the Full Patch CSV report.
+# Disabled by default. Secrets come from AAP Credentials / injected
+# environment — never from git, surveys, or inventory.
+
+report_email_enabled: false
+
+report_email_smtp_host: ""
+report_email_smtp_port: 587
+report_email_smtp_secure: starttls
+
+report_email_smtp_username: ""
+report_email_smtp_password: ""
+
+report_email_from: ""
+report_email_to: []
+
+report_email_attach_csv: true
+
+report_email_fail_on_error: false

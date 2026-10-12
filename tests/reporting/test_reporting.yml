@@ -15,23 +15,24 @@
       patch_target_scope: mock
       patch_wave: wave_1
       patch_wave_name: wave_1
-      total_systems: 4
+      total_systems: 3
       systems_patched: 1
-      systems_not_patched: 3
+      systems_not_patched: 2
       not_patched_breakdown:
         exempt: 0
         already_compliant: 0
         blocked: 0
         failed: 0
-        unknown: 0
+        degraded: 1
+        unknown: 1
       status_counts:
         success: 1
         already_compliant: 0
         exempt: 0
         blocked: 0
         failed: 0
-        degraded: 0
-        unknown: 0
+        degraded: 1
+        unknown: 1
       exempt_hosts: []
       hosts:
         - hostname: WINHOST01
@@ -49,6 +50,8 @@
           updates_remaining: 0
           change_ticket_id: CHG001
           patch_wave: wave_1
+          pending_reboot: false
+          manual_followup_required: false
         - hostname: 'HOST "QUOTED"'
           host: quoted-host
           fqdn: ""
@@ -57,13 +60,15 @@
           location: "London, UK"
           patched: false
           exempt: false
-          result: already_compliant
-          reason: 'Reason with "quotes"'
-          reason_code: NO_APPLICABLE_UPDATES
+          result: degraded
+          reason: 'A reboot is pending and requires follow-up'
+          reason_code: PENDING_REBOOT
           updates_installed: 0
           updates_remaining: 0
           change_ticket_id: CHG001
           patch_wave: wave_1
+          pending_reboot: true
+          manual_followup_required: true
         - hostname: HOST,COMMA
           host: comma-host
           fqdn: ""
@@ -100,16 +105,283 @@
         that:
           - (_csv_lines | length) == 4
           - _csv_lines[0] is match('^"Hostname","FQDN"')
+          - ('"Reason Code","Pending Reboot","Manual Follow-up Required"' in _csv_lines[0])
           - ('"WINHOST01"' in _csv_lines[1])
           - ('"Microsoft Windows Server 2019 Datacenter"' in _csv_lines[1])
           - ('"17763.7553"' in _csv_lines[1])
+          - _csv_lines[1] is match('.*"PATCH_SUCCEEDED","False","False"$')
           - ('"HOST ""QUOTED"""' in _csv_lines[2])
           - ('"Windows Server 2022, Datacenter"' in _csv_lines[2])
           - ('"London, UK"' in _csv_lines[2])
-          - ('"Reason with ""quotes"""' in _csv_lines[2])
+          - ('"A reboot is pending and requires follow-up"' in _csv_lines[2])
+          - _csv_lines[2] is match('.*"PENDING_REBOOT","True","True"$')
           - _csv_lines[3] is match('^"HOST,COMMA",""')
-          - patch_workflow_report_csv == (_csv_text | trim)
+          - _csv_lines[3] is match('.*"UNKNOWN_RESULT","not_available","False"$')
+          - (_csv_text | trim) == (patch_workflow_report_csv | trim)
         fail_msg: Generated CSV quoting did not preserve field values.
+
+    - name: Validate generated CSV with Python csv module
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - "{{ playbook_dir }}/assert_generated_csv.py"
+          - "{{ patch_final_report_csv_path }}"
+          - "4"
+      changed_when: false
+
+- name: CSV rendering with zero hosts
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_report_output_dir: "{{ lookup('ansible.builtin.env', 'TEMP') | default('/tmp', true) }}/aap-patch-report-tests"
+    patch_workflow_report:
+      schema_version: "3"
+      report_generated_at_utc: "2026-01-01T00:00:00Z"
+      change_ticket_id: CHG001
+      patch_target_scope: mock
+      patch_wave: wave_1
+      total_systems: 0
+      systems_patched: 0
+      systems_not_patched: 0
+      not_patched_breakdown:
+        exempt: 0
+        already_compliant: 0
+        blocked: 0
+        failed: 0
+        degraded: 0
+        unknown: 0
+      status_counts:
+        success: 0
+        already_compliant: 0
+        exempt: 0
+        blocked: 0
+        failed: 0
+        degraded: 0
+        unknown: 0
+      exempt_hosts: []
+      hosts: []
+  tasks:
+    - name: Render zero-host CSV
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_write.yml
+
+    - name: Validate zero-host CSV with Python csv module
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - "{{ playbook_dir }}/assert_generated_csv.py"
+          - "{{ patch_final_report_csv_path }}"
+          - "1"
+      changed_when: false
+
+- name: Seed mock hosts for result classification
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add already-compliant host
+      ansible.builtin.add_host:
+        name: win-ac
+        groups: mock_classify_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        pending_reboot: false
+        windows_update_search:
+          found_update_count: 0
+        expected_result: already_compliant
+        expected_patched: false
+        expected_reason_code: NO_APPLICABLE_UPDATES
+
+    - name: Add pending-reboot host with no installs
+      ansible.builtin.add_host:
+        name: win-reboot-nouninstall
+        groups: mock_classify_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        pending_reboot: true
+        manual_followup_required: true
+        windows_update_search:
+          found_update_count: 0
+        patch_phase_postcheck:
+          win-reboot-nouninstall:
+            postcheck_status: degraded
+        expected_result: degraded
+        expected_patched: false
+        expected_reason_code: PENDING_REBOOT
+
+    - name: Add pending-reboot host that installed updates
+      ansible.builtin.add_host:
+        name: win-reboot-installed
+        groups: mock_classify_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        pending_reboot: true
+        manual_followup_required: true
+        windows_update_search:
+          found_update_count: 0
+        patch_phase_apply:
+          win-reboot-installed:
+            patch_attempted: true
+            updates_installed: 4
+            updates_failed: 0
+            patch_status: success
+        patch_phase_postcheck:
+          win-reboot-installed:
+            postcheck_status: passed
+        expected_result: degraded
+        expected_patched: true
+        expected_reason_code: PENDING_REBOOT
+
+    - name: Add successful patched host
+      ansible.builtin.add_host:
+        name: win-success
+        groups: mock_classify_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        pending_reboot: false
+        windows_update_search:
+          found_update_count: 0
+        patch_phase_apply:
+          win-success:
+            patch_attempted: true
+            updates_installed: 4
+            updates_failed: 0
+            patch_status: success
+        patch_phase_postcheck:
+          win-success:
+            postcheck_status: passed
+        expected_result: success
+        expected_patched: true
+        expected_reason_code: PATCH_SUCCEEDED
+
+    - name: Add partial-patch host
+      ansible.builtin.add_host:
+        name: win-partial
+        groups: mock_classify_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        pending_reboot: false
+        windows_update_search:
+          found_update_count: 2
+        patch_phase_apply:
+          win-partial:
+            patch_attempted: true
+            updates_installed: 3
+            updates_failed: 0
+            patch_status: success
+        patch_phase_postcheck:
+          win-partial:
+            postcheck_status: passed
+        expected_result: degraded
+        expected_patched: true
+        expected_reason_code: PARTIAL_PATCH
+
+    - name: Add exempt host
+      ansible.builtin.add_host:
+        name: win-exempt-classify
+        groups: mock_classify_hosts
+        ansible_connection: local
+        patch_host_eligible: false
+        windows_connectivity_ok: true
+        patching_exception_enabled: true
+        pending_reboot: true
+        expected_result: exempt
+        expected_patched: false
+        expected_reason_code: PATCH_EXEMPTION
+
+    - name: Add failed installation host
+      ansible.builtin.add_host:
+        name: win-install-fail
+        groups: mock_classify_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        pending_reboot: false
+        windows_update_search:
+          found_update_count: 3
+        patch_phase_apply:
+          win-install-fail:
+            patch_attempted: true
+            updates_installed: 0
+            updates_failed: 3
+            patch_status: failed
+        expected_result: failed
+        expected_patched: false
+        expected_reason_code: PATCH_INSTALL_FAILED
+
+    - name: Add patched host missing postcheck evidence
+      ansible.builtin.add_host:
+        name: win-missing-postcheck
+        groups: mock_classify_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        pending_reboot: false
+        windows_update_search:
+          found_update_count: 0
+        patch_phase_apply:
+          win-missing-postcheck:
+            patch_attempted: true
+            updates_installed: 2
+            updates_failed: 0
+            patch_status: success
+        expected_result: unknown
+        expected_patched: true
+        expected_reason_code: POSTCHECK_MISSING
+
+    - name: Add precheck-blocked host
+      ansible.builtin.add_host:
+        name: win-blocked
+        groups: mock_classify_hosts
+        ansible_connection: local
+        patch_host_eligible: false
+        windows_connectivity_ok: true
+        precheck_status: blocked
+        pending_reboot: false
+        expected_result: blocked
+        expected_patched: false
+        expected_reason_code: PRECHECK_BLOCKED
+
+- name: Classify hosts through final_build.yml
+  hosts: mock_classify_hosts
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: wave_1
+  tasks:
+    - name: Build per-host final result
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+
+    - name: Assert canonical classification
+      ansible.builtin.assert:
+        that:
+          - patch_final_result.result == expected_result
+          - (patch_final_result.patched | bool) == (expected_patched | bool)
+          - patch_final_result.reason_code == expected_reason_code
+        fail_msg: >-
+          {{ inventory_hostname }} classified as
+          result={{ patch_final_result.result }}
+          patched={{ patch_final_result.patched }}
+          reason_code={{ patch_final_result.reason_code }},
+          expected {{ expected_result }}/{{ expected_patched }}/{{ expected_reason_code }}
+
+    - name: Assert pending-reboot reason text
+      ansible.builtin.assert:
+        that:
+          - patch_final_result.reason == 'A reboot is pending and requires follow-up'
+          - (patch_final_result.pending_reboot | bool)
+        fail_msg: Pending reboot host did not use PENDING_REBOOT follow-up wording.
+      when: expected_reason_code == 'PENDING_REBOOT'
 
 - name: Seed mock hosts for aggregate completeness
   hosts: localhost
@@ -139,6 +411,7 @@
             patch_attempted: true
             pre_patch_reboot_performed: false
             post_patch_reboot_performed: true
+            pending_reboot: false
             patching_exception_reference: ""
             manual_followup_required: false
             change_ticket_id: CHG001
@@ -159,6 +432,7 @@
             patch_attempted: not_available
             pre_patch_reboot_performed: not_available
             post_patch_reboot_performed: not_available
+            pending_reboot: not_available
             patching_exception_reference: EXC-1
             manual_followup_required: false
             change_ticket_id: CHG001
@@ -193,7 +467,158 @@
           - (patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-missing') | list | length) == 1
           - (patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-missing') | first).result == 'unknown'
           - (patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-missing') | first).reason == 'Final result was not produced for this host'
+          - (patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-missing') | first).pending_reboot == 'not_available'
           - (patch_workflow_report.status_counts.unknown | int) >= 1
           - (patch_workflow_report.not_patched_breakdown.unknown | int) >= 1
+          - patch_workflow_report.not_patched_breakdown.degraded is defined
         fail_msg: Aggregate report is missing targeted hosts or count invariant failed.
+      run_once: true
+
+- name: Seed mixed degraded aggregate hosts
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add mixed patched/not-patched degraded hosts
+      ansible.builtin.add_host:
+        name: "{{ item.name }}"
+        groups: mock_mixed_degraded
+        ansible_connection: local
+        patch_final_result: "{{ item.result }}"
+      loop:
+        - name: win-degraded-patched
+          result:
+            inventory_hostname: win-degraded-patched
+            hostname: win-degraded-patched
+            host: win-degraded-patched
+            result: degraded
+            patched: true
+            exempt: false
+            reason: A reboot is pending and requires follow-up
+            reason_code: PENDING_REBOOT
+            updates_installed: 4
+            updates_remaining: 0
+            updates_failed: 0
+            patch_attempted: true
+            pre_patch_reboot_performed: false
+            post_patch_reboot_performed: false
+            pending_reboot: true
+            patching_exception_reference: ""
+            manual_followup_required: true
+            change_ticket_id: CHG001
+            patch_wave: wave_1
+        - name: win-degraded-not-patched
+          result:
+            inventory_hostname: win-degraded-not-patched
+            hostname: win-degraded-not-patched
+            host: win-degraded-not-patched
+            result: degraded
+            patched: false
+            exempt: false
+            reason: A reboot is pending and requires follow-up
+            reason_code: PENDING_REBOOT
+            updates_installed: 0
+            updates_remaining: 0
+            updates_failed: 0
+            patch_attempted: false
+            pre_patch_reboot_performed: false
+            post_patch_reboot_performed: false
+            pending_reboot: true
+            patching_exception_reference: ""
+            manual_followup_required: true
+            change_ticket_id: CHG001
+            patch_wave: wave_1
+
+- name: Mixed degraded aggregate does not double-count patched hosts
+  hosts: mock_mixed_degraded
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: wave_1
+  tasks:
+    - name: Run mixed degraded aggregate
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+
+    - name: Assert mixed degraded patched vs not-patched counts
+      ansible.builtin.assert:
+        that:
+          - (patch_workflow_report.total_systems | int) == 2
+          - (patch_workflow_report.systems_patched | int) == 1
+          - (patch_workflow_report.systems_not_patched | int) == 1
+          - ((patch_workflow_report.systems_patched | int) + (patch_workflow_report.systems_not_patched | int)) == (patch_workflow_report.total_systems | int)
+          - (patch_workflow_report.status_counts.degraded | int) == 2
+          - (patch_workflow_report.not_patched_breakdown.degraded | int) == 1
+          - (
+              (patch_workflow_report.not_patched_breakdown.exempt | int)
+              + (patch_workflow_report.not_patched_breakdown.already_compliant | int)
+              + (patch_workflow_report.not_patched_breakdown.blocked | int)
+              + (patch_workflow_report.not_patched_breakdown.failed | int)
+              + (patch_workflow_report.not_patched_breakdown.degraded | int)
+              + (patch_workflow_report.not_patched_breakdown.unknown | int)
+            ) == (patch_workflow_report.systems_not_patched | int)
+        fail_msg: Mixed degraded aggregate counted patched hosts as not patched.
+      run_once: true
+
+- name: Seed both-unpatched degraded aggregate hosts
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add two unpatched degraded hosts
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        groups: mock_unpatched_degraded
+        ansible_connection: local
+        patch_final_result:
+          inventory_hostname: "{{ item }}"
+          hostname: "{{ item }}"
+          host: "{{ item }}"
+          result: degraded
+          patched: false
+          exempt: false
+          reason: A reboot is pending and requires follow-up
+          reason_code: PENDING_REBOOT
+          updates_installed: 0
+          updates_remaining: 0
+          updates_failed: 0
+          patch_attempted: false
+          pre_patch_reboot_performed: false
+          post_patch_reboot_performed: false
+          pending_reboot: true
+          patching_exception_reference: ""
+          manual_followup_required: true
+          change_ticket_id: CHG001
+          patch_wave: wave_1
+      loop:
+        - WIN-TEST-01
+        - WIN-TEST-02
+
+- name: Unpatched degraded hosts appear in not_patched_breakdown
+  hosts: mock_unpatched_degraded
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: wave_1
+  tasks:
+    - name: Run unpatched degraded aggregate
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+
+    - name: Assert both unpatched degraded hosts are counted
+      ansible.builtin.assert:
+        that:
+          - (patch_workflow_report.total_systems | int) == 2
+          - (patch_workflow_report.systems_patched | int) == 0
+          - (patch_workflow_report.systems_not_patched | int) == 2
+          - (patch_workflow_report.status_counts.degraded | int) == 2
+          - (patch_workflow_report.not_patched_breakdown.degraded | int) == 2
+          - (patch_workflow_report.not_patched_breakdown.already_compliant | int) == 0
+        fail_msg: Unpatched degraded hosts were not counted in not_patched_breakdown.
       run_once: true

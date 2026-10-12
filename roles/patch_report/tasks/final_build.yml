@@ -227,7 +227,12 @@
         or (windows_disk_low | default(false) | bool)
         or ((_final_postcheck_status | default('')) == 'failed')
       }}
-    _rpt_pending_reboot: "{{ pending_reboot | default(false) | bool }}"
+    _rpt_pending_reboot: >-
+      {{
+        (pending_reboot is defined)
+        and ((pending_reboot | string) not in ['not_available', ''])
+        and (pending_reboot | bool)
+      }}
     _rpt_hostname: "{{ windows_hostname | default(inventory_hostname) }}"
     _rpt_fqdn: "{{ windows_fqdn | default('') }}"
     _rpt_os_release: >-
@@ -298,13 +303,13 @@
                   if ((_rpt_patched | bool) and (not (_ua_postcheck_present | bool)))
                   else (
                     'degraded'
-                    if ((_rpt_patched | bool) and (_rpt_postcheck_unhealthy | bool))
+                    if (_rpt_postcheck_unhealthy | bool)
                     else (
                       'degraded'
                       if ((_rpt_patched | bool) and (_rpt_remaining_positive | bool))
                       else (
                         'degraded'
-                        if ((_rpt_patched | bool) and (_rpt_pending_reboot | bool))
+                        if (_rpt_pending_reboot | bool)
                         else (
                           'success'
                           if (
@@ -316,7 +321,12 @@
                           )
                           else (
                             'already_compliant'
-                            if ((not (_rpt_patched | bool)) and (_rpt_remaining_zero | bool))
+                            if (
+                              (not (_rpt_patched | bool))
+                              and (_rpt_remaining_zero | bool)
+                              and (not (_rpt_pending_reboot | bool))
+                              and (not (_rpt_postcheck_unhealthy | bool))
+                            )
                             else (
                               'blocked'
                               if (
@@ -466,7 +476,7 @@
                         'Updates remain after installation'
                         if (_rpt_result == 'degraded' and (_rpt_remaining_positive | bool))
                         else (
-                          'Updates installed; reboot still pending'
+                          'A reboot is pending and requires follow-up'
                           if (_rpt_result == 'degraded')
                           else (
                             'No applicable updates'
@@ -544,8 +554,8 @@
       pre_patch_reboot_performed: "{{ _final_pre_reboot_performed }}"
       post_patch_reboot_required: "{{ _final_post_reboot_required }}"
       post_patch_reboot_performed: "{{ _final_post_reboot_performed }}"
-      pending_reboot: "{{ pending_reboot | default(false) | bool }}"
-      pending_reboot_final: "{{ pending_reboot | default(false) | bool }}"
+      pending_reboot: "{{ pending_reboot if (pending_reboot is defined) else 'not_available' }}"
+      pending_reboot_final: "{{ pending_reboot if (pending_reboot is defined) else 'not_available' }}"
       postcheck_status: "{{ _final_postcheck_status }}"
       precheck_status: "{{ _rpt_precheck_status }}"
       manual_followup_required: "{{ manual_followup_required | default(false) | bool }}"

@@ -8,3 +8,7 @@
 collections:
   - name: ansible.windows
     version: ">=2.3.0"
+  # community.general.mail for optional SMTP report delivery.
+  # Compatible with AAP 2.7 / ansible-core 2.16. Rebuild this EE after changing this.
+  - name: community.general
+    version: ">=9.5.0,<11.0.0"

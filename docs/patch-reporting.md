@@ -7,8 +7,8 @@ Do not infer historical actions from final machine state. A compliant host does
 not prove AAP patched it. A rebooted host does not prove AAP performed the
 reboot.
 
-SMTP/email is not implemented in this repository. Report files are suitable for
-a later `report_email` consumer.
+Optional SMTP delivery is provided by `roles/report_email/` and is disabled by
+default. See [operations.md](operations.md).
 
 ## Phase history
 
@@ -42,10 +42,11 @@ aggregates once in Play 2.
 Apply history (`patch_attempted` and `updates_installed > 0`). It is not inferred
 from a healthy final machine.
 
-`already_compliant` means no installation was needed / no applicable updates
-remained. It requires a successful update search that returned zero applicable
-updates. Missing, skipped, or failed search evidence is `unknown`, not
-`already_compliant`. It is not a synonym of `success`.
+`already_compliant` means no installation was needed, a successful update
+search returned zero applicable updates, and required final checks are
+satisfactory (no pending reboot, no unhealthy postcheck). Missing, skipped, or
+failed search evidence is `unknown`, not `already_compliant`. It is not a
+synonym of `success`.
 
 Exemption uses inventory `patching_exception_enabled` and/or
 `patching_exception_active`. It does not use a surveyed host list.
@@ -55,20 +56,21 @@ Exemption uses inventory `patching_exception_enabled` and/or
 | Result | Meaning |
 | --- | --- |
 | `success` | This execution installed updates, postcheck evidence is present and healthy, no applicable updates remain, and no reboot is pending |
-| `already_compliant` | No patch installation was needed |
+| `already_compliant` | No applicable updates remain and required final checks are satisfactory |
 | `exempt` | Inventory exemption prevented remediation |
 | `blocked` | Precheck or safety policy prevented remediation |
 | `failed` | A required patch/reboot/remediation operation failed |
-| `degraded` | Updates were installed (`patched: true`) but postcheck is unhealthy, updates remain, or a reboot is still pending |
+| `degraded` | Follow-up is required. May occur when updates were installed (`patched: true`) or when no updates were installed (`patched: false`), including an unresolved pending reboot |
 | `unknown` | A reliable execution outcome cannot be established |
 
 `reboot_required` / `pending_reboot` are attributes, not results. Warnings stay
 in details unless they meet a terminal result above.
 
 Precedence: exempt → unreachable/failed → precheck blocked → patched without
-postcheck unknown → patched+unhealthy/partial/pending-reboot degraded → patched
-success (postcheck present, remaining=0, not pending) → no remaining updates
-already_compliant → remaining updates not installed blocked → otherwise unknown.
+postcheck unknown → unhealthy postcheck / partial install / pending reboot
+degraded → patched success (postcheck present, remaining=0, not pending) →
+already_compliant only when remaining=0 and no reboot/health follow-up remains
+→ remaining updates not installed blocked → otherwise unknown.
 
 `patched` stays true whenever Apply history proves installs, even when `result`
 is `degraded`, `failed`, or `unknown`.
@@ -100,7 +102,7 @@ string. This repository does not integrate with vCenter.
 | `REBOOT_FAILED` | Pre-patch or post-patch reboot failed |
 | `POSTCHECK_DEGRADED` | Postcheck detected unhealthy services |
 | `PARTIAL_PATCH` | Updates remain after installation |
-| `PENDING_REBOOT` | Updates installed; reboot still pending |
+| `PENDING_REBOOT` | A reboot is pending and requires follow-up |
 | `POSTCHECK_MISSING` | Postcheck evidence is missing |
 | `UNREACHABLE` | Host unreachable |
 | `UNKNOWN_RESULT` | Reliable execution outcome cannot be established |
@@ -127,6 +129,7 @@ Already compliant:
 
 ```
 patched: false
+pending_reboot: false
 result: already_compliant
 ```
 
@@ -135,6 +138,15 @@ Degraded after a successful install:
 ```
 patched: true
 result: degraded
+```
+
+Degraded with no install this job (pending reboot):
+
+```
+patched: false
+pending_reboot: true
+result: degraded
+reason_code: PENDING_REBOOT
 ```
 
 ## Business CSV
@@ -154,10 +166,16 @@ Primary CSV columns:
 11. Updates Remaining
 12. Change Ticket
 13. Patch Wave
+14. Reason Code
+15. Pending Reboot
+16. Manual Follow-up Required
 
 CSV fields are RFC 4180 quoted. Commas, double quotes, and empty strings are
-preserved. Internal WSUS registry details, gate booleans, reboot-authorization
-controls, and artifact internals stay in JSON/AAP output only.
+preserved. `Reason Code`, `Pending Reboot`, and `Manual Follow-up Required`
+come from the host result record. Unknown reboot state is `not_available`,
+not `False`. Internal WSUS registry details, gate booleans,
+reboot-authorization controls, and artifact internals stay in JSON/AAP output
+only.
 
 ## Aggregate summary
 
@@ -173,6 +191,7 @@ Not Patched breakdown:
 - Already Compliant
 - Blocked
 - Failed
+- Degraded (only hosts with `patched: false`)
 - Unknown
 
 `Systems Patched + Systems Not Patched = Total Systems`.

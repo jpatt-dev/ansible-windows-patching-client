@@ -34,11 +34,14 @@ Precheck
 7. **Postcheck** — Read-only validation after apply/reboot.
 8. **Per-host final report / ITSM update** — Builds `patch_final_result` from
    preserved phase history and current host facts. `patched` is true only when
-   Apply history proves this job installed updates. Updates ServiceNow work notes
-   when `snow_enabled=true`.
+   Apply history proves this job installed updates. `already_compliant` requires
+   no applicable updates and satisfactory final checks. `degraded` may occur
+   when no updates were installed if follow-up remains, including
+   `PENDING_REBOOT`. Updates ServiceNow work notes when `snow_enabled=true`.
 9. **Final aggregate report** — One Limit-wide JSON/CSV/Markdown and AAP
    `set_stats` artifact after every host in the Limit has finished Play 1.
-   CSV is the concise operational report; JSON is the richer authoritative
+   CSV is the concise operational report and includes Reason Code, Pending
+   Reboot, and Manual Follow-up Required. JSON is the richer authoritative
    artifact. See [patch-reporting.md](patch-reporting.md).
 
 Standalone troubleshooting/readiness: `playbooks/windows/precheck.yml`. That
@@ -190,3 +193,74 @@ implemented separately.
 When enabled, Full Patch validates the change once before eligible remediation
 and updates work notes after each host's final result. It does not emit
 per-phase ServiceNow chatter.
+
+## SMTP Reporting
+
+Optional. Disabled by default (`report_email_enabled: false`). When enabled,
+Full Patch sends one plain-text summary after the aggregate CSV is written.
+It does not change patching results. Files written inside the Execution
+Environment are ephemeral; emailing a report does not satisfy enterprise
+evidence-retention requirements.
+
+Enable with extra-vars or Controller extra variables. Do not survey SMTP
+secrets. Do not store passwords in Git or inventory.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `report_email_enabled` | `false` | Send the summary email |
+| `report_email_smtp_host` | empty | SMTP relay hostname (required when enabled) |
+| `report_email_smtp_port` | `587` | SMTP port |
+| `report_email_smtp_secure` | `starttls` | `starttls`, `always` (implicit TLS), or `never` (plaintext) |
+| `report_email_smtp_username` | empty | Optional SMTP username |
+| `report_email_smtp_password` | empty | Optional SMTP password |
+| `report_email_from` | empty | From address (required when enabled) |
+| `report_email_to` | `[]` | Recipient list (required when enabled) |
+| `report_email_attach_csv` | `true` | Attach the existing CSV report |
+| `report_email_fail_on_error` | `false` | If `true`, SMTP failure fails the job after reporting |
+
+Authenticated SMTP requires both username and password. Leave both empty for
+an unauthenticated relay. Inject credentials from an AAP Credential (custom
+credential type or extra-var/environment injection:
+`REPORT_EMAIL_SMTP_USERNAME` / `REPORT_EMAIL_SMTP_PASSWORD`). TLS certificate
+validation remains enabled for `starttls` and `always`. Use `never` only for
+isolated capture servers such as Mailpit.
+
+The Execution Environment must reach the SMTP host. Rebuild
+`windows-patch-ee` after adding `community.general` so `community.general.mail`
+is available.
+
+CSV attachment uses `patch_final_report_csv_path` from `final_write.yml`. It
+is not regenerated. If the file is missing, email is not sent.
+
+SMTP failure records `report_email_delivery_status=failed`, warns the
+operator, and leaves patch results unchanged. The job continues unless
+`report_email_fail_on_error=true`.
+
+### Mailpit / homelab
+
+Supply host and port externally. Example extra-vars (placeholder IP only):
+
+```yaml
+report_email_enabled: true
+report_email_smtp_host: "192.168.4.X"
+report_email_smtp_port: 1025
+report_email_smtp_secure: never
+report_email_from: "aap-test@example.test"
+report_email_to:
+  - "patch-reports@example.test"
+report_email_attach_csv: true
+```
+
+### Client SMTP relay
+
+```yaml
+report_email_enabled: true
+report_email_smtp_host: "smtp.example.client.tld"
+report_email_smtp_port: 587
+report_email_smtp_secure: starttls
+report_email_from: "aap-windows-patch@example.client.tld"
+report_email_to:
+  - "patch-reports@example.client.tld"
+```
+
+Set username/password through AAP Credentials, not in this file.

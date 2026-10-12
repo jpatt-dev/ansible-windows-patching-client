@@ -1,0 +1,233 @@
+---
+# Send one optional SMTP summary for the Full Patch job.
+# Always runs on the Execution Environment (localhost). Never targets Windows hosts.
+
+- name: Skip SMTP report email when disabled
+  ansible.builtin.debug:
+    msg: SMTP report email skipped (report_email_enabled=false).
+  when: not (report_email_enabled | default(false) | bool)
+  changed_when: false
+  tags:
+    - report
+    - email
+
+- name: Resolve SMTP credentials without logging secrets
+  ansible.builtin.set_fact:
+    report_email_smtp_username_effective: >-
+      {{
+        (report_email_smtp_username | default('') | trim)
+        if ((report_email_smtp_username | default('') | trim | length) > 0)
+        else (lookup('ansible.builtin.env', 'REPORT_EMAIL_SMTP_USERNAME') | default('', true) | trim)
+      }}
+    report_email_smtp_password_effective: >-
+      {{
+        (report_email_smtp_password | default('') | trim)
+        if ((report_email_smtp_password | default('') | trim | length) > 0)
+        else (lookup('ansible.builtin.env', 'REPORT_EMAIL_SMTP_PASSWORD') | default('', true) | trim)
+      }}
+    report_email_smtp_secure_effective: "{{ report_email_smtp_secure | default('starttls') | trim | lower }}"
+    report_email_to_effective: "{{ report_email_to | default([]) }}"
+    report_email_delivery_status: skipped
+    report_email_attached_csv: false
+  when: report_email_enabled | default(false) | bool
+  no_log: true
+  changed_when: false
+  tags:
+    - report
+    - email
+
+- name: Validate SMTP report email configuration
+  ansible.builtin.assert:
+    that:
+      - patch_workflow_report is defined
+      - patch_workflow_report is mapping
+      - (report_email_smtp_host | default('') | trim | length) > 0
+      - (report_email_smtp_port | default(0) | int) >= 1
+      - (report_email_smtp_port | default(0) | int) <= 65534
+      - report_email_smtp_secure_effective in ['always', 'never', 'starttls']
+      - (report_email_from | default('') | trim | length) > 0
+      - report_email_to_effective is sequence
+      - report_email_to_effective is not string
+      - (report_email_to_effective | select('string') | map('trim') | reject('equalto', '') | list | length) > 0
+      - (
+          (
+            (report_email_smtp_username_effective | default('') | length) == 0
+            and (report_email_smtp_password_effective | default('') | length) == 0
+          )
+          or (
+            (report_email_smtp_username_effective | default('') | length) > 0
+            and (report_email_smtp_password_effective | default('') | length) > 0
+          )
+        )
+    fail_msg: >-
+      SMTP report email is enabled but configuration is incomplete or invalid.
+      Set report_email_smtp_host, a valid report_email_smtp_port,
+      report_email_smtp_secure (always|never|starttls), report_email_from,
+      and a non-empty report_email_to list. Authenticated SMTP requires both
+      username and password from AAP Credentials or injected environment.
+      Missing SMTP settings are not replaced with localhost or root defaults.
+  when: report_email_enabled | default(false) | bool
+  tags:
+    - report
+    - email
+
+- name: Normalize SMTP recipients
+  ansible.builtin.set_fact:
+    report_email_to_effective: "{{ report_email_to_effective | map('trim') | reject('equalto', '') | list }}"
+    report_email_change_ticket: >-
+      {{
+        patch_workflow_report.change_ticket_id
+        if ((patch_workflow_report.change_ticket_id | default('') | string | trim | length) > 0)
+        else 'NOCHG'
+      }}
+    report_email_patch_wave: >-
+      {{
+        patch_workflow_report.patch_wave
+        if ((patch_workflow_report.patch_wave | default('') | string | trim | length) > 0)
+        else (
+          patch_workflow_report.patch_wave_name
+          if ((patch_workflow_report.patch_wave_name | default('') | string | trim | length) > 0)
+          else 'unspecified'
+        )
+      }}
+    report_email_job_id: "{{ patch_workflow_report.aap_job_id | default('not_available') }}"
+  when: report_email_enabled | default(false) | bool
+  changed_when: false
+  tags:
+    - report
+    - email
+
+- name: Build SMTP subject from existing aggregate report
+  ansible.builtin.set_fact:
+    report_email_subject: "AAP Windows Patch Report | {{ report_email_change_ticket }} | {{ report_email_patch_wave }}"
+  when: report_email_enabled | default(false) | bool
+  changed_when: false
+  tags:
+    - report
+    - email
+
+- name: Build SMTP plain-text body from patch_workflow_report
+  ansible.builtin.set_fact:
+    report_email_body: |
+      Windows Patching Report
+      =================================
+
+      Change Ticket: {{ report_email_change_ticket }}
+      Patch Wave: {{ report_email_patch_wave }}
+      AAP Job ID: {{ report_email_job_id }}
+
+      SUMMARY
+      ---------------------------------
+      Systems Targeted:       {{ patch_workflow_report.total_systems | default(0) }}
+      Systems Patched:        {{ patch_workflow_report.systems_patched | default(0) }}
+      Systems Not Patched:    {{ patch_workflow_report.systems_not_patched | default(0) }}
+
+      RESULTS
+      ---------------------------------
+      Success:                {{ patch_workflow_report.status_counts.success | default(0) }}
+      Already Compliant:      {{ patch_workflow_report.status_counts.already_compliant | default(0) }}
+      Exempt:                 {{ patch_workflow_report.status_counts.exempt | default(0) }}
+      Blocked:                {{ patch_workflow_report.status_counts.blocked | default(0) }}
+      Failed:                 {{ patch_workflow_report.status_counts.failed | default(0) }}
+      Degraded:               {{ patch_workflow_report.status_counts.degraded | default(0) }}
+      Unknown:                {{ patch_workflow_report.status_counts.unknown | default(0) }}
+
+      Systems Requiring Follow-up: {{ patch_workflow_report.manual_followup_hosts | default([]) | length }}
+
+      Systems Patched counts hosts this job installed updates on.
+      It is not the same as the Success result count.
+      {% if report_email_attach_csv | default(true) | bool %}
+
+      Detailed patching results are available
+      in the attached CSV report.
+      {% else %}
+
+      Detailed patching results are in the AAP job artifacts.
+      {% endif %}
+  when: report_email_enabled | default(false) | bool
+  changed_when: false
+  tags:
+    - report
+    - email
+
+- name: Send Windows patching report email
+  when: report_email_enabled | default(false) | bool
+  block:
+    - name: Validate CSV attachment path when CSV attach is enabled
+      ansible.builtin.stat:
+        path: "{{ patch_final_report_csv_path | default('') }}"
+      register: report_email_csv_stat
+      delegate_to: localhost
+      become: false
+      when: report_email_attach_csv | default(true) | bool
+
+    - name: Fail closed when the CSV attachment is missing
+      ansible.builtin.fail:
+        msg: >-
+          SMTP CSV attachment is enabled but patch_final_report_csv_path is
+          missing or is not a regular file. Email was not sent. Patching
+          results were not modified.
+      when:
+        - report_email_attach_csv | default(true) | bool
+        - (
+            (patch_final_report_csv_path | default('') | length) == 0
+            or not (report_email_csv_stat.stat.exists | default(false) | bool)
+            or not (report_email_csv_stat.stat.isreg | default(false) | bool)
+          )
+
+    - name: Deliver SMTP report from the Execution Environment
+      community.general.mail:
+        host: "{{ report_email_smtp_host | trim }}"
+        port: "{{ report_email_smtp_port | int }}"
+        secure: "{{ report_email_smtp_secure_effective }}"
+        sender: "{{ report_email_from | trim }}"
+        to: "{{ report_email_to_effective }}"
+        subject: "{{ report_email_subject }}"
+        body: "{{ report_email_body }}"
+        subtype: plain
+        charset: utf-8
+        username: "{{ report_email_smtp_username_effective if (report_email_smtp_username_effective | length > 0) else omit }}"
+        password: "{{ report_email_smtp_password_effective if (report_email_smtp_password_effective | length > 0) else omit }}"
+        attach: "{{ [patch_final_report_csv_path] if (report_email_attach_csv | default(true) | bool) else [] }}"
+      delegate_to: localhost
+      become: false
+      no_log: true
+      register: report_email_send_result
+
+    - name: Record successful SMTP report email delivery
+      ansible.builtin.set_fact:
+        report_email_delivery_status: sent
+        report_email_attached_csv: "{{ report_email_attach_csv | default(true) | bool }}"
+      changed_when: false
+  rescue:
+    - name: Record SMTP report email delivery failure without exposing secrets
+      ansible.builtin.set_fact:
+        report_email_delivery_status: failed
+        report_email_attached_csv: false
+      changed_when: false
+
+    - name: Warn that SMTP delivery failed and patching results were preserved
+      ansible.builtin.debug:
+        msg:
+          - SMTP report email delivery failed.
+          - Patching results and report files were not modified.
+          - Check Execution Environment connectivity to the configured SMTP host and port.
+      changed_when: false
+
+    - name: Fail the job after SMTP delivery error when fail-on-error is enabled
+      ansible.builtin.assert:
+        that:
+          - not (report_email_fail_on_error | default(false) | bool)
+        fail_msg: >-
+          SMTP report email delivery failed (report_email_fail_on_error=true).
+          Patching results and report files were not modified.
+  always:
+    - name: Publish SMTP report email delivery status
+      ansible.builtin.set_stats:
+        data:
+          report_email_delivery_status: "{{ report_email_delivery_status | default('skipped') }}"
+          report_email_attached_csv: "{{ report_email_attached_csv | default(false) | bool }}"
+        per_host: false
+  tags:
+    - report
+    - email

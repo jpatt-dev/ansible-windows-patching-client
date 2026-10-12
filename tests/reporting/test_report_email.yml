@@ -1,0 +1,206 @@
+---
+# Local SMTP reporting tests. Does not contact Windows hosts or a real mail relay.
+#   ANSIBLE_ROLES_PATH=roles ansible-playbook tests/reporting/test_report_email.yml
+
+- name: SMTP email is disabled by default
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_workflow_report:
+      change_ticket_id: CHG12345
+      patch_wave: windows_wave_1
+      total_systems: 1
+      systems_patched: 0
+      systems_not_patched: 1
+      status_counts:
+        success: 0
+        already_compliant: 0
+        exempt: 0
+        blocked: 0
+        failed: 0
+        degraded: 0
+        unknown: 1
+      manual_followup_hosts: []
+  tasks:
+    - name: Load report_email defaults without enabling delivery
+      ansible.builtin.include_role:
+        name: report_email
+
+    - name: Assert SMTP stays off and no delivery status is sent
+      ansible.builtin.assert:
+        that:
+          - not (report_email_enabled | default(false) | bool)
+          - (report_email_delivery_status | default('skipped')) == 'skipped'
+          - patch_workflow_report.total_systems | int == 1
+        fail_msg: SMTP email must remain disabled by default.
+
+- name: SMTP email fails closed when required settings are missing
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    report_email_enabled: true
+    report_email_smtp_host: ""
+    report_email_from: aap-test@example.test
+    report_email_to:
+      - patch-reports@example.test
+    patch_workflow_report:
+      change_ticket_id: CHG12345
+      patch_wave: windows_wave_1
+      total_systems: 1
+      systems_patched: 0
+      systems_not_patched: 1
+      status_counts:
+        success: 0
+        already_compliant: 0
+        exempt: 0
+        blocked: 0
+        failed: 0
+        degraded: 0
+        unknown: 1
+      manual_followup_hosts: []
+  tasks:
+    - name: Expect configuration validation to fail
+      block:
+        - name: Include report_email with empty SMTP host
+          ansible.builtin.include_role:
+            name: report_email
+
+        - name: Fail if missing SMTP host was accepted
+          ansible.builtin.fail:
+            msg: SMTP email accepted an empty host and may send to an unintended destination.
+      rescue:
+        - name: Record that incomplete SMTP configuration was rejected
+          ansible.builtin.set_fact:
+            report_email_config_rejected: true
+
+    - name: Assert missing SMTP host does not send mail
+      ansible.builtin.assert:
+        that:
+          - report_email_config_rejected | default(false) | bool
+          - (report_email_delivery_status | default('skipped')) != 'sent'
+          - patch_workflow_report.change_ticket_id == 'CHG12345'
+        fail_msg: Incomplete SMTP configuration must fail closed without sending mail.
+
+- name: SMTP body uses aggregate fields and delivery failure preserves results
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    report_email_enabled: true
+    report_email_smtp_host: 127.0.0.1
+    report_email_smtp_port: 1
+    report_email_smtp_secure: never
+    report_email_from: aap-test@example.test
+    report_email_to:
+      - patch-reports@example.test
+    report_email_attach_csv: false
+    report_email_fail_on_error: false
+    patch_workflow_report:
+      change_ticket_id: CHG12345
+      patch_wave: windows_wave_1
+      aap_job_id: "1234"
+      total_systems: 25
+      systems_patched: 21
+      systems_not_patched: 4
+      status_counts:
+        success: 20
+        already_compliant: 1
+        exempt: 1
+        blocked: 1
+        failed: 1
+        degraded: 1
+        unknown: 0
+      manual_followup_hosts:
+        - host-a
+        - host-b
+  tasks:
+    - name: Include report_email against an unreachable SMTP port
+      ansible.builtin.include_role:
+        name: report_email
+
+    - name: Assert body, subject, failure status, and unchanged patch results
+      ansible.builtin.assert:
+        that:
+          - report_email_subject == 'AAP Windows Patch Report | CHG12345 | windows_wave_1'
+          - "'Change Ticket: CHG12345' in report_email_body"
+          - "'Patch Wave: windows_wave_1' in report_email_body"
+          - "'AAP Job ID: 1234' in report_email_body"
+          - "'Systems Targeted:       25' in report_email_body"
+          - "'Systems Patched:        21' in report_email_body"
+          - "'Systems Not Patched:    4' in report_email_body"
+          - "'Success:                20' in report_email_body"
+          - "'Already Compliant:      1' in report_email_body"
+          - "'Systems Requiring Follow-up: 2' in report_email_body"
+          - "'not the same as the Success result count' in report_email_body"
+          - report_email_delivery_status == 'failed'
+          - not (report_email_attached_csv | default(false) | bool)
+          - patch_workflow_report.systems_patched | int == 21
+          - patch_workflow_report.status_counts.success | int == 20
+        fail_msg: SMTP body/subject did not use patch_workflow_report, or a delivery failure changed patch results.
+
+- name: SMTP CSV attach uses the existing report path
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    report_email_enabled: true
+    report_email_smtp_host: 127.0.0.1
+    report_email_smtp_port: 1
+    report_email_smtp_secure: never
+    report_email_from: aap-test@example.test
+    report_email_to:
+      - patch-reports@example.test
+    report_email_attach_csv: true
+    report_email_fail_on_error: false
+    patch_final_report_csv_path: "{{ lookup('ansible.builtin.env', 'TEMP') | default('/tmp', true) }}/aap-email-existing-report.csv"
+    patch_workflow_report:
+      change_ticket_id: CHG12345
+      patch_wave: windows_wave_1
+      aap_job_id: "1234"
+      total_systems: 1
+      systems_patched: 1
+      systems_not_patched: 0
+      status_counts:
+        success: 1
+        already_compliant: 0
+        exempt: 0
+        blocked: 0
+        failed: 0
+        degraded: 0
+        unknown: 0
+      manual_followup_hosts: []
+  tasks:
+    - name: Write a pre-existing CSV report file
+      ansible.builtin.copy:
+        content: |
+          "Hostname","Result"
+          "WINHOST01","success"
+        dest: "{{ patch_final_report_csv_path }}"
+        mode: "0640"
+
+    - name: Capture original CSV checksum
+      ansible.builtin.stat:
+        path: "{{ patch_final_report_csv_path }}"
+        checksum_algorithm: sha1
+      register: _email_csv_before
+
+    - name: Include report_email with existing CSV attachment
+      ansible.builtin.include_role:
+        name: report_email
+
+    - name: Recheck CSV after SMTP attempt
+      ansible.builtin.stat:
+        path: "{{ patch_final_report_csv_path }}"
+        checksum_algorithm: sha1
+      register: _email_csv_after
+
+    - name: Assert existing CSV path is used and not regenerated
+      ansible.builtin.assert:
+        that:
+          - patch_final_report_csv_path is search('aap-email-existing-report.csv')
+          - _email_csv_before.stat.checksum == _email_csv_after.stat.checksum
+          - report_email_delivery_status == 'failed'
+          - patch_workflow_report.systems_patched | int == 1
+        fail_msg: SMTP email must attach the existing CSV without regenerating it.

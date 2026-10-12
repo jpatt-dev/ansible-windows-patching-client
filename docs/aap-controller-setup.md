@@ -59,6 +59,12 @@ those inventory facts, not a surveyed host list.
 Attach a Windows **Machine** credential for WinRM. Attach a Source Control
 credential on the Project. Secrets stay in AAP Credentials, not in git.
 
+Optional SMTP report email uses `report_email_*` extra variables on the Full
+Patch job template (not survey fields). Inject SMTP username/password from a
+custom AAP Credential or credential environment
+(`REPORT_EMAIL_SMTP_USERNAME` / `REPORT_EMAIL_SMTP_PASSWORD`). Rebuild the
+Windows patch Execution Environment after adding `community.general`.
+
 WinRM authentication, including Kerberos, is environment-specific and is
 configured during production implementation.
 

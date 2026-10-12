@@ -1,8 +1,11 @@
 # windows-patch-ee
 
 Ansible Automation Platform **2.7** Execution Environment for this Windows
-patching solution. Declares `ansible.windows` in `requirements.yml`
-(aligned with the repository root collection requirements).
+patching solution. Declares `ansible.windows` and `community.general` in
+`requirements.yml` (aligned with the repository root collection requirements).
+`community.general` is required for optional SMTP report email
+(`community.general.mail`). Rebuild and republish this EE before enabling
+email reporting.
 
 Collections are **declared** only — they are **not** vendored into this git
 repository.

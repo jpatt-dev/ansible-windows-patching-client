@@ -13,3 +13,7 @@
 collections:
   - name: ansible.windows
     version: ">=2.3.0"
+  # community.general.mail for optional SMTP report delivery.
+  # Pin stays on ansible-core 2.16 (AAP 2.7). Rebuild the EE after changing this.
+  - name: community.general
+    version: ">=9.5.0,<11.0.0"
