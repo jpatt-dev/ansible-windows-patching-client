@@ -1,0 +1,144 @@
+---
+# Local maintenance-window tests. Does not contact Windows hosts.
+#   ANSIBLE_ROLES_PATH=roles ansible-playbook tests/patch_common/test_maintenance_window.yml
+
+- name: Enabled maintenance window fails without start, end, or acknowledgement
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_require_maintenance_window: true
+    maintenance_window_start: ""
+    maintenance_window_end: ""
+    maintenance_window_acknowledged: false
+  tasks:
+    - name: Expect enforcement when the window is required and empty
+      block:
+        - name: Include maintenance-window validation with enforcement
+          ansible.builtin.include_role:
+            name: patch_common
+            tasks_from: validate_maintenance_window.yml
+          vars:
+            patch_maintenance_window_enforce: "{{ patch_require_maintenance_window | default(true) | bool }}"
+
+        - name: Fail if an empty required window was accepted
+          ansible.builtin.fail:
+            msg: Required maintenance-window enforcement accepted empty start/end/ack.
+      rescue:
+        - name: Record that empty required window was rejected
+          ansible.builtin.set_fact:
+            _mw_empty_rejected: true
+
+    - name: Assert required empty window remains fail-closed
+      ansible.builtin.assert:
+        that:
+          - _mw_empty_rejected | default(false) | bool
+          - maintenance_window_status | default('') == 'unset'
+        fail_msg: patch_require_maintenance_window=true must still require a window.
+
+- name: Enabled maintenance window accepts a valid acknowledged window
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_require_maintenance_window: true
+    maintenance_window_start: "2000-01-01T00:00:00Z"
+    maintenance_window_end: "2099-12-31T23:59:59Z"
+    maintenance_window_acknowledged: true
+  tasks:
+    - name: Include maintenance-window validation for a valid window
+      ansible.builtin.include_role:
+        name: patch_common
+        tasks_from: validate_maintenance_window.yml
+      vars:
+        patch_maintenance_window_enforce: "{{ patch_require_maintenance_window | default(true) | bool }}"
+
+    - name: Assert valid required window is inside and enforced
+      ansible.builtin.assert:
+        that:
+          - maintenance_window_status == 'inside'
+          - patch_require_maintenance_window | bool
+        fail_msg: Valid acknowledged window was not accepted when enforcement is required.
+
+- name: Enabled maintenance window fails when current time is outside
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_require_maintenance_window: true
+    maintenance_window_start: "2000-01-01T00:00:00Z"
+    maintenance_window_end: "2000-01-01T01:00:00Z"
+    maintenance_window_acknowledged: true
+  tasks:
+    - name: Expect enforcement when the required window is closed
+      block:
+        - name: Include maintenance-window validation for an expired window
+          ansible.builtin.include_role:
+            name: patch_common
+            tasks_from: validate_maintenance_window.yml
+          vars:
+            patch_maintenance_window_enforce: "{{ patch_require_maintenance_window | default(true) | bool }}"
+
+        - name: Fail if a closed required window was accepted
+          ansible.builtin.fail:
+            msg: Required maintenance-window enforcement accepted a closed window.
+      rescue:
+        - name: Record that closed required window was rejected
+          ansible.builtin.set_fact:
+            _mw_closed_rejected: true
+
+    - name: Assert closed required window remains fail-closed
+      ansible.builtin.assert:
+        that:
+          - _mw_closed_rejected | default(false) | bool
+          - maintenance_window_status | default('') == 'outside'
+        fail_msg: patch_require_maintenance_window=true must reject a closed window.
+
+- name: Disabled maintenance window does not require start, end, or acknowledgement
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_require_maintenance_window: false
+    maintenance_window_start: ""
+    maintenance_window_end: ""
+    maintenance_window_acknowledged: false
+    patch_apply_enabled: true
+    windows_patch_mode: direct_win_updates
+  tasks:
+    - name: Include maintenance-window validation with enforcement disabled
+      ansible.builtin.include_role:
+        name: patch_common
+        tasks_from: validate_maintenance_window.yml
+      vars:
+        patch_maintenance_window_enforce: "{{ patch_require_maintenance_window | default(true) | bool }}"
+
+    - name: Assert disabled enforcement allows empty window values
+      ansible.builtin.assert:
+        that:
+          - not (patch_require_maintenance_window | bool)
+          - maintenance_window_status == 'unset'
+          - not (maintenance_window_acknowledged | bool)
+          - (not (patch_require_maintenance_window | default(true) | bool)) or (maintenance_window_acknowledged | default(false) | bool)
+        fail_msg: Disabled maintenance-window enforcement still required start/end/ack.
+
+- name: Default remains required when the administrative toggle is unset
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Load patch_common defaults
+      ansible.builtin.include_role:
+        name: patch_common
+        tasks_from: validate_maintenance_window.yml
+      vars:
+        patch_maintenance_window_enforce: false
+        maintenance_window_start: ""
+        maintenance_window_end: ""
+        maintenance_window_acknowledged: false
+
+    - name: Assert default patch_require_maintenance_window is true
+      ansible.builtin.assert:
+        that:
+          - patch_require_maintenance_window | default(true) | bool
+        fail_msg: patch_require_maintenance_window must default to true.

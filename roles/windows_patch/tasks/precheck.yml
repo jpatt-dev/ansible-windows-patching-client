@@ -167,6 +167,7 @@
       - "patch_apply_enabled: {{ patch_apply_enabled }}"
       - "maintenance_window_acknowledged: {{ maintenance_window_acknowledged }}"
       - "maintenance_window_status: {{ maintenance_window_status | default('unset') }}"
+      - "patch_require_maintenance_window: {{ patch_require_maintenance_window | default(true) }}"
       - "patching_exception_active: {{ patching_exception_active | default(false) }}"
       - "patching_exception_reference: {{ patching_exception_reference_effective | default('') }}"
       - "patching_exception_source: {{ patching_exception_source | default('inventory') }}"

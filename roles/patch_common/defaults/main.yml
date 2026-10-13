@@ -32,6 +32,10 @@ pre_patch_reboot_enabled: false
 post_patch_reboot_enabled: false
 windows_patch_mode: check_only
 maintenance_window_acknowledged: false
+# Administrative Job Template / schedule setting. Do not survey.
+# true  = require UTC start/end and acknowledgement for install/reboot
+# false = AAP schedules control timing; start/end/ack are not required
+patch_require_maintenance_window: true
 snow_enabled: false
 
 # Always rejected for remediation unless dual emergency override succeeds.

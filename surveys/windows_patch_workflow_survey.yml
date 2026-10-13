@@ -43,7 +43,7 @@ spec:
     question_name: "Authorize patch installation"
     question_description: >-
       Does not authorize reboot. Apply still validates WSUS, Limit, OS policy,
-      and the maintenance window.
+      pending reboot, and the maintenance window when that check is required.
     type: multiplechoice
     choices:
       - "false"

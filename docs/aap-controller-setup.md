@@ -105,8 +105,13 @@ Operator-facing inputs for **Windows - Full Patch**:
 
 Do not survey WSUS URLs, provider, patch mode, reboot policy
 (`windows_pre_patch_reboot_mode` / `windows_post_patch_reboot_mode`),
-`patching_reboot_allowed`, `patching_exception_active`, or a host-targeting
-variable.
+`patching_reboot_allowed`, `patching_exception_active`,
+`patch_require_maintenance_window`, or a host-targeting variable.
+
+Set `patch_require_maintenance_window` on the Job Template or schedule extra
+variables (default `true`). For recurring AAP schedules, set it `false` so
+the schedule controls timing and survey start/end/acknowledgement are not
+required. Other safety controls remain in force.
 
 Standalone **Windows - Precheck** uses a smaller read-only survey (`change_ticket_id`,
 `snow_enabled`). It does not authorize install or reboot.

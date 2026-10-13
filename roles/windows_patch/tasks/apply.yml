@@ -71,7 +71,7 @@
     - windows_patch_provider_effective | default('unknown') == 'wsus'
     - windows_patch_mode == 'direct_win_updates'
     - patch_apply_enabled
-    - maintenance_window_acknowledged
+    - (not (patch_require_maintenance_window | default(true) | bool)) or (maintenance_window_acknowledged | default(false) | bool)
     - windows_os_policy_supported | default(false) | bool
     - (windows_os_policy.categories | default([]) | length) > 0
     - not (pending_reboot | default(false) | bool)

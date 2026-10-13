@@ -110,8 +110,9 @@ repository does not write WSUS registry values.
 `operator_authorize_patch_install` controls whether Apply can remediate.
 
 When false, Apply stays non-installing. When true, Apply still fails unless
-WSUS validation is `valid`, approved Limit, supported OS policy, maintenance
-window, and no pending reboot also pass. Install authorization does not
+WSUS validation is `valid`, approved Limit, supported OS policy, no pending
+reboot, and — when `patch_require_maintenance_window` is true — an open
+acknowledged maintenance window also pass. Install authorization does not
 authorize reboot.
 
 ## Reboots
@@ -124,7 +125,8 @@ A reboot runs only when all of the following are true:
   `operator_allow_post_patch_reboot`)
 - Inventory `patching_reboot_allowed` is true
 - The host is not under a patch-cycle exception
-- The maintenance window is acknowledged and currently open
+- When `patch_require_maintenance_window` is true, the maintenance window is
+  acknowledged and currently open
 
 `windows_pre_patch_reboot_mode` and `windows_post_patch_reboot_mode` are
 inventory policy (`if_required` or `always`). They are not survey controls.
@@ -149,14 +151,24 @@ Do not use a surveyed host list for Full Patch reporting.
 
 ## Maintenance Window
 
-Required for Apply (when installing) and for actual reboot operations:
+`patch_require_maintenance_window` (default `true`) is an administrative Job
+Template or scheduled-execution extra variable. Do not put it on the operator
+survey. Recurring AAP schedules can own execution timing; set the flag
+`false` on those templates so operators do not maintain UTC start/end for
+each run.
+
+When `patch_require_maintenance_window` is `true`, Apply (when installing) and
+actual reboot operations require:
 
 - `maintenance_window_start` / `maintenance_window_end` — UTC ISO-8601
   `YYYY-MM-DDTHH:MM:SSZ`
 - `maintenance_window_acknowledged` — must be true
 - Current UTC must fall inside the window
 
-Precheck reports window status and does not enforce it.
+When `patch_require_maintenance_window` is `false`, start, end, and
+acknowledgement are not required. Authorized install and reboot still use
+Limit, install/reboot authorization, host reboot policy, exemptions, and
+WSUS checks. Precheck always reports window status and does not enforce it.
 
 ## Failure Behavior
 
@@ -166,7 +178,7 @@ Precheck reports window status and does not enforce it.
 | Full Patch Limit not in `approved_patch_targets` | Job fails |
 | Missing or invalid WSUS client configuration | Standalone Precheck fails. Full Patch marks the host ineligible and continues reporting. Remediating Apply fails. Repair WSUS in provisioning; this repository does not configure it. |
 | Pending reboot before remediating Apply | Apply fails closed. It does not reboot. |
-| Invalid or closed maintenance window | Remediating Apply and actual reboot operations fail |
+| Invalid or closed maintenance window | Remediating Apply and actual reboot operations fail when `patch_require_maintenance_window` is true |
 | Invalid `windows_*_patch_reboot_mode` | Reboot phase fails closed |
 | `patching_reboot_allowed: false` | Reboot skipped; `manual_followup_required`. Job does not fail solely for this. |
 | Unreachable Windows host | Host remains in the Limit and is reported as `failed` / `UNREACHABLE`. Missing probe evidence is `not_available`, not a confirmed healthy or zero value. JSON/CSV/Markdown and optional SMTP still run. The Full Patch job then fails. `degraded`, `exempt`, `blocked`, `already_compliant`, and `unknown` do not fail the job by themselves. |

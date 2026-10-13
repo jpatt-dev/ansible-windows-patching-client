@@ -123,7 +123,7 @@
     name: patch_common
     tasks_from: validate_maintenance_window.yml
   vars:
-    patch_maintenance_window_enforce: true
+    patch_maintenance_window_enforce: "{{ patch_require_maintenance_window | default(true) | bool }}"
   when:
     - windows_patch_mode == 'direct_win_updates'
     - patch_apply_enabled

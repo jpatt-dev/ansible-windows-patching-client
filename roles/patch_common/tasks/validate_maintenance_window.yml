@@ -6,6 +6,9 @@
 #   patch_maintenance_window_enforce : bool
 #     true  → fail-closed for remediation/reboot actions
 #     false → report status only (check-only / read-only)
+#   patch_require_maintenance_window : administrative toggle (default true).
+#     When false, callers must pass patch_maintenance_window_enforce=false so
+#     start/end/acknowledgement are not required.
 
 - name: Capture current UTC time for maintenance window
   ansible.builtin.set_fact:
@@ -72,7 +75,24 @@
       start={{ maintenance_window_start_norm | default('') }}
       end={{ maintenance_window_end_norm | default('') }}
       ack={{ maintenance_window_ack }}
-      enforce={{ patch_maintenance_window_enforce | default(false) }}.
+      enforce={{ patch_maintenance_window_enforce | default(false) }}
+      require={{ patch_require_maintenance_window | default(true) }}.
+  changed_when: false
+  tags:
+    - always
+    - maintenance
+    - report
+
+- name: Report that maintenance-window enforcement is disabled
+  ansible.builtin.debug:
+    msg: >-
+      Maintenance-window enforcement is disabled
+      (patch_require_maintenance_window=false).
+      maintenance_window_start, maintenance_window_end, and
+      maintenance_window_acknowledged are not required.
+      Authorized install and reboot still require Limit, authorization,
+      reboot policy, exemptions, and WSUS checks.
+  when: not (patch_require_maintenance_window | default(true) | bool)
   changed_when: false
   tags:
     - always
