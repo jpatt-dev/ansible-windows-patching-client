@@ -2,11 +2,14 @@
 # Collect host health in *this* job. AAP workflow nodes do not preserve
 # host facts from prior nodes — always re-run these probes when needed.
 # Never print secrets/passwords.
+# Probe WinRM first. Skip OS/disk shells when the host is already known
+# unreachable so a powered-off server does not incur repeated timeouts.
 
 - name: Probe WinRM connectivity (win_ping)
   ansible.windows.win_ping:
   register: windows_winrm_ping
   failed_when: false
+  when: windows_connectivity_ok | default(true) | bool
   tags:
     - precheck
     - postcheck
@@ -21,6 +24,7 @@
         if ((windows_winrm_ping.ping | default('')) == 'pong')
         else 'failed'
       }}
+  when: not (windows_winrm_ping.skipped | default(false) | bool)
   changed_when: false
   tags:
     - precheck
@@ -59,6 +63,7 @@
   register: windows_os_boot_raw
   changed_when: false
   failed_when: false
+  when: windows_connectivity_ok | default(false) | bool
   tags:
     - precheck
     - postcheck
@@ -81,7 +86,9 @@
     windows_hostname: "{{ (windows_os_boot_raw.stdout | default('{}') | from_json).CSName | default(inventory_hostname, true) }}"
     windows_fqdn: "{{ (windows_os_boot_raw.stdout | default('{}') | from_json).FQDN | default('', true) }}"
     windows_last_boot_time: "{{ (windows_os_boot_raw.stdout | default('{}') | from_json).LastBootUpTime | default('unknown') }}"
-  when: (windows_os_boot_raw.rc | default(1)) == 0
+  when:
+    - windows_connectivity_ok | default(false) | bool
+    - (windows_os_boot_raw.rc | default(1)) == 0
   changed_when: false
   tags:
     - precheck
@@ -97,7 +104,25 @@
     windows_hostname: "{{ inventory_hostname }}"
     windows_fqdn: ""
     windows_last_boot_time: unknown
-  when: (windows_os_boot_raw.rc | default(1)) != 0
+  when:
+    - windows_connectivity_ok | default(false) | bool
+    - (windows_os_boot_raw.rc | default(1)) != 0
+  changed_when: false
+  tags:
+    - precheck
+    - postcheck
+    - always
+    - report
+
+- name: Set OS and last boot facts when the host is unreachable
+  ansible.builtin.set_fact:
+    windows_os_version: not_available
+    windows_os_caption: not_available
+    windows_os_build: not_available
+    windows_hostname: "{{ inventory_hostname }}"
+    windows_fqdn: ""
+    windows_last_boot_time: not_available
+  when: not (windows_connectivity_ok | default(false) | bool)
   changed_when: false
   tags:
     - precheck
@@ -113,6 +138,7 @@
   register: windows_disk_free_raw
   changed_when: false
   failed_when: false
+  when: windows_connectivity_ok | default(false) | bool
   tags:
     - precheck
     - postcheck
@@ -126,6 +152,34 @@
         (windows_disk_free_raw.stdout | default('0') | trim | int)
         < (windows_precheck_min_free_disk_mb | default(1024) | int)
       }}
+  when:
+    - windows_connectivity_ok | default(false) | bool
+    - (windows_disk_free_raw.rc | default(1)) == 0
+    - (windows_disk_free_raw.stdout | default('') | trim | length) > 0
+  changed_when: false
+  tags:
+    - precheck
+    - postcheck
+    - always
+
+- name: Set disk facts when the host is unreachable
+  ansible.builtin.set_fact:
+    windows_disk_free_mb: not_available
+    windows_disk_low: false
+  when: not (windows_connectivity_ok | default(false) | bool)
+  changed_when: false
+  tags:
+    - precheck
+    - postcheck
+    - always
+
+- name: Set disk facts when a reachable disk probe cannot execute
+  ansible.builtin.set_fact:
+    windows_disk_free_mb: not_available
+    windows_disk_low: false
+  when:
+    - windows_connectivity_ok | default(false) | bool
+    - (windows_disk_free_raw.rc | default(1)) != 0 or ((windows_disk_free_raw.stdout | default('') | trim | length) == 0)
   changed_when: false
   tags:
     - precheck

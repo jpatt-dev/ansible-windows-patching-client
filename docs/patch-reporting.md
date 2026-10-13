@@ -10,6 +10,12 @@ reboot.
 Optional SMTP delivery is provided by `roles/report_email/` and is disabled by
 default. See [operations.md](operations.md).
 
+Unreachable hosts remain in the aggregate report as `failed` / `UNREACHABLE`.
+Missing host evidence is `not_available` (not a confirmed `false` or `0`).
+JSON, CSV, Markdown, and optional SMTP are produced before the Full Patch job
+fails for that result. `degraded`, `exempt`, and `blocked` are not automatic
+job failures.
+
 ## Phase history
 
 `playbooks/windows/full_patch.yml` preserves host-local phase history in the
@@ -104,7 +110,7 @@ string. This repository does not integrate with vCenter.
 | `PARTIAL_PATCH` | Updates remain after installation |
 | `PENDING_REBOOT` | A reboot is pending and requires follow-up |
 | `POSTCHECK_MISSING` | Postcheck evidence is missing |
-| `UNREACHABLE` | Host unreachable |
+| `UNREACHABLE` | Host unreachable. Causes the Full Patch AAP job to fail after reporting |
 | `UNKNOWN_RESULT` | Reliable execution outcome cannot be established |
 
 ### Required host examples

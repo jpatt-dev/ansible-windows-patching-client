@@ -42,7 +42,9 @@ Precheck
    `set_stats` artifact after every host in the Limit has finished Play 1.
    CSV is the concise operational report and includes Reason Code, Pending
    Reboot, and Manual Follow-up Required. JSON is the richer authoritative
-   artifact. See [patch-reporting.md](patch-reporting.md).
+   artifact. Optional SMTP runs next. If any host result is `failed`, including
+   `UNREACHABLE`, the AAP job fails after those reports. See
+   [patch-reporting.md](patch-reporting.md).
 
 Standalone troubleshooting/readiness: `playbooks/windows/precheck.yml`. That
 playbook is fail-closed and never remediates.
@@ -167,7 +169,8 @@ Precheck reports window status and does not enforce it.
 | Invalid or closed maintenance window | Remediating Apply and actual reboot operations fail |
 | Invalid `windows_*_patch_reboot_mode` | Reboot phase fails closed |
 | `patching_reboot_allowed: false` | Reboot skipped; `manual_followup_required`. Job does not fail solely for this. |
-| Temporary exception | Host reported as `exempt`; `patched: false`; install and reboot skipped |
+| Unreachable Windows host | Host remains in the Limit and is reported as `failed` / `UNREACHABLE`. Missing probe evidence is `not_available`, not a confirmed healthy or zero value. JSON/CSV/Markdown and optional SMTP still run. The Full Patch job then fails. `degraded`, `exempt`, `blocked`, `already_compliant`, and `unknown` do not fail the job by themselves. |
+| Temporary exception | Host reported as `exempt`; `patched: false`; install and reboot skipped. Does not fail the job solely because it is exempt. |
 | Client PowerShell precheck failed (when enabled) | Standalone Precheck fails. Full Patch marks the host ineligible. Remediating Apply fails. |
 | Unsupported OS policy | Remediating Apply fails |
 

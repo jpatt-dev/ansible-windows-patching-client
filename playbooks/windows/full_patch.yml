@@ -145,6 +145,7 @@
       ansible.builtin.include_role:
         name: windows_patch
         tasks_from: collect_host_health.yml
+      when: windows_connectivity_ok | default(false) | bool
       tags:
         - report
 
@@ -230,14 +231,18 @@
         - report
         - servicenow
 
-    - name: Fail after reporting if any host remediation lifecycle failed
+    - name: Fail after reporting if any host failed
       ansible.builtin.assert:
         that:
+          - (patch_workflow_report.status_counts.failed | default(0) | int) == 0
           - (ansible_play_hosts_all | map('extract', hostvars, 'patch_lifecycle_failed') | select('defined') | select | list | length) == 0
         fail_msg: >-
-          One or more hosts failed during Full Patch remediation after Precheck.
-          Per-host and aggregate reports were still generated from preserved
-          phase history. See patch_final_result / patch_workflow_report.
+          Full Patch reporting completed, but the aggregate report contains
+          failed hosts (failed={{ patch_workflow_report.status_counts.failed | default(0) }}).
+          Unreachable hosts, installation failures, postcheck failures, and
+          remediation lifecycle failures fail the AAP job after JSON/CSV/Markdown
+          and optional SMTP/ServiceNow reporting. See patch_final_result
+          and patch_workflow_report.
       run_once: true
       tags:
         - report

@@ -3,6 +3,8 @@
 # Validates provider/source, exceptions, app metadata, health, and updates search.
 # Never installs. Fail-closed: blocked or failed precheck_status fails the host
 # after structured evidence is recorded (windows_precheck_fail_on_blocked default true).
+# ignore_unreachable keeps Ansible-unreachable hosts in the play so evidence is
+# recorded before the fail-closed assertion.
 #
 # CLI:
 #   ansible-playbook -i /path/to/client-inventory \
@@ -12,6 +14,7 @@
   hosts: windows_hosts
   gather_facts: false
   serial: "{{ patch_serial | default(omit) }}"
+  ignore_unreachable: true
   tags:
     - precheck
     - windows

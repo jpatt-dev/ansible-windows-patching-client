@@ -349,6 +349,23 @@
         expected_patched: false
         expected_reason_code: PRECHECK_BLOCKED
 
+    - name: Add unreachable host with misleading zero/false observations
+      ansible.builtin.add_host:
+        name: win-unreachable
+        groups: mock_classify_hosts
+        ansible_connection: local
+        patch_host_eligible: false
+        windows_connectivity_ok: false
+        precheck_status: failed
+        pending_reboot: false
+        windows_pending_reboot_probe_ok: false
+        windows_wsus_validation_status: missing
+        windows_disk_free_mb: 0
+        windows_disk_low: true
+        expected_result: failed
+        expected_patched: false
+        expected_reason_code: UNREACHABLE
+
 - name: Classify hosts through final_build.yml
   hosts: mock_classify_hosts
   connection: local
@@ -382,6 +399,18 @@
           - (patch_final_result.pending_reboot | bool)
         fail_msg: Pending reboot host did not use PENDING_REBOOT follow-up wording.
       when: expected_reason_code == 'PENDING_REBOOT'
+
+    - name: Assert unreachable observations are not confirmed healthy values
+      ansible.builtin.assert:
+        that:
+          - patch_final_result.pending_reboot == 'not_available'
+          - patch_final_result.windows_wsus_validation_status == 'not_available'
+          - patch_final_result.updates_remaining == 'not_available'
+          - patch_final_result.updates_installed == 'not_available'
+          - not (patch_final_result.patched | bool)
+          - patch_final_result.manual_followup_required | bool
+        fail_msg: Unreachable host reported confirmed health or install values.
+      when: expected_reason_code == 'UNREACHABLE'
 
 - name: Seed mock hosts for aggregate completeness
   hosts: localhost
@@ -622,3 +651,320 @@
           - (patch_workflow_report.not_patched_breakdown.already_compliant | int) == 0
         fail_msg: Unpatched degraded hosts were not counted in not_patched_breakdown.
       run_once: true
+
+- name: Seed mixed unreachable and degraded aggregate hosts
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add unreachable and pending-reboot hosts
+      ansible.builtin.add_host:
+        name: "{{ item.name }}"
+        groups: mock_unreachable_mixed
+        ansible_connection: local
+        patch_final_result: "{{ item.result }}"
+      loop:
+        - name: win-job-unreachable
+          result:
+            inventory_hostname: win-job-unreachable
+            hostname: win-job-unreachable
+            host: win-job-unreachable
+            result: failed
+            reason_code: UNREACHABLE
+            patched: false
+            exempt: false
+            reason: Host unreachable
+            updates_installed: not_available
+            updates_remaining: not_available
+            updates_failed: not_available
+            patch_attempted: not_available
+            pre_patch_reboot_performed: not_available
+            post_patch_reboot_performed: not_available
+            pending_reboot: not_available
+            patching_exception_reference: ""
+            manual_followup_required: true
+            change_ticket_id: CHG001
+            patch_wave: wave_1
+        - name: win-job-degraded
+          result:
+            inventory_hostname: win-job-degraded
+            hostname: win-job-degraded
+            host: win-job-degraded
+            result: degraded
+            reason_code: PENDING_REBOOT
+            patched: false
+            exempt: false
+            reason: A reboot is pending and requires follow-up
+            updates_installed: 0
+            updates_remaining: 0
+            updates_failed: 0
+            patch_attempted: false
+            pre_patch_reboot_performed: false
+            post_patch_reboot_performed: false
+            pending_reboot: true
+            patching_exception_reference: ""
+            manual_followup_required: true
+            change_ticket_id: CHG001
+            patch_wave: wave_1
+
+- name: Mixed unreachable aggregate must fail the job
+  hosts: mock_unreachable_mixed
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: wave_1
+  tasks:
+    - name: Run mixed unreachable aggregate
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+
+    - name: Assert mixed unreachable counts and job-failure condition
+      ansible.builtin.assert:
+        that:
+          - (patch_workflow_report.total_systems | int) == 2
+          - (patch_workflow_report.systems_patched | int) == 0
+          - (patch_workflow_report.systems_not_patched | int) == 2
+          - (patch_workflow_report.status_counts.failed | int) == 1
+          - (patch_workflow_report.status_counts.degraded | int) == 1
+          - (patch_workflow_report.status_counts.failed | default(0) | int) > 0
+        fail_msg: Mixed unreachable/degraded aggregate did not require a job failure.
+      run_once: true
+
+- name: Seed non-failed aggregate hosts
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add already-compliant and degraded hosts
+      ansible.builtin.add_host:
+        name: "{{ item.name }}"
+        groups: mock_no_failed_hosts
+        ansible_connection: local
+        patch_final_result: "{{ item.result }}"
+      loop:
+        - name: win-no-fail-ac
+          result:
+            inventory_hostname: win-no-fail-ac
+            hostname: win-no-fail-ac
+            host: win-no-fail-ac
+            result: already_compliant
+            reason_code: NO_APPLICABLE_UPDATES
+            patched: false
+            exempt: false
+            reason: No applicable updates
+            updates_installed: 0
+            updates_remaining: 0
+            updates_failed: 0
+            patch_attempted: false
+            pre_patch_reboot_performed: false
+            post_patch_reboot_performed: false
+            pending_reboot: false
+            patching_exception_reference: ""
+            manual_followup_required: false
+            change_ticket_id: CHG001
+            patch_wave: wave_1
+        - name: win-no-fail-degraded
+          result:
+            inventory_hostname: win-no-fail-degraded
+            hostname: win-no-fail-degraded
+            host: win-no-fail-degraded
+            result: degraded
+            reason_code: PENDING_REBOOT
+            patched: false
+            exempt: false
+            reason: A reboot is pending and requires follow-up
+            updates_installed: 0
+            updates_remaining: 0
+            updates_failed: 0
+            patch_attempted: false
+            pre_patch_reboot_performed: false
+            post_patch_reboot_performed: false
+            pending_reboot: true
+            patching_exception_reference: ""
+            manual_followup_required: true
+            change_ticket_id: CHG001
+            patch_wave: wave_1
+
+- name: Non-failed statuses must not fail the job
+  hosts: mock_no_failed_hosts
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: wave_1
+  tasks:
+    - name: Run non-failed aggregate
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+
+    - name: Assert degraded and already_compliant do not fail the job
+      ansible.builtin.assert:
+        that:
+          - (patch_workflow_report.status_counts.failed | default(0) | int) == 0
+          - (ansible_play_hosts_all | map('extract', hostvars, 'patch_lifecycle_failed') | select('defined') | select | list | length) == 0
+        fail_msg: already_compliant/degraded hosts incorrectly required a job failure.
+      run_once: true
+
+- name: Seed exempt-only aggregate host
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add exempt host for job-status check
+      ansible.builtin.add_host:
+        name: win-exempt-only
+        groups: mock_exempt_only
+        ansible_connection: local
+        patch_final_result:
+          inventory_hostname: win-exempt-only
+          hostname: win-exempt-only
+          host: win-exempt-only
+          result: exempt
+          reason_code: PATCH_EXEMPTION
+          patched: false
+          exempt: true
+          reason: Approved exemption
+          updates_installed: not_available
+          updates_remaining: not_available
+          updates_failed: not_available
+          patch_attempted: not_available
+          pre_patch_reboot_performed: not_available
+          post_patch_reboot_performed: not_available
+          pending_reboot: false
+          patching_exception_reference: EXC-1
+          manual_followup_required: false
+          change_ticket_id: CHG001
+          patch_wave: wave_1
+
+- name: Exempt hosts must not fail the job
+  hosts: mock_exempt_only
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: wave_1
+  tasks:
+    - name: Run exempt-only aggregate
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+
+    - name: Assert exemption does not fail the job
+      ansible.builtin.assert:
+        that:
+          - (patch_workflow_report.status_counts.exempt | int) == 1
+          - (patch_workflow_report.status_counts.failed | default(0) | int) == 0
+          - (ansible_play_hosts_all | map('extract', hostvars, 'patch_lifecycle_failed') | select('defined') | select | list | length) == 0
+        fail_msg: An exempt host incorrectly required a job failure.
+      run_once: true
+
+- name: WSUS missing is distinct from an unreachable registry probe
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    windows_wsus_url_regex: '^https?://[^/\s]+'
+  tasks:
+    - name: Validate reachable host with missing WSUS keys
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/windows_patch_source/tasks/wsus_validate.yml"
+      vars:
+        windows_wsus_current_server_url: ""
+        windows_wsus_current_status_server_url: ""
+        windows_wsus_current_use_wu_server: ""
+        windows_wsus_reg_wuserver:
+          failed: false
+          unreachable: false
+        windows_wsus_reg_wustatus:
+          failed: false
+          unreachable: false
+        windows_wsus_reg_usewu:
+          failed: false
+          unreachable: false
+
+    - name: Record reachable missing WSUS status
+      ansible.builtin.set_fact:
+        _wsus_reachable_missing: "{{ windows_wsus_validation_status }}"
+        _wsus_reachable_provider: "{{ windows_patch_provider_effective }}"
+
+    - name: Validate unreachable WSUS registry probe
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/windows_patch_source/tasks/wsus_validate.yml"
+      vars:
+        windows_wsus_current_server_url: ""
+        windows_wsus_current_status_server_url: ""
+        windows_wsus_current_use_wu_server: ""
+        windows_wsus_reg_wuserver:
+          failed: true
+          unreachable: true
+        windows_wsus_reg_wustatus:
+          failed: true
+          unreachable: true
+        windows_wsus_reg_usewu:
+          failed: true
+          unreachable: true
+
+    - name: Assert reachable missing vs unreachable WSUS status
+      ansible.builtin.assert:
+        that:
+          - _wsus_reachable_missing == 'missing'
+          - _wsus_reachable_provider == 'unknown'
+          - windows_wsus_validation_status == 'not_available'
+          - windows_patch_provider_effective == 'unknown'
+          - not (windows_wsus_configured | bool)
+        fail_msg: WSUS validation mixed missing keys with an unreachable host.
+
+    - name: Validate reachable valid WSUS configuration
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/windows_patch_source/tasks/wsus_validate.yml"
+      vars:
+        windows_wsus_current_server_url: "http://wsus.example.test"
+        windows_wsus_current_status_server_url: "http://wsus.example.test"
+        windows_wsus_current_use_wu_server: "1"
+        windows_wsus_reg_wuserver:
+          failed: false
+          unreachable: false
+        windows_wsus_reg_wustatus:
+          failed: false
+          unreachable: false
+        windows_wsus_reg_usewu:
+          failed: false
+          unreachable: false
+
+    - name: Assert reachable valid WSUS remains wsus
+      ansible.builtin.assert:
+        that:
+          - windows_wsus_validation_status == 'valid'
+          - windows_patch_provider_effective == 'wsus'
+          - windows_wsus_configured | bool
+        fail_msg: Reachable valid WSUS configuration was not preserved.
+
+- name: Final job failure remains after reporting and SMTP
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Load Full Patch playbook
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../playbooks/windows/full_patch.yml"
+      register: _full_patch_slurp
+
+    - name: Parse Full Patch task names
+      ansible.builtin.set_fact:
+        _full_patch_plays: "{{ _full_patch_slurp.content | b64decode | from_yaml }}"
+        _agg_task_names: "{{ ((_full_patch_slurp.content | b64decode | from_yaml)[1].tasks | map(attribute='name') | list) }}"
+        _agg_task_blob: "{{ ((_full_patch_slurp.content | b64decode | from_yaml)[1].tasks | map(attribute='name') | list) | join('\n') }}"
+
+    - name: Assert reporting and SMTP run before the final failure
+      ansible.builtin.assert:
+        that:
+          - "'Aggregate Final Patch Report and print summary' in _agg_task_names"
+          - "'Write canonical Final Report JSON/CSV/Markdown from patch_workflow_report' in _agg_task_names"
+          - "'Email Windows patching report' in _agg_task_names"
+          - "'Attach Final Report files to ServiceNow change' in _agg_task_names"
+          - "'Fail after reporting if any host failed' in _agg_task_names"
+          - _agg_task_blob is search('(?s)Aggregate Final Patch Report.*Write canonical Final Report.*Email Windows patching report.*Attach Final Report files to ServiceNow change.*Fail after reporting if any host failed')
+        fail_msg: Final AAP failure assertion is not after reporting and SMTP.

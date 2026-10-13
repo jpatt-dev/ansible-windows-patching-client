@@ -1,6 +1,8 @@
 ---
 # Validate the host's existing WSUS client configuration.
-# Status: missing | invalid | valid
+# Status: missing | invalid | valid | not_available
+# not_available means the registry query could not execute (for example the
+# host is unreachable). missing means the query succeeded and keys are absent.
 # valid requires non-empty WUServer and WUStatusServer, UseWUServer == 1,
 # structurally valid http(s) URLs, and case-insensitive URL equality.
 
@@ -9,26 +11,46 @@
     windows_wsus_server_effective: "{{ windows_wsus_current_server_url | default('') | trim }}"
     windows_wsus_status_server_effective: "{{ windows_wsus_current_status_server_url | default('') | trim }}"
     windows_wsus_use_server_effective: "{{ windows_wsus_current_use_wu_server | default('') | string | trim }}"
+    windows_wsus_registry_probe_ok: >-
+      {{
+        (not (windows_wsus_reg_wuserver.failed | default(false) | bool))
+        and (not (windows_wsus_reg_wuserver.unreachable | default(false) | bool))
+        and (not (windows_wsus_reg_wustatus.failed | default(false) | bool))
+        and (not (windows_wsus_reg_wustatus.unreachable | default(false) | bool))
+        and (not (windows_wsus_reg_usewu.failed | default(false) | bool))
+        and (not (windows_wsus_reg_usewu.unreachable | default(false) | bool))
+      }}
     windows_wsus_validation_status: >-
       {{
-        'missing'
+        'not_available'
         if (
-          (windows_wsus_current_server_url | default('') | trim | length) == 0
-          or (windows_wsus_current_status_server_url | default('') | trim | length) == 0
-          or (windows_wsus_current_use_wu_server | default('') | string | trim | length) == 0
+          (windows_wsus_reg_wuserver.failed | default(false) | bool)
+          or (windows_wsus_reg_wuserver.unreachable | default(false) | bool)
+          or (windows_wsus_reg_wustatus.failed | default(false) | bool)
+          or (windows_wsus_reg_wustatus.unreachable | default(false) | bool)
+          or (windows_wsus_reg_usewu.failed | default(false) | bool)
+          or (windows_wsus_reg_usewu.unreachable | default(false) | bool)
         )
         else (
-          'valid'
+          'missing'
           if (
-            (windows_wsus_current_use_wu_server | default('') | string | trim) == '1'
-            and ((windows_wsus_current_server_url | default('') | trim) is match(windows_wsus_url_regex))
-            and ((windows_wsus_current_status_server_url | default('') | trim) is match(windows_wsus_url_regex))
-            and (
-              (windows_wsus_current_server_url | default('') | trim | lower)
-              == (windows_wsus_current_status_server_url | default('') | trim | lower)
-            )
+            (windows_wsus_current_server_url | default('') | trim | length) == 0
+            or (windows_wsus_current_status_server_url | default('') | trim | length) == 0
+            or (windows_wsus_current_use_wu_server | default('') | string | trim | length) == 0
           )
-          else 'invalid'
+          else (
+            'valid'
+            if (
+              (windows_wsus_current_use_wu_server | default('') | string | trim) == '1'
+              and ((windows_wsus_current_server_url | default('') | trim) is match(windows_wsus_url_regex))
+              and ((windows_wsus_current_status_server_url | default('') | trim) is match(windows_wsus_url_regex))
+              and (
+                (windows_wsus_current_server_url | default('') | trim | lower)
+                == (windows_wsus_current_status_server_url | default('') | trim | lower)
+              )
+            )
+            else 'invalid'
+          )
         )
       }}
   changed_when: false

@@ -1,6 +1,8 @@
 ---
 # Read-only Windows precheck. Never installs updates.
 # Re-collects host health in this job (AAP nodes do not preserve facts).
+# WinRM connectivity is probed first. Unreachable hosts skip further Windows
+# operations, stay in the play, and are recorded as precheck failed.
 # Critical failures fail this job AFTER reporting (stops workflow success path).
 
 - name: Normalize operator context for precheck summary
@@ -11,36 +13,70 @@
   tags:
     - precheck
 
-- name: Resolve patch provider / WSUS source context (validate only)
-  ansible.builtin.include_role:
-    name: windows_patch_source
-  tags:
-    - precheck
-    - source
-
 - name: Collect host connectivity, OS, boot, and disk health
   ansible.builtin.include_tasks: collect_host_health.yml
   tags:
     - precheck
 
+- name: Resolve patch provider / WSUS source context (validate only)
+  ansible.builtin.include_role:
+    name: windows_patch_source
+  when: windows_connectivity_ok | default(false) | bool
+  tags:
+    - precheck
+    - source
+
+- name: Record unavailable WSUS observations when the host is unreachable
+  ansible.builtin.set_fact:
+    windows_wsus_validation_status: not_available
+    windows_wsus_configured: false
+    windows_patch_provider_effective: unknown
+    windows_patch_provider: unknown
+    windows_wsus_server_effective: not_available
+    windows_wsus_status_server_effective: not_available
+    windows_wsus_use_server_effective: not_available
+    windows_provider_remediation_blocked: true
+  when: not (windows_connectivity_ok | default(false) | bool)
+  changed_when: false
+  tags:
+    - precheck
+    - source
+    - report
+
 - name: Run opt-in client PowerShell precheck
   ansible.builtin.include_tasks: powershell_precheck.yml
-  when: windows_powershell_precheck_enabled | default(false) | bool
+  when:
+    - windows_powershell_precheck_enabled | default(false) | bool
+    - windows_connectivity_ok | default(false) | bool
   tags:
     - precheck
     - powershell
 
 - name: Search for pending Windows updates using approved OS policy categories
   ansible.builtin.include_tasks: search_updates_policy.yml
+  when: windows_connectivity_ok | default(false) | bool
   tags:
     - precheck
     - patching
 
 - name: Check pending reboot state
   ansible.builtin.include_tasks: check_pending_reboot.yml
+  when: windows_connectivity_ok | default(false) | bool
   tags:
     - precheck
     - reboot
+
+- name: Record unavailable pending-reboot observations when the host is unreachable
+  ansible.builtin.set_fact:
+    pending_reboot: false
+    windows_reboot_required: false
+    windows_pending_reboot_probe_ok: false
+  when: not (windows_connectivity_ok | default(false) | bool)
+  changed_when: false
+  tags:
+    - precheck
+    - reboot
+    - report
 
 - name: Check Windows service status (placeholder list incl. WU/BITS)
   ansible.windows.win_service_info:
@@ -48,6 +84,7 @@
   register: windows_service_checks
   failed_when: false
   loop: "{{ windows_services_to_check | default(['W32Time', 'wuauserv', 'BITS']) }}"
+  when: windows_connectivity_ok | default(false) | bool
   tags:
     - precheck
 
@@ -55,16 +92,16 @@
   ansible.builtin.set_fact:
     precheck_status: >-
       {{
-        'blocked'
-        if (
-          (windows_powershell_precheck_critical_failed | default(false) | bool)
-          or (
-            (windows_wsus_validation_status | default('missing')) != 'valid'
-          )
-        )
+        'failed'
+        if (not (windows_connectivity_ok | default(false) | bool))
         else (
-          'failed'
-          if (not (windows_connectivity_ok | default(false) | bool))
+          'blocked'
+          if (
+            (windows_powershell_precheck_critical_failed | default(false) | bool)
+            or (
+              (windows_wsus_validation_status | default('missing')) != 'valid'
+            )
+          )
           else (
             'warning'
             if (windows_disk_low | default(false) | bool)
@@ -82,10 +119,15 @@
         )
         or (windows_patch_provider_effective | default('unknown') == 'unknown')
         or (
-          (windows_wsus_validation_status | default('missing')) != 'valid'
+          (windows_wsus_validation_status | default('missing')) not in ['valid', 'not_available']
         )
       }}
-    updates_found: "{{ windows_updates_policy_count | default(windows_update_search.found_update_count | default(0)) | int }}"
+    updates_found: >-
+      {{
+        (windows_updates_policy_count | default(windows_update_search.found_update_count | default(0)) | int)
+        if (windows_connectivity_ok | default(false) | bool)
+        else 'not_available'
+      }}
   changed_when: false
   tags:
     - precheck

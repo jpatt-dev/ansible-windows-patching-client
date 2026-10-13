@@ -1,6 +1,8 @@
 ---
 # Fresh pending-reboot probes for the current job (win_reg_stat only).
 # Do not rely on facts from a prior AAP workflow node.
+# Missing reboot keys after a successful query are false.
+# A registry query that cannot execute is not treated as a confirmed false.
 
 - name: Check Component Based Servicing RebootPending key
   ansible.windows.win_reg_stat:
@@ -32,17 +34,48 @@
 
 - name: Determine pending reboot state
   ansible.builtin.set_fact:
+    windows_pending_reboot_probe_ok: >-
+      {{
+        (not (windows_cbs_reboot.failed | default(false) | bool))
+        and (not (windows_cbs_reboot.unreachable | default(false) | bool))
+        and (not (windows_wu_reboot.failed | default(false) | bool))
+        and (not (windows_wu_reboot.unreachable | default(false) | bool))
+        and (not (windows_pfro_reboot.failed | default(false) | bool))
+        and (not (windows_pfro_reboot.unreachable | default(false) | bool))
+      }}
     windows_reboot_required: >-
       {{
-        (windows_cbs_reboot.exists | default(false))
-        or (windows_wu_reboot.exists | default(false))
-        or (windows_pfro_reboot.exists | default(false))
+        (
+          (windows_cbs_reboot.exists | default(false) | bool)
+          or (windows_wu_reboot.exists | default(false) | bool)
+          or (windows_pfro_reboot.exists | default(false) | bool)
+        )
+        if (
+          (not (windows_cbs_reboot.failed | default(false) | bool))
+          and (not (windows_cbs_reboot.unreachable | default(false) | bool))
+          and (not (windows_wu_reboot.failed | default(false) | bool))
+          and (not (windows_wu_reboot.unreachable | default(false) | bool))
+          and (not (windows_pfro_reboot.failed | default(false) | bool))
+          and (not (windows_pfro_reboot.unreachable | default(false) | bool))
+        )
+        else false
       }}
     pending_reboot: >-
       {{
-        (windows_cbs_reboot.exists | default(false))
-        or (windows_wu_reboot.exists | default(false))
-        or (windows_pfro_reboot.exists | default(false))
+        (
+          (windows_cbs_reboot.exists | default(false) | bool)
+          or (windows_wu_reboot.exists | default(false) | bool)
+          or (windows_pfro_reboot.exists | default(false) | bool)
+        )
+        if (
+          (not (windows_cbs_reboot.failed | default(false) | bool))
+          and (not (windows_cbs_reboot.unreachable | default(false) | bool))
+          and (not (windows_wu_reboot.failed | default(false) | bool))
+          and (not (windows_wu_reboot.unreachable | default(false) | bool))
+          and (not (windows_pfro_reboot.failed | default(false) | bool))
+          and (not (windows_pfro_reboot.unreachable | default(false) | bool))
+        )
+        else false
       }}
   changed_when: false
   tags:
