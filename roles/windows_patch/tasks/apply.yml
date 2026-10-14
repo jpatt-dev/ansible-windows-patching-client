@@ -5,6 +5,9 @@
 # check_only: successful non-install.
 # Apply readiness revalidates in this job (no cross-node fact dependency).
 # patching_exception_active hosts skip remediation (no win_updates; no remediating asserts).
+# windows_apply_timeout (default 7200s) is an ansible-core task timeout. Do not add
+# async/poll or automatic Apply retries. ignore_errors lets reporting record the
+# outcome; the following fail task still fails the lifecycle after that record.
 
 - name: Skip remediating Apply for approved patch-cycle exception
   ansible.builtin.set_fact:
@@ -66,6 +69,8 @@
     accept_list: "{{ windows_patch_accept_list | default(omit) }}"
     reject_list: "{{ windows_patch_reject_list | default(omit) }}"
   register: windows_update_install
+  timeout: "{{ windows_apply_timeout | default(7200) | int }}"
+  ignore_errors: true
   when:
     - not (patching_exception_active | default(false) | bool)
     - windows_patch_provider_effective | default('unknown') == 'wsus'
@@ -80,7 +85,30 @@
 
 - name: Set Windows apply outcome facts
   ansible.builtin.set_fact:
-    updates_installed: "{{ windows_update_install.installed_update_count | default(0) | int }}"
+    updates_installed: >-
+      {{
+        windows_update_install.installed_update_count
+        if (
+          windows_update_install is defined
+          and not (windows_update_install is skipped)
+          and (windows_update_install.installed_update_count is defined)
+        )
+        else (
+          'not_available'
+          if (windows_update_install is defined and not (windows_update_install is skipped))
+          else 0
+        )
+      }}
+    updates_failed: >-
+      {{
+        windows_update_install.failed_update_count
+        if (
+          windows_update_install is defined
+          and not (windows_update_install is skipped)
+          and (windows_update_install.failed_update_count is defined)
+        )
+        else 'not_available'
+      }}
     reboot_required: >-
       {{
         (windows_update_install.reboot_required | default(false) | bool)
@@ -98,14 +126,40 @@
         windows_update_install is defined
         and not (windows_update_install is skipped)
       }}
+    windows_apply_failed: >-
+      {{
+        windows_update_install is defined
+        and not (windows_update_install is skipped)
+        and (
+          (windows_update_install.failed | default(false) | bool)
+          or (
+            (windows_update_install.failed_update_count is defined)
+            and ((windows_update_install.failed_update_count | int) > 0)
+          )
+        )
+      }}
     windows_apply_status: >-
       {{
-        'check_only'
-        if (windows_patch_mode == 'check_only')
+        'failed'
+        if (
+          windows_update_install is defined
+          and not (windows_update_install is skipped)
+          and (
+            (windows_update_install.failed | default(false) | bool)
+            or (
+              (windows_update_install.failed_update_count is defined)
+              and ((windows_update_install.failed_update_count | int) > 0)
+            )
+          )
+        )
         else (
-          'blocked_unknown_provider'
-          if ((windows_patch_provider_effective | default('unknown')) == 'unknown')
-          else 'ok'
+          'check_only'
+          if (windows_patch_mode == 'check_only')
+          else (
+            'blocked_unknown_provider'
+            if ((windows_patch_provider_effective | default('unknown')) == 'unknown')
+            else 'ok'
+          )
         )
       }}
   when: not (patching_exception_active | default(false) | bool)
@@ -125,7 +179,8 @@
       - "patching_exception_active: {{ patching_exception_active | default(false) }}"
       - "patching_exception_reference: {{ patching_exception_reference_effective | default('') }}"
       - "patch_attempted: {{ patch_attempted | default(false) }}"
-      - "updates_installed: {{ updates_installed | default(0) }}"
+      - "updates_installed: {{ updates_installed | default('not_available') }}"
+      - "updates_failed: {{ updates_failed | default('not_available') }}"
       - "reboot_required_by_install: {{ reboot_required | default(false) }}"
       - "os_policy_categories: {{ windows_os_policy.categories | default([]) }}"
       - "windows_wsus_configured: {{ windows_wsus_configured | default(false) }}"
@@ -143,9 +198,31 @@
     patch_report_phase: record
     patch_report_phase_name: apply
     patch_report_patch_status: "{{ windows_apply_status }}"
-    patch_report_updates_installed: "{{ updates_installed | default(0) }}"
-    patch_report_updates_found: "{{ windows_update_install.found_update_count | default(updates_installed | default(0)) }}"
+    patch_report_updates_installed: "{{ updates_installed | default('not_available') }}"
+    patch_report_updates_found: >-
+      {{
+        windows_update_install.found_update_count
+        if (
+          windows_update_install is defined
+          and not (windows_update_install is skipped)
+          and (windows_update_install.found_update_count is defined)
+        )
+        else (updates_installed | default('not_available'))
+      }}
     patch_report_reboot_required_override: "{{ reboot_required | default(false) | bool }}"
   tags:
     - apply
     - report
+
+- name: Fail Apply after recording when installation failed or timed out
+  ansible.builtin.fail:
+    msg: >-
+      Windows update installation failed on {{ inventory_hostname }}
+      (status={{ windows_apply_status | default('failed') }},
+      msg={{ windows_update_install.msg | default('install did not succeed') }}).
+      Installation evidence was recorded for final reporting. No automatic Apply retry.
+  when:
+    - not (patching_exception_active | default(false) | bool)
+    - windows_apply_failed | default(false) | bool
+  tags:
+    - apply

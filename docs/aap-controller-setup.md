@@ -54,6 +54,11 @@ Inventory/group_vars may set `patching_exception_enabled` and/or
 `patching_exception_active` for a host exemption. Full Patch reporting uses
 those inventory facts, not a surveyed host list.
 
+High-latency / WAN WinRM hosts should use inventory group_vars, not a global
+`ansible.cfg` change. See `inventory/group_vars/windows_remote_sites.yml` for
+`ansible_winrm_operation_timeout_sec`, `ansible_winrm_read_timeout_sec`, and
+`ansible_winrm_connection_timeout`. Apply that group only to remote sites.
+
 ## Credentials
 
 Attach a Windows **Machine** credential for WinRM. Attach a Source Control
@@ -125,3 +130,26 @@ Every job requires an explicit AAP Limit. Typical values:
 
 Leave all operator flags `false` for a dry run. Authorize install and each
 reboot only when those actions are intended for the current window.
+
+## Job Template timeout and `patch_serial`
+
+Full Patch Play 1 uses `serial: "{{ patch_serial | default(1) }}"`. Wall-clock
+time is approximately:
+
+`ceil(host_count / patch_serial) * per_host_worst_case + reporting_buffer`
+
+`per_host_worst_case` includes precheck/discovery search retries, Apply
+(`windows_apply_timeout`, default 7200 seconds), and up to two reboot waits
+(`windows_reboot_timeout`, default 3600 seconds each) when those phases are
+authorized.
+
+Reducing `patch_serial` **increases** processing time because fewer hosts run
+concurrently. Do not lower `patch_serial` to fit a maintenance window. Fit the
+window by reducing Limit host count or by increasing **approved** concurrency
+(`patch_serial` / `forks`) after change approval.
+
+When `patch_require_maintenance_window` is true, Apply and reboot still fail
+closed if the window expires before those tasks run. Size the Limit and
+approved concurrency so the job can finish while the window is open. Set the
+AAP Job Template timeout above the formula; this repository does not change
+Controller timeout objects.

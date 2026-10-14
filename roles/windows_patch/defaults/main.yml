@@ -78,6 +78,23 @@ windows_reboot_timeout: 3600
 windows_pre_reboot_delay: 60
 windows_post_reboot_delay: 60
 
+# Policy-category win_updates search. retries is extra attempts after the first
+# (retries=2 → 3 total tries). until requires module success, not merely that
+# found_update_count exists. Do not set failed_when: false on the policy search.
+windows_update_search_retries: 2
+windows_update_search_retry_delay: 30
+
+# ansible-core task timeout (seconds) for remediating win_updates install.
+# AAP 2.7 / ansible-core 2.16 TaskExecutor uses SIGALRM on Linux controllers
+# and returns failed=true (ignore_errors can then record, then fail closed).
+# Do not set async/poll: ansible.windows win_updates already runs a long
+# synchronous poll, and async is unsupported when reboot=yes (we use reboot=false,
+# but still do not add async). No automatic Apply retries.
+# Uncertainty: SIGALRM may not interrupt a stuck C-level WinRM read; the
+# win_updates action plugin also ignores some connection timeouts while polling,
+# which is why this core timeout is required in addition to WinRM timeouts.
+windows_apply_timeout: 7200
+
 # Opt-in client PowerShell precheck (off by default)
 windows_powershell_precheck_enabled: false
 windows_powershell_precheck_script: client_precheck.ps1

@@ -1,6 +1,8 @@
 ---
 # Production single-job entrypoint for the complete Windows patch lifecycle.
 # Play 1 runs precheck through per-host final reporting (serial).
+# Reducing patch_serial increases wall-clock time; fit a maintenance window by
+# shrinking Limit host count or raising approved concurrency, not by lowering serial.
 # Play 2 aggregates the Limit population (non-serial, local).
 # Standalone troubleshooting entrypoint is playbooks/windows/precheck.yml.
 # Ineligible hosts (precheck blocked/failed/missing/unknown) skip remediation

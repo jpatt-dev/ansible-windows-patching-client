@@ -200,7 +200,9 @@
         and (windows_update_search is mapping)
         and (not (windows_update_search.skipped | default(false) | bool))
         and (not (windows_update_search.failed | default(false) | bool))
+        and (not (windows_update_search.unreachable | default(false) | bool))
         and (windows_update_search.found_update_count is defined)
+        and ((windows_update_search.found_update_count | string) != 'not_available')
         and (windows_connectivity_ok | default(false) | bool)
       }}
     _rpt_remaining: >-

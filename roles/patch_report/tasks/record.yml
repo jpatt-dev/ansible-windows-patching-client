@@ -104,6 +104,25 @@
     - always
     - report
 
+- name: Preserve unknown update counts instead of coercing them to zero
+  ansible.builtin.set_fact:
+    _pr_updates_found: >-
+      {{
+        'not_available'
+        if ((patch_report_updates_found_effective | default('') | string) == 'not_available')
+        else (patch_report_updates_found_effective | int)
+      }}
+    _pr_updates_installed: >-
+      {{
+        'not_available'
+        if ((patch_report_updates_installed_effective | default('') | string) == 'not_available')
+        else (patch_report_updates_installed_effective | int)
+      }}
+  changed_when: false
+  tags:
+    - always
+    - report
+
 - name: Preserve prior phase statuses when not overridden
   ansible.builtin.set_fact:
     _pr_precheck: >-
@@ -193,9 +212,9 @@
         }}
       os_policy_id: "{{ windows_os_policy.policy_id | default('not_available') }}"
       update_categories: "{{ windows_os_policy.categories | default('not_available') }}"
-      updates_found: "{{ patch_report_updates_found_effective | int }}"
-      updates_available: "{{ patch_report_updates_found_effective | int }}"
-      updates_installed: "{{ patch_report_updates_installed_effective | int }}"
+      updates_found: "{{ _pr_updates_found }}"
+      updates_available: "{{ _pr_updates_found }}"
+      updates_installed: "{{ _pr_updates_installed }}"
       updates_failed: "{{ windows_update_install.failed_update_count | default('not_available') }}"
       updates_remaining: >-
         {{

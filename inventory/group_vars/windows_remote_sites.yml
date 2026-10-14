@@ -1,0 +1,14 @@
+---
+# Sample AAP inventory group_vars for high-latency / WAN WinRM sites.
+# Assign hosts to group windows_remote_sites (or merge these keys into the
+# group that contains those hosts). Do not apply these globally; nearby sites
+# should keep ansible.cfg persistent_connection defaults (30s).
+#
+# These settings only affect WinRM transport. They do not authorize install,
+# reboot, Limit/wave targeting, exceptions, WSUS, or maintenance window.
+
+# Keep the site's existing WinRM auth (Kerberos/NTLM/credssp) and cert policy.
+# Override only the timeouts below for this group.
+ansible_winrm_operation_timeout_sec: 600
+ansible_winrm_read_timeout_sec: 720
+ansible_winrm_connection_timeout: 60

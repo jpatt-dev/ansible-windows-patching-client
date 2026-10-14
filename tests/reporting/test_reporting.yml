@@ -316,6 +316,80 @@
         expected_patched: false
         expected_reason_code: PATCH_INSTALL_FAILED
 
+    - name: Add unsuccessful discovery host (failed search must not look compliant)
+      ansible.builtin.add_host:
+        name: win-search-fail
+        groups: mock_classify_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        pending_reboot: false
+        windows_update_search:
+          failed: true
+          skipped: false
+          msg: Windows update search failed after retries
+        expected_result: unknown
+        expected_patched: false
+        expected_reason_code: UNKNOWN_RESULT
+
+    - name: Add unsuccessful discovery host whose count exists but search failed
+      ansible.builtin.add_host:
+        name: win-search-fail-zero
+        groups: mock_classify_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        pending_reboot: false
+        windows_update_search:
+          failed: true
+          skipped: false
+          found_update_count: 0
+          msg: search module failed
+        expected_result: unknown
+        expected_patched: false
+        expected_reason_code: UNKNOWN_RESULT
+
+    - name: Add Apply failure with unknown installation count
+      ansible.builtin.add_host:
+        name: win-install-unknown
+        groups: mock_classify_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        pending_reboot: false
+        windows_update_search:
+          found_update_count: 4
+        patch_phase_apply:
+          win-install-unknown:
+            patch_attempted: true
+            updates_installed: not_available
+            updates_failed: not_available
+            patch_status: failed
+        expected_result: failed
+        expected_patched: false
+        expected_reason_code: PATCH_INSTALL_FAILED
+
+    - name: Add lifecycle failure after unsuccessful discovery (Apply skipped)
+      ansible.builtin.add_host:
+        name: win-lifecycle-search-fail
+        groups: mock_classify_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        pending_reboot: false
+        patch_lifecycle_failed: true
+        windows_update_search:
+          failed: true
+          skipped: false
+          msg: Windows update search failed after retries
+        patch_phase_reboot_pre:
+          win-lifecycle-search-fail:
+            reboot_performed: false
+            reboot_skipped_reason: reboot_not_required
+        expected_result: failed
+        expected_patched: false
+        expected_reason_code: PATCH_INSTALL_FAILED
+
     - name: Add patched host missing postcheck evidence
       ansible.builtin.add_host:
         name: win-missing-postcheck
@@ -411,6 +485,34 @@
           - patch_final_result.manual_followup_required | bool
         fail_msg: Unreachable host reported confirmed health or install values.
       when: expected_reason_code == 'UNREACHABLE'
+
+    - name: Assert unsuccessful discovery is not already_compliant and not remaining 0
+      ansible.builtin.assert:
+        that:
+          - patch_final_result.result == 'unknown'
+          - patch_final_result.updates_remaining == 'not_available'
+          - not (patch_final_result.patched | bool)
+        fail_msg: Failed discovery search was treated as remaining 0 / already_compliant.
+      when: inventory_hostname in ['win-search-fail', 'win-search-fail-zero']
+
+    - name: Assert unknown installation count is not reported as zero
+      ansible.builtin.assert:
+        that:
+          - patch_final_result.updates_installed == 'not_available'
+          - patch_final_result.updates_failed == 'not_available'
+          - not (patch_final_result.patched | bool)
+          - patch_final_result.result == 'failed'
+        fail_msg: Unknown installation count was coerced to zero or marked patched.
+      when: inventory_hostname == 'win-install-unknown'
+
+    - name: Assert lifecycle failure after discovery still classifies as failed
+      ansible.builtin.assert:
+        that:
+          - patch_final_result.result == 'failed'
+          - patch_final_result.updates_remaining == 'not_available'
+          - not (patch_final_result.patched | bool)
+        fail_msg: Discovery lifecycle failure did not remain failed after reporting classification.
+      when: inventory_hostname == 'win-lifecycle-search-fail'
 
 - name: Seed mock hosts for aggregate completeness
   hosts: localhost
@@ -862,6 +964,121 @@
           - (patch_workflow_report.status_counts.failed | default(0) | int) == 0
           - (ansible_play_hosts_all | map('extract', hostvars, 'patch_lifecycle_failed') | select('defined') | select | list | length) == 0
         fail_msg: An exempt host incorrectly required a job failure.
+      run_once: true
+
+- name: Seed Apply-failure and lifecycle-failure aggregate hosts
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add failed-install, lifecycle-failed, and success hosts
+      ansible.builtin.add_host:
+        name: "{{ item.name }}"
+        groups: mock_apply_fail_report
+        ansible_connection: local
+        patch_lifecycle_failed: "{{ item.lifecycle_failed | default(omit) }}"
+        patch_final_result: "{{ item.result }}"
+      loop:
+        - name: win-agg-install-unknown
+          result:
+            inventory_hostname: win-agg-install-unknown
+            hostname: win-agg-install-unknown
+            host: win-agg-install-unknown
+            result: failed
+            reason_code: PATCH_INSTALL_FAILED
+            patched: false
+            exempt: false
+            reason: Update installation failed
+            updates_installed: not_available
+            updates_remaining: not_available
+            updates_failed: not_available
+            patch_attempted: true
+            pre_patch_reboot_performed: false
+            post_patch_reboot_performed: false
+            pending_reboot: false
+            patching_exception_reference: ""
+            manual_followup_required: true
+            change_ticket_id: CHG001
+            patch_wave: wave_1
+        - name: win-agg-lifecycle
+          lifecycle_failed: true
+          result:
+            inventory_hostname: win-agg-lifecycle
+            hostname: win-agg-lifecycle
+            host: win-agg-lifecycle
+            result: failed
+            reason_code: PATCH_INSTALL_FAILED
+            patched: false
+            exempt: false
+            reason: Update installation failed
+            updates_installed: not_available
+            updates_remaining: not_available
+            updates_failed: not_available
+            patch_attempted: not_available
+            pre_patch_reboot_performed: false
+            post_patch_reboot_performed: not_available
+            pending_reboot: false
+            patching_exception_reference: ""
+            manual_followup_required: true
+            change_ticket_id: CHG001
+            patch_wave: wave_1
+        - name: win-agg-success
+          result:
+            inventory_hostname: win-agg-success
+            hostname: win-agg-success
+            host: win-agg-success
+            result: success
+            reason_code: PATCH_SUCCEEDED
+            patched: true
+            exempt: false
+            reason: Updates installed successfully
+            updates_installed: 2
+            updates_remaining: 0
+            updates_failed: 0
+            patch_attempted: true
+            pre_patch_reboot_performed: false
+            post_patch_reboot_performed: true
+            pending_reboot: false
+            patching_exception_reference: ""
+            manual_followup_required: false
+            change_ticket_id: CHG001
+            patch_wave: wave_1
+
+- name: Apply and lifecycle failures propagate through reporting
+  hosts: mock_apply_fail_report
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: wave_1
+  tasks:
+    - name: Run Apply-failure aggregate
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+
+    - name: Assert failed counts and job-failure condition after reporting
+      ansible.builtin.assert:
+        that:
+          - (patch_workflow_report.total_systems | int) == 3
+          - (patch_workflow_report.status_counts.failed | default(0) | int) == 2
+          - (patch_workflow_report.status_counts.success | int) == 1
+          - (patch_workflow_report.status_counts.failed | default(0) | int) > 0
+          - (
+              ansible_play_hosts_all
+              | map('extract', hostvars, 'patch_lifecycle_failed')
+              | select('defined')
+              | select
+              | list
+              | length
+            ) > 0
+          - (
+              patch_workflow_report.hosts
+              | selectattr('inventory_hostname', 'equalto', 'win-agg-install-unknown')
+              | first
+            ).updates_installed == 'not_available'
+        fail_msg: Apply/lifecycle failures did not remain failed after aggregate reporting.
       run_once: true
 
 - name: WSUS missing is distinct from an unreachable registry probe

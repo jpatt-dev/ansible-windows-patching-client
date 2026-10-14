@@ -93,7 +93,10 @@
     precheck_status: >-
       {{
         'failed'
-        if (not (windows_connectivity_ok | default(false) | bool))
+        if (
+          (not (windows_connectivity_ok | default(false) | bool))
+          or (not (windows_update_search_ok | default(true) | bool))
+        )
         else (
           'blocked'
           if (
@@ -124,9 +127,12 @@
       }}
     updates_found: >-
       {{
-        (windows_updates_policy_count | default(windows_update_search.found_update_count | default(0)) | int)
-        if (windows_connectivity_ok | default(false) | bool)
-        else 'not_available'
+        'not_available'
+        if (
+          (not (windows_connectivity_ok | default(false) | bool))
+          or (not (windows_update_search_ok | default(true) | bool))
+        )
+        else (windows_updates_policy_count | default(0) | int)
       }}
   changed_when: false
   tags:
@@ -184,8 +190,8 @@
     patch_report_phase: record
     patch_report_phase_name: precheck
     patch_report_precheck_status: "{{ precheck_status }}"
-    patch_report_updates_available: "{{ updates_found | default(0) }}"
-    patch_report_updates_found: "{{ updates_found | default(0) }}"
+    patch_report_updates_available: "{{ updates_found | default('not_available') }}"
+    patch_report_updates_found: "{{ updates_found | default('not_available') }}"
     patch_report_updates_installed: 0
     patch_report_manual_followup_required: "{{ manual_followup_required | default(false) }}"
   tags:

@@ -40,7 +40,12 @@
 
 - name: Set postcheck status and follow-up flags
   ansible.builtin.set_fact:
-    updates_found: "{{ windows_updates_policy_count | default(0) | int }}"
+    updates_found: >-
+      {{
+        windows_updates_policy_count
+        if (windows_update_search_ok | default(false) | bool)
+        else 'not_available'
+      }}
     postcheck_status: >-
       {{
         'failed'
@@ -94,8 +99,8 @@
     patch_report_phase_name: postcheck
     patch_report_patch_status: "{{ 'excluded' if (patching_exception_active | default(false) | bool) else '' }}"
     patch_report_postcheck_status: "{{ postcheck_status }}"
-    patch_report_updates_found: "{{ updates_found | default(0) }}"
-    patch_report_updates_available: "{{ updates_found | default(0) }}"
+    patch_report_updates_found: "{{ updates_found | default('not_available') }}"
+    patch_report_updates_available: "{{ updates_found | default('not_available') }}"
     patch_report_manual_followup_required: "{{ manual_followup_required | default(false) }}"
   tags:
     - postcheck

@@ -5,6 +5,9 @@
 # (mode=always OR pending reboot) AND patching_reboot_allowed (inventory)
 # AND not patching_exception_active AND maintenance ack when reboot can occur.
 # Always re-check pending reboot in this job. ICMP is not proof of WinRM readiness.
+# ansible.windows.win_reboot waits internally (reboot_timeout after post_reboot_delay)
+# until WinRM recovers; a second wait_for_connection is not required. win_ping
+# remains as the explicit post-reboot health check.
 #
 # Skip reason precedence:
 #   if_required and not pending → reboot_not_required
@@ -13,7 +16,7 @@
 #
 # Delay semantics:
 #   windows_pre_reboot_delay  → win_reboot.pre_reboot_delay (fallback: reboot_delay)
-#   windows_post_reboot_delay → win_reboot.post_reboot_delay + wait_for_connection.delay
+#   windows_post_reboot_delay → win_reboot.post_reboot_delay
 
 - name: Normalize reboot gate and phase variables
   ansible.builtin.set_fact:
@@ -129,18 +132,7 @@
   tags:
     - reboot
 
-- name: Wait for WinRM connectivity after reboot (not ICMP)
-  ansible.builtin.wait_for_connection:
-    timeout: "{{ windows_reboot_timeout | default(reboot_timeout | default(3600)) | int }}"
-    delay: "{{ windows_post_reboot_delay | default(60) | int }}"
-  when:
-    - windows_reboot_should_run | bool
-    - windows_reboot_result is defined
-    - not (windows_reboot_result is skipped)
-  tags:
-    - reboot
-
-- name: Confirm WinRM with win_ping after reboot wait
+- name: Confirm WinRM with win_ping after reboot
   ansible.windows.win_ping:
   register: windows_post_reboot_ping
   when:

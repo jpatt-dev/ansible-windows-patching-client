@@ -28,7 +28,12 @@ Precheck
    reboot is false.
 4. **Discovery** — Search-only update discovery against WSUS. Never installs.
 5. **Apply** — Installs only when `operator_authorize_patch_install` is true and
-   in-job readiness gates pass. `win_updates` always uses `reboot: false`.
+   in-job readiness gates pass. `win_updates` always uses `reboot: false`. The
+   install task uses ansible-core `timeout` (`windows_apply_timeout`, default
+   7200 seconds) on Linux AAP controllers (ansible-core 2.16 TaskExecutor,
+   SIGALRM). There is no automatic Apply retry and no async/poll. If the
+   module does not return `installed_update_count`, the report keeps
+   `not_available` rather than `0`.
 6. **Post-Reboot** — Same reboot rules as the pre-patch phase (`if_required` or
    `always`), with its own operator flag.
 7. **Postcheck** — Read-only validation after apply/reboot.
@@ -62,7 +67,7 @@ are defined in the separate Controller configuration-as-code repository.
 | Layer | Owns |
 | --- | --- |
 | Git | Playbooks, roles, safety policy, approved target list |
-| Inventory | Hosts, groups, `patching_reboot_allowed`, reboot mode, optional `patch_location` |
+| Inventory | Hosts, groups, `patching_reboot_allowed`, reboot mode, optional `patch_location`, optional high-latency WinRM group_vars |
 | Limit | Patch wave / launch population |
 | Survey | Per-run authorization, maintenance window, temporary exceptions |
 | Credential | Windows and external-service secrets |
@@ -170,6 +175,11 @@ acknowledgement are not required. Authorized install and reboot still use
 Limit, install/reboot authorization, host reboot policy, exemptions, and
 WSUS checks. Precheck always reports window status and does not enforce it.
 
+Fit an open window by shrinking the Limit or increasing approved concurrency
+(`patch_serial` / `forks`). Reducing `patch_serial` (default `1`) **increases**
+wall-clock time because Play 1 processes fewer hosts at once. See
+[aap-controller-setup.md](aap-controller-setup.md).
+
 ## Failure Behavior
 
 | Condition | Result |
@@ -182,6 +192,8 @@ WSUS checks. Precheck always reports window status and does not enforce it.
 | Invalid `windows_*_patch_reboot_mode` | Reboot phase fails closed |
 | `patching_reboot_allowed: false` | Reboot skipped; `manual_followup_required`. Job does not fail solely for this. |
 | Unreachable Windows host | Host remains in the Limit and is reported as `failed` / `UNREACHABLE`. Missing probe evidence is `not_available`, not a confirmed healthy or zero value. JSON/CSV/Markdown and optional SMTP still run. The Full Patch job then fails. `degraded`, `exempt`, `blocked`, `already_compliant`, and `unknown` do not fail the job by themselves. |
+| Update search failed after retries | Search does not coerce a zero count. Remaining updates are `not_available` (not `already_compliant`). Discovery records evidence, then fails closed so Apply is skipped. Precheck marks the host ineligible. Final reporting still runs. |
+| Apply install failed or hit `windows_apply_timeout` (default 7200s) | Installation evidence is recorded (`updates_installed` stays `not_available` when the count is unknown, never coerced to `0`). The host then fails closed. No automatic Apply retry or async/poll. JSON/CSV/Markdown still run; the AAP job fails afterward. |
 | Temporary exception | Host reported as `exempt`; `patched: false`; install and reboot skipped. Does not fail the job solely because it is exempt. |
 | Client PowerShell precheck failed (when enabled) | Standalone Precheck fails. Full Patch marks the host ineligible. Remediating Apply fails. |
 | Unsupported OS policy | Remediating Apply fails |

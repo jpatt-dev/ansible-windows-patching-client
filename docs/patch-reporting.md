@@ -50,9 +50,11 @@ from a healthy final machine.
 
 `already_compliant` means no installation was needed, a successful update
 search returned zero applicable updates, and required final checks are
-satisfactory (no pending reboot, no unhealthy postcheck). Missing, skipped, or
-failed search evidence is `unknown`, not `already_compliant`. It is not a
-synonym of `success`.
+satisfactory (no pending reboot, no unhealthy postcheck). Missing, skipped,
+failed, or unverified search evidence is `unknown`, not `already_compliant`.
+`found_update_count` alone is not proof of a successful search. Unknown
+installation counts stay `not_available` and are never reported as `0`. It is
+not a synonym of `success`.
 
 Exemption uses inventory `patching_exception_enabled` and/or
 `patching_exception_active`. It does not use a surveyed host list.

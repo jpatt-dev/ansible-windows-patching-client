@@ -3,16 +3,20 @@
 # Default: category_names from windows_os_policy only (no drivers/feature/preview).
 # Optional all-category scan when windows_updates_search_all_categories=true.
 # Sets: windows_updates_policy_count, windows_updates_all_count (optional),
-#        updates_found (policy count), windows_update_search (policy register).
+#        updates_found (policy count), windows_update_search (policy register),
+#        windows_update_search_ok (true only after verified module success or an
+#        intentional skip). Failed searches stay not_available (never coerced to 0).
 
 - name: Skip update search when provider is not wsus
   ansible.builtin.set_fact:
+    windows_update_search_ok: true
     windows_updates_policy_count: 0
     windows_updates_all_count: not_available
     updates_found: 0
     windows_update_search:
       found_update_count: 0
       skipped: true
+      failed: false
   when: windows_patch_provider_effective | default('unknown') != 'wsus'
   changed_when: false
   tags:
@@ -28,11 +32,13 @@
 
 - name: Note unknown or unsupported OS skips policy update search
   ansible.builtin.set_fact:
+    windows_update_search_ok: true
     windows_updates_policy_count: 0
     updates_found: 0
     windows_update_search:
       found_update_count: 0
       skipped: true
+      failed: false
   when:
     - windows_patch_provider_effective | default('unknown') == 'wsus'
     - >
@@ -43,35 +49,68 @@
     - always
     - patching
 
-- name: Search pending updates for approved OS policy categories
-  ansible.windows.win_updates:
-    state: searched
-    category_names: "{{ windows_os_policy.categories }}"
-  register: windows_update_search_policy
-  changed_when: false
-  failed_when: false
+- name: Mark policy search pending until module success is verified
+  ansible.builtin.set_fact:
+    windows_update_search_ok: false
   when:
     - windows_patch_provider_effective | default('unknown') == 'wsus'
     - windows_os_policy_supported | default(false) | bool
     - (windows_os_policy.categories | default([]) | length) > 0
+  changed_when: false
   tags:
     - always
     - patching
 
-- name: Record policy-applicable update count
-  ansible.builtin.set_fact:
-    windows_updates_policy_count: "{{ windows_update_search_policy.found_update_count | default(0) | int }}"
-    updates_found: "{{ windows_update_search_policy.found_update_count | default(0) | int }}"
-    windows_update_search: "{{ windows_update_search_policy }}"
+- name: Search pending updates for approved OS policy categories
   when:
     - windows_patch_provider_effective | default('unknown') == 'wsus'
     - windows_os_policy_supported | default(false) | bool
     - (windows_os_policy.categories | default([]) | length) > 0
-  changed_when: false
-  tags:
-    - always
-    - patching
-    - report
+  block:
+    - name: Search pending updates for approved OS policy categories
+      ansible.windows.win_updates:
+        state: searched
+        category_names: "{{ windows_os_policy.categories }}"
+      register: windows_update_search_policy
+      changed_when: false
+      retries: "{{ windows_update_search_retries | default(2) | int }}"
+      delay: "{{ windows_update_search_retry_delay | default(30) | int }}"
+      until: >-
+        (windows_update_search_policy.found_update_count is defined)
+        and (not (windows_update_search_policy.failed | default(false) | bool))
+        and (not (windows_update_search_policy.unreachable | default(false) | bool))
+        and (not (windows_update_search_policy.skipped | default(false) | bool))
+      tags:
+        - always
+        - patching
+
+    - name: Record successful policy search
+      ansible.builtin.set_fact:
+        windows_update_search_ok: true
+        windows_updates_policy_count: "{{ windows_update_search_policy.found_update_count | int }}"
+        updates_found: "{{ windows_update_search_policy.found_update_count | int }}"
+        windows_update_search: "{{ windows_update_search_policy }}"
+      changed_when: false
+      tags:
+        - always
+        - patching
+        - report
+  rescue:
+    - name: Record failed policy search without coercing a zero count
+      ansible.builtin.set_fact:
+        windows_update_search_ok: false
+        windows_updates_policy_count: not_available
+        updates_found: not_available
+        windows_update_search:
+          failed: true
+          skipped: false
+          unreachable: "{{ ansible_failed_result.unreachable | default(false) | bool }}"
+          msg: "{{ ansible_failed_result.msg | default('Windows update search failed after retries') }}"
+      changed_when: false
+      tags:
+        - always
+        - patching
+        - report
 
 - name: Optionally search all update categories (off by default)
   ansible.windows.win_updates:
@@ -88,7 +127,17 @@
 
 - name: Record optional all-category update count
   ansible.builtin.set_fact:
-    windows_updates_all_count: "{{ windows_update_search_all.found_update_count | default(0) | int }}"
+    windows_updates_all_count: >-
+      {{
+        windows_update_search_all.found_update_count
+        if (
+          windows_update_search_all is defined
+          and not (windows_update_search_all is skipped)
+          and not (windows_update_search_all.failed | default(false) | bool)
+          and (windows_update_search_all.found_update_count is defined)
+        )
+        else 'not_available'
+      }}
   when:
     - windows_patch_provider_effective | default('unknown') == 'wsus'
     - windows_updates_search_all_categories | default(false) | bool
