@@ -1,11 +1,32 @@
 ---
-# ServiceNow change integration — OPTIONAL and OFF by default.
-# Safe default disabled: snow_enabled=false (no ServiceNow required).
+# ServiceNow change integration.
+# EXAMPLE URI tasks stay disabled until the shared ServiceNow role is published.
+# Do not put the unpublished collection name or version here.
 #
 # Auth and instance URL come from AAP credentials / injected environment
 # variables — never commit secrets or client-specific URLs to this repo.
 
+# Optional work-notes/attach. Administrator Job Template extra-var, not a survey.
 snow_enabled: false
+
+# Production CR policy. Administrator Job Template extra-var / RBAC, not a survey.
+# false = approved lab execution may remediate without ServiceNow.
+# true  = eligible remediation fails closed unless the shared role confirms validation.
+snow_require_change_validation: false
+
+# Shared role FQCN is supplied by Controller/EE when published. Empty = not delivered.
+snow_shared_role: ""
+
+# Keep EXAMPLE ansible.builtin.uri integrations off until the shared role exists.
+snow_example_integrations_enabled: false
+
+# Display change number (CHG...) versus sys_id. Survey change_ticket_id is the
+# display number. snow_change_id remains a legacy sys_id/number field.
+snow_change_number: ""
+snow_change_sys_id: ""
+
+# Optional inventory host_var for approved CI scope (CMDB sys_id).
+snow_ci_sys_id: ""
 
 # Prefer env SNOW_INSTANCE_URL when empty (set by AAP Credential injection).
 snow_instance_url: ""

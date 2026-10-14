@@ -10,15 +10,3 @@ spec:
     type: text
     default: ""
     required: false
-
-  - variable: snow_enabled
-    question_name: "Enable ServiceNow integration"
-    question_description: >-
-      Credentials remain AAP Credentials. Enable only when a change record
-      should receive work notes.
-    type: multiplechoice
-    choices:
-      - "false"
-      - "true"
-    default: "false"
-    required: true

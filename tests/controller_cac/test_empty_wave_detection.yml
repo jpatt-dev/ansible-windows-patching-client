@@ -1,0 +1,48 @@
+---
+# Empty approved-wave contract. Does not contact Windows hosts or AAP.
+#   ansible-playbook tests/controller_cac/test_empty_wave_detection.yml
+#
+# Full Patch uses hosts: windows_hosts. An approved Limit whose intersection
+# is empty never executes play tasks, so in-play asserts cannot fail the job.
+# Inventory/Controller acceptance must detect empty waves outside that play.
+
+- name: Empty approved Limit is an inventory/Controller concern
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    empty_wave_fixture: "{{ playbook_dir }}/fixtures/empty_wave.yml"
+  tasks:
+    - name: Load patch_common allowlist
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../../roles/patch_common/defaults/main.yml"
+
+    - name: Load synthetic empty-wave fixture
+      ansible.builtin.slurp:
+        src: "{{ empty_wave_fixture }}"
+      register: _empty_wave_slurp
+
+    - name: Parse fixture groups
+      ansible.builtin.set_fact:
+        _empty_wave: "{{ _empty_wave_slurp.content | b64decode | from_yaml }}"
+        _fixture_groups: "{{ (_empty_wave_slurp.content | b64decode | from_yaml).all.children.keys() | list }}"
+
+    - name: Assert fixture models an approved empty wave
+      ansible.builtin.assert:
+        that:
+          - "'windows_hosts' in _fixture_groups"
+          - "'windows_canary' in _fixture_groups"
+          - "'windows_wave_1' in _fixture_groups"
+          - "'windows_wave_1' in approved_patch_targets"
+          - "(_empty_wave.all.children.windows_wave_1.hosts | default({}) | length) == 0"
+          - "(_empty_wave.all.children.windows_hosts.hosts | default({}) | length) == 0"
+        fail_msg: Empty-wave fixture must be an approved Limit with zero hosts.
+
+    - name: Report that empty waves cannot be asserted inside Full Patch
+      ansible.builtin.debug:
+        msg: >-
+          A play with hosts=windows_hosts and Limit=windows_wave_1 against this
+          fixture matches zero hosts. Ansible skips every task, including
+          fail-closed asserts. Inventory or Controller acceptance must fail
+          empty approved Limit groups; do not treat a skipped Full Patch play
+          as a successful wave.

@@ -1,0 +1,504 @@
+---
+# Exemption tests. Does not contact Windows hosts or ServiceNow.
+#   ANSIBLE_ROLES_PATH=roles ansible-playbook tests/patch_cycle_exception/test_exemptions.yml
+
+- name: Register mock hosts for permanent and temporary exemption membership
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add permanently exempt Git inventory host
+      ansible.builtin.add_host:
+        name: win-perm
+        groups: mock_exempt_hosts
+        ansible_connection: local
+        patching_exception_enabled: true
+        patching_exception_reference: EXC-GIT-PERM
+        windows_connectivity_ok: true
+        patch_host_eligible: true
+
+    - name: Add survey-only temporary exemption host
+      ansible.builtin.add_host:
+        name: win-temp
+        groups: mock_exempt_hosts
+        ansible_connection: local
+        patching_exception_enabled: false
+        patching_exception_reference: ""
+        windows_connectivity_ok: true
+        patch_host_eligible: true
+
+    - name: Add host with both Git and survey exemptions
+      ansible.builtin.add_host:
+        name: win-both
+        groups: mock_exempt_hosts
+        ansible_connection: local
+        patching_exception_enabled: true
+        patching_exception_reference: EXC-GIT-BOTH
+        windows_connectivity_ok: true
+        patch_host_eligible: true
+
+    - name: Add host that is not in the temporary exemption list
+      ansible.builtin.add_host:
+        name: win-none
+        groups: mock_exempt_hosts
+        ansible_connection: local
+        patching_exception_enabled: false
+        patching_exception_reference: ""
+        windows_connectivity_ok: true
+        patch_host_eligible: true
+
+- name: Permanent, temporary, combined, and unlisted exemption resolution
+  hosts: mock_exempt_hosts
+  connection: local
+  gather_facts: false
+  vars:
+    patch_temporary_exempt_hosts: " win-temp , win-both "
+    patch_temporary_exemption_reference: EXC-SURVEY-1
+  tasks:
+    - name: Resolve exemptions
+      ansible.builtin.include_role:
+        name: patch_cycle_exception
+
+    - name: Skip Apply for exempt hosts without calling win_updates
+      ansible.builtin.include_role:
+        name: windows_patch
+        tasks_from: apply.yml
+      when: "patching_exception_active | bool"
+
+    - name: Derive reboot gate the same way reboot.yml does
+      ansible.builtin.set_fact:
+        windows_reboot_should_run: "{{ (not (patching_exception_active | default(false) | bool)) and true and true and true and true }}"
+      changed_when: false
+
+    - name: Build final report for exempt hosts
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+      when: "patching_exception_active | bool"
+
+    - name: Assert permanent Git exemption
+      ansible.builtin.assert:
+        that:
+          - "patching_exception_enabled | bool"
+          - "patching_exception_active | bool"
+          - "patching_exception_source == 'inventory'"
+          - "patching_exception_reference == 'EXC-GIT-PERM'"
+          - "patching_exception_reference_effective == 'EXC-GIT-PERM'"
+          - "windows_apply_status == 'excluded'"
+          - "not (patch_attempted | bool)"
+          - "not (windows_reboot_should_run | bool)"
+          - "patch_final_result.result == 'exempt'"
+          - "patch_final_result.patching_exception_source == 'inventory'"
+        fail_msg: Permanent Git exemption must skip install/reboot and keep the inventory reference.
+      when: inventory_hostname == 'win-perm'
+
+    - name: Assert temporary survey exemption
+      ansible.builtin.assert:
+        that:
+          - "not (patching_exception_enabled | bool)"
+          - "patching_exception_active | bool"
+          - "patching_exception_source == 'survey'"
+          - "patching_exception_reference == ''"
+          - "patching_exception_reference_effective == 'EXC-SURVEY-1'"
+          - "windows_apply_status == 'excluded'"
+          - "not (patch_attempted | bool)"
+          - "not (windows_reboot_should_run | bool)"
+          - "patch_final_result.result == 'exempt'"
+          - "patch_final_result.patching_exception_source == 'survey'"
+        fail_msg: Temporary survey exemption must skip install/reboot and use the survey reference.
+      when: inventory_hostname == 'win-temp'
+
+    - name: Assert combined exemption keeps the Git reference
+      ansible.builtin.assert:
+        that:
+          - "patching_exception_enabled | bool"
+          - "patching_exception_active | bool"
+          - "patching_exception_source == 'inventory'"
+          - "patching_exception_reference == 'EXC-GIT-BOTH'"
+          - "patching_exception_reference_effective == 'EXC-GIT-BOTH'"
+          - "windows_apply_status == 'excluded'"
+          - "not (windows_reboot_should_run | bool)"
+          - "patch_final_result.patching_exception_source == 'inventory'"
+        fail_msg: Temporary input must not disable a Git exemption or overwrite its reference.
+      when: inventory_hostname == 'win-both'
+
+    - name: Assert unlisted host is not temporarily exempt
+      ansible.builtin.assert:
+        that:
+          - "not (patching_exception_enabled | bool)"
+          - "not (patching_exception_active | bool)"
+          - "patching_exception_source == 'inventory'"
+          - "patching_exception_reference_effective == ''"
+          - "windows_reboot_should_run | bool"
+        fail_msg: Hosts not in the temporary list must remain eligible when Git exemption is off.
+      when: inventory_hostname == 'win-none'
+
+- name: Empty temporary exemption list is a no-op
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_temporary_exempt_hosts: ""
+    patch_temporary_exemption_reference: ""
+    patching_exception_enabled: false
+    patching_exception_active: false
+  tasks:
+    - name: Resolve empty temporary list
+      ansible.builtin.include_role:
+        name: patch_cycle_exception
+
+    - name: Assert empty list does not require a reference or exempt localhost
+      ansible.builtin.assert:
+        that:
+          - "(patch_temporary_exempt_host_list | default([]) | length) == 0"
+          - "not (patching_exception_active | bool)"
+          - "patching_exception_source == 'inventory'"
+        fail_msg: An empty temporary hostname list must mean no temporary exemptions.
+
+- name: Temporary exemption list without a reference fails closed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_temporary_exempt_hosts: localhost
+    patch_temporary_exemption_reference: "  "
+  tasks:
+    - name: Expect missing temporary reference to fail
+      block:
+        - name: Resolve list without a reference
+          ansible.builtin.include_role:
+            name: patch_cycle_exception
+
+        - name: Fail if a blank reference was accepted
+          ansible.builtin.fail:
+            msg: Nonempty temporary host list accepted a blank reference.
+      rescue:
+        - name: Record missing-reference rejection
+          ansible.builtin.set_fact:
+            _missing_temp_reference_rejected: true
+
+    - name: Assert missing temporary reference is rejected
+      ansible.builtin.assert:
+        that:
+          - "_missing_temp_reference_rejected | default(false) | bool"
+        fail_msg: A nonempty temporary host list must require a nonempty reference.
+
+- name: Unknown temporary hostname fails closed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_temporary_exempt_hosts: not-in-this-play
+    patch_temporary_exemption_reference: EXC-UNKNOWN
+  tasks:
+    - name: Reset leftover localhost exemption facts
+      ansible.builtin.set_fact:
+        patch_temporary_exemption_reference: EXC-UNKNOWN
+        patch_temporary_exempt_host_list: []
+
+    - name: Expect unknown hostname to fail
+      block:
+        - name: Resolve unknown hostname
+          ansible.builtin.include_role:
+            name: patch_cycle_exception
+
+        - name: Fail if unknown hostname was accepted
+          ansible.builtin.fail:
+            msg: Unknown temporary hostname was accepted.
+      rescue:
+        - name: Record unknown-host rejection
+          ansible.builtin.set_fact:
+            _unknown_temp_host_rejected: true
+            _unknown_temp_host_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Assert unknown hostname is rejected
+      ansible.builtin.assert:
+        that:
+          - "_unknown_temp_host_rejected | default(false) | bool"
+          - "'not in the current Limit population' in (_unknown_temp_host_msg | default(''))"
+        fail_msg: Temporary hostnames must exist in the current play population.
+
+- name: Wildcard temporary hostname fails closed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_temporary_exempt_hosts: "win-*"
+    patch_temporary_exemption_reference: EXC-WILDCARD
+  tasks:
+    - name: Reset leftover localhost exemption facts
+      ansible.builtin.set_fact:
+        patch_temporary_exemption_reference: EXC-WILDCARD
+        patch_temporary_exempt_host_list: []
+
+    - name: Expect wildcard hostname to fail
+      block:
+        - name: Resolve wildcard hostname
+          ansible.builtin.include_role:
+            name: patch_cycle_exception
+
+        - name: Fail if wildcard hostname was accepted
+          ansible.builtin.fail:
+            msg: Wildcard temporary hostname was accepted.
+      rescue:
+        - name: Record wildcard rejection
+          ansible.builtin.set_fact:
+            _wildcard_temp_host_rejected: true
+            _wildcard_temp_host_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Assert wildcard hostname is rejected
+      ansible.builtin.assert:
+        that:
+          - "_wildcard_temp_host_rejected | default(false) | bool"
+          - "'Wildcards, group patterns, and malformed entries' in (_wildcard_temp_host_msg | default(''))"
+        fail_msg: Wildcards and group patterns must be rejected in the temporary list.
+
+- name: Survey fields and reboot skip wiring
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Load Full Patch survey
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../surveys/windows_patch_workflow_survey.yml"
+      register: _full_survey_slurp
+
+    - name: Load reboot tasks
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../roles/windows_patch/tasks/reboot.yml"
+      register: _reboot_slurp
+
+    - name: Load Apply tasks
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../roles/windows_patch/tasks/apply.yml"
+      register: _apply_slurp
+
+    - name: Parse survey variable names
+      ansible.builtin.set_fact:
+        _full_survey_vars: "{{ (_full_survey_slurp.content | b64decode | from_yaml).spec | map(attribute='variable') | list }}"
+        _reboot_text: "{{ _reboot_slurp.content | b64decode }}"
+        _apply_text: "{{ _apply_slurp.content | b64decode }}"
+
+    - name: Assert survey and skip wiring
+      ansible.builtin.assert:
+        that:
+          - "'patch_temporary_exempt_hosts' in _full_survey_vars"
+          - "'patch_temporary_exemption_reference' in _full_survey_vars"
+          - "'patching_exception_reference' not in _full_survey_vars"
+          - "'not (patching_exception_active | default(false) | bool)' in _reboot_text"
+          - "'when: windows_reboot_should_run | bool' in _reboot_text"
+          - "'patch_cycle_exception' in _reboot_text"
+          - "'when: patching_exception_active | default(false) | bool' in _apply_text"
+          - "'windows_apply_status: excluded' in _apply_text"
+        fail_msg: Survey must use the two temporary fields, and Apply/reboot must skip on patching_exception_active.
+
+- name: Whitespace-only temporary list is a no-op
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_temporary_exempt_hosts: "   "
+    patch_temporary_exemption_reference: ""
+    patching_exception_enabled: false
+    patching_exception_active: false
+  tasks:
+    - name: Reset leftover localhost exemption facts
+      ansible.builtin.set_fact:
+        patch_temporary_exemption_reference: ""
+        patch_temporary_exempt_host_list: []
+        patch_lifecycle_failed: false
+
+    - name: Resolve whitespace-only temporary list
+      ansible.builtin.include_role:
+        name: patch_cycle_exception
+
+    - name: Assert whitespace-only list means no temporary exemptions
+      ansible.builtin.assert:
+        that:
+          - "(patch_temporary_exempt_host_list | default([]) | length) == 0"
+          - "not (patching_exception_active | bool)"
+          - "not (patch_lifecycle_failed | default(false) | bool)"
+        fail_msg: A whitespace-only temporary list must mean no temporary exemptions.
+
+- name: Empty CSV elements between commas fail closed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_temporary_exempt_hosts: "localhost,,"
+    patch_temporary_exemption_reference: EXC-EMPTY-CSV
+  tasks:
+    - name: Reset leftover localhost exemption facts
+      ansible.builtin.set_fact:
+        patch_temporary_exemption_reference: EXC-EMPTY-CSV
+        patch_temporary_exempt_host_list: []
+
+    - name: Expect empty CSV elements to fail
+      block:
+        - name: Resolve list with empty comma entries
+          ansible.builtin.include_role:
+            name: patch_cycle_exception
+
+        - name: Fail if empty CSV elements were accepted
+          ansible.builtin.fail:
+            msg: Empty CSV hostname entries were accepted.
+      rescue:
+        - name: Record empty-CSV rejection
+          ansible.builtin.set_fact:
+            _empty_csv_rejected: true
+            _empty_csv_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Assert empty CSV elements are rejected
+      ansible.builtin.assert:
+        that:
+          - "_empty_csv_rejected | default(false) | bool"
+          - "'empty entries between commas' in (_empty_csv_msg | default(''))"
+        fail_msg: Empty elements between commas must be rejected.
+
+- name: Seed hosts for exemption validation reporting
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add missing-reference reporting host
+      ansible.builtin.add_host:
+        name: win-missref
+        groups: mock_exempt_missref
+        ansible_connection: local
+        windows_connectivity_ok: true
+
+    - name: Add unknown-hostname reporting host
+      ansible.builtin.add_host:
+        name: win-unknown-pop
+        groups: mock_exempt_unknown
+        ansible_connection: local
+        windows_connectivity_ok: true
+
+    - name: Add malformed-list reporting hosts
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        groups: mock_exempt_malformed
+        ansible_connection: local
+        windows_connectivity_ok: true
+      loop:
+        - win-mal-a
+        - win-mal-b
+
+- name: Missing temporary reference still produces host and aggregate reports
+  hosts: mock_exempt_missref
+  connection: local
+  gather_facts: false
+  vars:
+    patch_require_explicit_limit: false
+    patch_enforce_scoped_target: false
+    patch_temporary_exempt_hosts: win-missref
+    patch_temporary_exemption_reference: ""
+  tasks:
+    - name: Resolve exemptions through patch_common lifecycle handling
+      ansible.builtin.include_role:
+        name: patch_common
+
+    - name: Build per-host result after exemption validation failure
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+
+    - name: Aggregate after missing-reference failure
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+
+    - name: Assert missing reference fails closed and still reports
+      ansible.builtin.assert:
+        that:
+          - "patch_lifecycle_failed | bool"
+          - "not (patch_host_eligible | default(true) | bool)"
+          - "patch_final_result.result == 'failed'"
+          - "not (patch_final_result.patched | bool)"
+          - "(patch_workflow_report.status_counts.failed | default(0) | int) == 1"
+        fail_msg: Invalid temporary exemption input must fail closed and still produce aggregate reporting.
+      run_once: true
+
+- name: Unknown temporary hostname still produces host and aggregate reports
+  hosts: mock_exempt_unknown
+  connection: local
+  gather_facts: false
+  vars:
+    patch_require_explicit_limit: false
+    patch_enforce_scoped_target: false
+    patch_temporary_exempt_hosts: not-in-this-play
+    patch_temporary_exemption_reference: EXC-UNKNOWN-REPORT
+  tasks:
+    - name: Reset leftover exemption facts
+      ansible.builtin.set_fact:
+        patch_temporary_exemption_reference: EXC-UNKNOWN-REPORT
+        patch_lifecycle_failed: false
+
+    - name: Resolve unknown hostname through patch_common
+      ansible.builtin.include_role:
+        name: patch_common
+
+    - name: Build per-host result after unknown-hostname failure
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+
+    - name: Aggregate after unknown-hostname failure
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+
+    - name: Assert unknown hostname fails closed and still reports
+      ansible.builtin.assert:
+        that:
+          - "patch_lifecycle_failed | bool"
+          - "'not in the current Limit population' in (patch_lifecycle_failed_message | default(''))"
+          - "patch_final_result.result == 'failed'"
+          - "not (patch_final_result.patched | bool)"
+          - "(patch_workflow_report.status_counts.failed | default(0) | int) == 1"
+        fail_msg: Unknown temporary hostnames must fail closed and still produce aggregate reporting.
+      run_once: true
+
+- name: Malformed temporary CSV still produces host and aggregate reports
+  hosts: mock_exempt_malformed
+  connection: local
+  gather_facts: false
+  vars:
+    patch_require_explicit_limit: false
+    patch_enforce_scoped_target: false
+    patch_temporary_exempt_hosts: "win-mal-a, ,win-mal-b"
+    patch_temporary_exemption_reference: EXC-MALFORMED
+  tasks:
+    - name: Reset leftover exemption facts
+      ansible.builtin.set_fact:
+        patch_temporary_exemption_reference: EXC-MALFORMED
+        patch_lifecycle_failed: false
+
+    - name: Resolve malformed CSV through patch_common
+      ansible.builtin.include_role:
+        name: patch_common
+
+    - name: Build per-host result after malformed-list failure
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+
+    - name: Aggregate after malformed-list failure
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+
+    - name: Assert malformed CSV fails closed, skips remediation, and still reports
+      ansible.builtin.assert:
+        that:
+          - "patch_lifecycle_failed | bool"
+          - "'empty entries between commas' in (patch_lifecycle_failed_message | default(''))"
+          - "patch_final_result.result == 'failed'"
+          - "not (patch_final_result.patched | bool)"
+          - "(patch_workflow_report.status_counts.failed | default(0) | int) == 2"
+          - "(patch_workflow_report.total_systems | default(0) | int) == 2"
+        fail_msg: Malformed temporary lists must fail closed before remediation and still produce aggregate reporting.
+      run_once: true

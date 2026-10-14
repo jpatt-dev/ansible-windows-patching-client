@@ -6,11 +6,11 @@ Red Hat Ansible Automation Platform (AAP) orchestrates Windows OS patching.
 WSUS remains the update source. AAP controls targeting, authorization, reboot
 handling, validation, and reporting.
 
-This repository contains the Windows patching automation. AAP Controller
-configuration-as-code is maintained separately. Projects, Inventories,
-Credentials, Job Templates, Surveys, Schedules, and RBAC are owned by that
-Controller repository. This repository documents the runtime variables and
-expectations that configuration must provide.
+This repository contains the Windows patching automation and its application
+Controller CaC (`controller_cac/`): the AAP Project and the Full Patch LAB,
+Full Patch PROD, and Precheck Job Templates. Surveys stay in `surveys/`.
+Inventories, credentials, organizations, and Execution Environments are
+referenced by name from central platform CaC and the inventory repository.
 
 Jobs do not install updates or reboot unless the operator authorizes those
 actions for the current run.
@@ -63,7 +63,8 @@ README.md
 docs/
 playbooks/windows/            # full_patch.yml and precheck.yml
 roles/
-surveys/                     # transitional; final survey ownership moves to Controller CaC
+surveys/                     # Full Patch and Precheck operator surveys
+controller_cac/              # Project and Job Template declarations
 execution-environments/
 ```
 
@@ -71,11 +72,12 @@ execution-environments/
 
 | Layer | Owns |
 | --- | --- |
-| Git | Stable automation logic and policy |
-| AAP Inventory | Infrastructure truth (hosts, groups, reboot policy) |
-| AAP Limit | Hosts targeted for the run |
-| Full Patch survey | Per-run operator authorization |
-| AAP Credential | Authentication and secrets |
+| Git | Playbooks, roles, allowlist, application Controller CaC |
+| AAP Inventory | Hosts, groups, reboot policy, permanent exemptions (inventory repo) |
+| AAP Limit | Wave / canary launch population |
+| Full Patch survey | Per-run operator authorization and temporary exemptions |
+| Job Template extra-vars | LAB/PROD CR and maintenance-window policy |
+| AAP Credential | Authentication and secrets (central CaC) |
 
 Normal patch operations do not require Git changes.
 
@@ -97,5 +99,7 @@ Normal patch operations do not require Git changes.
 ## Documentation
 
 - [AAP Controller setup](docs/aap-controller-setup.md)
+- [Controller CaC](controller_cac/README.md)
 - [Operations](docs/operations.md)
 - [Patch reporting](docs/patch-reporting.md)
+- [External inventory and ServiceNow contracts](docs/external-contracts.md)

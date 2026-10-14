@@ -1,0 +1,297 @@
+---
+# CR policy tests. Does not contact Windows or ServiceNow.
+#   ANSIBLE_ROLES_PATH=roles ansible-playbook tests/servicenow/test_change_validation_policy.yml
+
+- name: Lab policy does not require ServiceNow
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_phase: validate
+    snow_require_change_validation: false
+    snow_enabled: false
+    snow_shared_role: ""
+    change_ticket_id: ""
+  tasks:
+    - name: Include adapter with lab policy
+      ansible.builtin.include_role:
+        name: servicenow_change
+
+    - name: Assert lab remediation is not blocked
+      ansible.builtin.assert:
+        that:
+          - snow_change_validation_ok | bool
+          - snow_change_validation_reason == 'not_required'
+        fail_msg: Lab snow_require_change_validation=false must not require ServiceNow.
+
+- name: Production policy without a change number fails closed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_phase: validate
+    snow_require_change_validation: true
+    snow_shared_role: ""
+    change_ticket_id: ""
+    snow_change_number: ""
+    operator_authorize_patch_install: true
+    patching_exception_active: false
+  tasks:
+    - name: Expect missing display number to fail
+      block:
+        - name: Include adapter without a change number
+          ansible.builtin.include_role:
+            name: servicenow_change
+
+        - name: Fail if missing change number was accepted
+          ansible.builtin.fail:
+            msg: Production CR policy accepted an empty change number.
+      rescue:
+        - name: Record missing-number rejection
+          ansible.builtin.set_fact:
+            _missing_number_rejected: true
+
+    - name: Assert display number is required
+      ansible.builtin.assert:
+        that:
+          - _missing_number_rejected | default(false) | bool
+        fail_msg: Production CR policy must require a display change number.
+
+- name: Production policy without the shared role fails closed and still reports
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_phase: validate
+    snow_require_change_validation: true
+    snow_shared_role: ""
+    change_ticket_id: CHG001234
+    operator_authorize_patch_install: true
+    patching_exception_active: false
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+    windows_update_search:
+      found_update_count: 1
+  tasks:
+    - name: Expect absent shared role to skip remediation then report
+      block:
+        - name: Include adapter with production policy and no shared role
+          ansible.builtin.include_role:
+            name: servicenow_change
+
+        - name: Fail if absent shared role was treated as valid
+          ansible.builtin.fail:
+            msg: Production CR policy accepted an undelivered shared role.
+      rescue:
+        - name: Record lifecycle failure for reporting
+          ansible.builtin.set_fact:
+            patch_lifecycle_failed: true
+            _shared_role_rejected: true
+
+        - name: Build per-host final result after CR failure
+          ansible.builtin.include_role:
+            name: patch_report
+            tasks_from: final_build.yml
+
+    - name: Assert fail-closed CR still produces a failed host report
+      ansible.builtin.assert:
+        that:
+          - _shared_role_rejected | default(false) | bool
+          - patch_lifecycle_failed | bool
+          - patch_final_result.result == 'failed'
+          - not (patch_final_result.patched | bool)
+        fail_msg: CR validation failure must fail closed and still build patch_final_result.
+
+- name: Production policy treats unconfirmed shared-role output as unknown
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_phase: validate
+    snow_require_change_validation: true
+    snow_shared_role: patch_cycle_exception
+    change_ticket_id: CHG001234
+    snow_ci_sys_id: 0123456789abcdef0123456789abcdef
+    operator_authorize_patch_install: true
+    patching_exception_active: false
+  tasks:
+    - name: Clear any leftover confirmation fact from earlier plays
+      ansible.builtin.set_fact:
+        snow_change_validation_ok: false
+        snow_change_validation_reason: unknown
+
+    - name: Expect unknown confirmation to fail
+      block:
+        - name: Include adapter with a role that does not confirm CR validation
+          ansible.builtin.include_role:
+            name: servicenow_change
+
+        - name: Fail if unknown confirmation was accepted
+          ansible.builtin.fail:
+            msg: Unconfirmed shared-role output must not pass production CR policy.
+      rescue:
+        - name: Record unknown-result rejection
+          ansible.builtin.set_fact:
+            _unknown_confirmation_rejected: true
+
+    - name: Assert unknown is fail-closed
+      ansible.builtin.assert:
+        that:
+          - _unknown_confirmation_rejected | default(false) | bool
+        fail_msg: Missing snow_change_validation_ok must be treated as unknown.
+
+- name: Surveys do not expose ServiceNow policy toggles
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Load Full Patch survey
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../surveys/windows_patch_workflow_survey.yml"
+      register: _full_survey_slurp
+
+    - name: Load Precheck survey
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../surveys/windows_precheck_survey.yml"
+      register: _precheck_survey_slurp
+
+    - name: Parse survey variable names
+      ansible.builtin.set_fact:
+        _full_survey_vars: "{{ (_full_survey_slurp.content | b64decode | from_yaml).spec | map(attribute='variable') | list }}"
+        _precheck_survey_vars: "{{ (_precheck_survey_slurp.content | b64decode | from_yaml).spec | map(attribute='variable') | list }}"
+
+    - name: Assert ServiceNow policy is not surveyed
+      ansible.builtin.assert:
+        that:
+          - "'snow_enabled' not in _full_survey_vars"
+          - "'snow_require_change_validation' not in _full_survey_vars"
+          - "'snow_shared_role' not in _full_survey_vars"
+          - "'approved_patch_targets' not in _full_survey_vars"
+          - "'snow_enabled' not in _precheck_survey_vars"
+          - "'snow_require_change_validation' not in _precheck_survey_vars"
+        fail_msg: ServiceNow and allowlist policy must not appear on operator surveys.
+
+- name: Full Patch validates CR per eligible host rather than run_once
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Load Full Patch playbook
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../playbooks/windows/full_patch.yml"
+      register: _full_patch_slurp
+
+    - name: Assert validate task is not run_once
+      ansible.builtin.assert:
+        that:
+          - "'Validate ServiceNow change for this host before remediation' in (_full_patch_slurp.content | b64decode)"
+          - (_full_patch_slurp.content | b64decode) is not search('Validate ServiceNow change for this host before remediation[\\s\\S]{0,400}run_once:\\s*true')
+        fail_msg: CR validation must run per eligible host, not once per serial batch.
+
+- name: Exempt hosts do not require CR validation
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_phase: validate
+    snow_require_change_validation: true
+    snow_shared_role: ""
+    change_ticket_id: ""
+    operator_authorize_patch_install: true
+    patching_exception_active: true
+  tasks:
+    - name: Clear leftover CR confirmation
+      ansible.builtin.set_fact:
+        snow_change_validation_ok: false
+        snow_change_validation_reason: unknown
+        patching_exception_active: true
+        operator_authorize_patch_install: true
+
+    - name: Include adapter for an exempt host
+      ansible.builtin.include_role:
+        name: servicenow_change
+
+    - name: Assert exempt host skips CR validation
+      ansible.builtin.assert:
+        that:
+          - "not (snow_change_validation_required | bool)"
+          - "snow_change_validation_ok | bool"
+          - "snow_change_validation_reason == 'not_required'"
+        fail_msg: Exempt hosts must not require ServiceNow CR validation.
+
+- name: Read-only executions do not require CR validation
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_phase: validate
+    snow_require_change_validation: true
+    snow_shared_role: ""
+    change_ticket_id: ""
+    operator_authorize_patch_install: false
+    operator_allow_pre_patch_reboot: false
+    operator_allow_post_patch_reboot: false
+    patching_exception_active: false
+  tasks:
+    - name: Clear leftover CR confirmation
+      ansible.builtin.set_fact:
+        snow_change_validation_ok: false
+        snow_change_validation_reason: unknown
+        patching_exception_active: false
+        operator_authorize_patch_install: false
+        operator_allow_pre_patch_reboot: false
+        operator_allow_post_patch_reboot: false
+
+    - name: Include adapter with no disruptive authorization
+      ansible.builtin.include_role:
+        name: servicenow_change
+
+    - name: Assert read-only execution skips CR validation
+      ansible.builtin.assert:
+        that:
+          - "not (snow_change_validation_required | bool)"
+          - "snow_change_validation_ok | bool"
+          - "snow_change_validation_reason == 'not_required'"
+        fail_msg: Executions with no authorized install or reboot must not require CR validation.
+
+- name: Leftover CR success is cleared before shared-role validation
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_phase: validate
+    snow_require_change_validation: true
+    snow_shared_role: patch_cycle_exception
+    change_ticket_id: CHG001234
+    operator_authorize_patch_install: true
+    patching_exception_active: false
+  tasks:
+    - name: Seed a stale successful CR confirmation
+      ansible.builtin.set_fact:
+        snow_change_validation_ok: true
+        snow_change_validation_reason: leftover_success
+        patching_exception_active: false
+        operator_authorize_patch_install: true
+
+    - name: Expect stale confirmation to be ignored
+      block:
+        - name: Include adapter with a role that does not confirm CR validation
+          ansible.builtin.include_role:
+            name: servicenow_change
+
+        - name: Fail if leftover success authorized remediation
+          ansible.builtin.fail:
+            msg: Stale snow_change_validation_ok=true must not authorize remediation.
+      rescue:
+        - name: Record stale-confirmation rejection
+          ansible.builtin.set_fact:
+            _stale_confirmation_rejected: true
+
+    - name: Assert only a fresh shared-role success may authorize remediation
+      ansible.builtin.assert:
+        that:
+          - "_stale_confirmation_rejected | default(false) | bool"
+          - "not (snow_change_validation_ok | bool)"
+          - "snow_change_validation_reason == 'unknown'"
+        fail_msg: Adapter must reset CR confirmation to unknown before shared-role validation.

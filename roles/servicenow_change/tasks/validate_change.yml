@@ -1,7 +1,7 @@
 ---
-# EXAMPLE — validate change before remediation.
-# Replace table name, query fields, and allowed states with the client's
-# ServiceNow process before enabling snow_enabled in production.
+# EXAMPLE URI — disabled unless snow_example_integrations_enabled=true.
+# Do not use this as production CR validation. The shared ServiceNow role
+# will own lookup, approval, window, and CI-scope checks.
 
 - name: "EXAMPLE: Retrieve change request from ServiceNow"
   ansible.builtin.uri:

@@ -10,11 +10,33 @@ patch_require_explicit_limit: true
 # When true (apply/reboot), enforce approved_patch_targets allowlist.
 patch_enforce_scoped_target: false
 
-# Approved inventory groups for remediation (customize per client in group_vars).
+# Git-owned exact Limit allowlist. Inventory must create matching groups.
+# Naming contract: windows_canary, then windows_wave_N with N = 1..20
+# (no zero-padding; matches existing windows_wave_1). Exact string match only.
 # windows_hosts is the playbook boundary — not an approved patch wave.
+# Do not survey this list. Do not authorize waves with wildcards.
 approved_patch_targets:
   - windows_canary
   - windows_wave_1
+  - windows_wave_2
+  - windows_wave_3
+  - windows_wave_4
+  - windows_wave_5
+  - windows_wave_6
+  - windows_wave_7
+  - windows_wave_8
+  - windows_wave_9
+  - windows_wave_10
+  - windows_wave_11
+  - windows_wave_12
+  - windows_wave_13
+  - windows_wave_14
+  - windows_wave_15
+  - windows_wave_16
+  - windows_wave_17
+  - windows_wave_18
+  - windows_wave_19
+  - windows_wave_20
 
 # Dual emergency override (never expose in surveys). Both required to bypass allowlist / all.
 patch_allow_unapproved_target: false
@@ -36,7 +58,15 @@ maintenance_window_acknowledged: false
 # true  = require UTC start/end and acknowledgement for install/reboot
 # false = AAP schedules control timing; start/end/ack are not required
 patch_require_maintenance_window: true
+# Optional work-notes/attach adapter. Not surveyed. Default false so lab
+# remediation does not require ServiceNow. Production work notes are enabled
+# from administrator-owned Job Template extra-vars / RBAC.
 snow_enabled: false
+# Production CR policy. Not surveyed. Default false = approved lab execution
+# without ServiceNow. Production Job Templates must set this true. When true,
+# eligible remediation fails closed if the shared ServiceNow role is absent,
+# fails, or does not confirm validation.
+snow_require_change_validation: false
 
 # Always rejected for remediation unless dual emergency override succeeds.
 # Also rejected when patch_require_explicit_limit is true.

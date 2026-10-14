@@ -1,0 +1,89 @@
+---
+# Validate survey temporary exemptions against this play's Limit population.
+# Fail closed before remediation. Does not change Git inventory exemption vars.
+
+- name: Normalize temporary exemption input to a CSV string
+  ansible.builtin.set_fact:
+    _patch_temporary_exempt_csv: >-
+      {{
+        (patch_temporary_exempt_hosts | default('', true))
+        if (patch_temporary_exempt_hosts | default('', true) is string)
+        else (patch_temporary_exempt_hosts | default([], true) | join(','))
+      }}
+  changed_when: false
+  tags:
+    - always
+
+- name: Trim the temporary exemption CSV
+  ansible.builtin.set_fact:
+    _patch_temporary_exempt_csv_trimmed: "{{ _patch_temporary_exempt_csv | trim }}"
+  changed_when: false
+  tags:
+    - always
+
+- name: Treat a blank temporary exemption CSV as no hosts
+  ansible.builtin.set_fact:
+    patch_temporary_exempt_host_list: []
+  when: (_patch_temporary_exempt_csv_trimmed | length) == 0
+  changed_when: false
+  tags:
+    - always
+
+- name: Parse temporary exemption hostname list
+  ansible.builtin.set_fact:
+    patch_temporary_exempt_host_list: "{{ _patch_temporary_exempt_csv_trimmed.split(',') | map('trim') | list }}"
+  when: (_patch_temporary_exempt_csv_trimmed | length) > 0
+  changed_when: false
+  tags:
+    - always
+
+- name: Reject empty hostname entries between commas
+  ansible.builtin.assert:
+    that:
+      - (patch_temporary_exempt_host_list | select('equalto', '') | list | length) == 0
+    fail_msg: >-
+      patch_temporary_exempt_hosts contains empty entries between commas
+      ({{ _patch_temporary_exempt_csv_trimmed | default('') }}). Leave the field
+      blank for no temporary exemptions, or use comma-separated exact
+      inventory_hostname values with no empty elements.
+  when: (_patch_temporary_exempt_csv_trimmed | default('') | length) > 0
+  tags:
+    - always
+
+- name: Require a reference when temporary exemption hosts are listed
+  ansible.builtin.assert:
+    that:
+      - (patch_temporary_exemption_reference | default('') | string | trim | length) > 0
+    fail_msg: >-
+      patch_temporary_exempt_hosts is not empty but
+      patch_temporary_exemption_reference is blank. Provide an approved
+      exemption/request reference for this job, or clear the hostname list.
+  when: (patch_temporary_exempt_host_list | default([]) | length) > 0
+  tags:
+    - always
+
+- name: Reject wildcards, group patterns, and malformed temporary hostnames
+  ansible.builtin.assert:
+    that:
+      - (patch_temporary_exempt_host_list | select('match', '.*[\\*\\?\\[\\]@:/].*') | list | length) == 0
+      - ('all' not in (patch_temporary_exempt_host_list | map('lower') | list))
+      - ('*' not in patch_temporary_exempt_host_list)
+    fail_msg: >-
+      Temporary exemption hostnames must be exact inventory_hostname values
+      in the current Limit. Wildcards, group patterns, and malformed entries
+      are not allowed ({{ patch_temporary_exempt_host_list | join(', ') }}).
+  when: (patch_temporary_exempt_host_list | default([]) | length) > 0
+  tags:
+    - always
+
+- name: Reject temporary exemption hosts that are not in this play
+  ansible.builtin.assert:
+    that:
+      - (patch_temporary_exempt_host_list | difference(ansible_play_hosts_all | default([])) | length) == 0
+    fail_msg: >-
+      Temporary exemption host(s) are not in the current Limit population:
+      {{ patch_temporary_exempt_host_list | difference(ansible_play_hosts_all | default([])) | join(', ') }}.
+      Use exact inventory_hostname values from this job's Limit.
+  when: (patch_temporary_exempt_host_list | default([]) | length) > 0
+  tags:
+    - always

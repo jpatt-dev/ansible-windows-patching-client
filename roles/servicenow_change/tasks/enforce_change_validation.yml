@@ -1,0 +1,135 @@
+---
+# Production CR policy gate. Does not call ServiceNow REST APIs.
+# The shared role owns lookup, approval, window, and CI-scope validation.
+# This adapter only maps local identifiers and fails closed when the policy
+# requires validation and the shared implementation is absent, fails, or
+# does not set this repository's confirmation fact.
+
+- name: Resolve change number, sys_id, CI, and shared-role availability
+  ansible.builtin.set_fact:
+    snow_change_number_effective: >-
+      {{
+        (snow_change_number | default('') | trim)
+        if ((snow_change_number | default('') | trim | length) > 0)
+        else (change_ticket_id | default('') | trim)
+      }}
+    snow_change_sys_id_effective: >-
+      {{
+        (snow_change_sys_id | default('') | trim)
+        if ((snow_change_sys_id | default('') | trim | length) > 0)
+        else (snow_change_id | default('') | trim)
+      }}
+    snow_ci_sys_id_effective: "{{ snow_ci_sys_id | default('') | trim }}"
+    snow_shared_role_effective: "{{ snow_shared_role | default('') | trim }}"
+  changed_when: false
+  tags:
+    - always
+    - servicenow
+
+- name: Derive CR policy inputs for this host
+  ansible.builtin.set_fact:
+    _snow_policy_on: "{{ snow_require_change_validation | default(false) | bool }}"
+    _snow_host_exempt: "{{ patching_exception_active | default(false) | bool }}"
+    _snow_install_authorized: "{{ operator_authorize_patch_install | default(false) | bool }}"
+    _snow_pre_reboot_authorized: "{{ operator_allow_pre_patch_reboot | default(false) | bool }}"
+    _snow_post_reboot_authorized: "{{ operator_allow_post_patch_reboot | default(false) | bool }}"
+  changed_when: false
+  tags:
+    - always
+    - servicenow
+
+- name: Determine whether this host requires production CR validation
+  ansible.builtin.set_fact:
+    snow_change_validation_required: >-
+      {{
+        (_snow_policy_on | bool)
+        and (not (_snow_host_exempt | bool))
+        and (
+          (_snow_install_authorized | bool)
+          or (_snow_pre_reboot_authorized | bool)
+          or (_snow_post_reboot_authorized | bool)
+        )
+      }}
+  changed_when: false
+  tags:
+    - always
+    - servicenow
+
+- name: Skip mandatory CR validation when this host is not remediating
+  ansible.builtin.set_fact:
+    snow_change_validation_ok: true
+    snow_change_validation_reason: not_required
+  when: not (snow_change_validation_required | default(false) | bool)
+  changed_when: false
+  tags:
+    - always
+    - servicenow
+
+- name: Fail closed when production CR policy is enabled without a change number
+  ansible.builtin.assert:
+    that:
+      - (snow_change_number_effective | default('') | length) > 0
+    fail_msg: >-
+      snow_require_change_validation=true requires a ServiceNow display change
+      number (change_ticket_id or snow_change_number) before reboot or install
+      on {{ inventory_hostname }}. sys_id (snow_change_sys_id / snow_change_id)
+      is separate from the display number. Final reporting still runs after
+      this host's remediation is skipped.
+  when: snow_change_validation_required | default(false) | bool
+  tags:
+    - always
+    - servicenow
+
+- name: Fail closed when production CR policy is enabled and the shared role is not delivered
+  ansible.builtin.assert:
+    that:
+      - (snow_shared_role_effective | default('') | length) > 0
+    fail_msg: >-
+      snow_require_change_validation=true on {{ inventory_hostname }} but
+      snow_shared_role is empty. The shared ServiceNow Change role is not
+      published in this Execution Environment. Production remediation fails
+      closed (unknown validation). Lab Job Templates must leave
+      snow_require_change_validation=false. Final reporting still runs.
+  when: snow_change_validation_required | default(false) | bool
+  tags:
+    - always
+    - servicenow
+
+- name: Reset CR confirmation before required shared-role validation
+  ansible.builtin.set_fact:
+    snow_change_validation_ok: false
+    snow_change_validation_reason: unknown
+  when:
+    - snow_change_validation_required | default(false) | bool
+    - (snow_shared_role_effective | default('') | length) > 0
+  changed_when: false
+  tags:
+    - always
+    - servicenow
+
+- name: Include the shared ServiceNow Change role when it is configured
+  ansible.builtin.include_role:
+    name: "{{ snow_shared_role_effective }}"
+  when:
+    - snow_change_validation_required | default(false) | bool
+    - (snow_shared_role_effective | default('') | length) > 0
+  tags:
+    - always
+    - servicenow
+
+- name: Fail closed when the shared role does not confirm CR validation
+  ansible.builtin.assert:
+    that:
+      - snow_change_validation_ok | default(false) | bool
+    fail_msg: >-
+      ServiceNow change validation was not confirmed for {{ inventory_hostname }}
+      (change_number={{ snow_change_number_effective | default('') }},
+      ci={{ snow_ci_sys_id_effective | default('') }},
+      reason={{ snow_change_validation_reason | default('unknown') }}).
+      Absent, failed, or unknown results fail closed. Final reporting still runs.
+  when:
+    - snow_change_validation_required | default(false) | bool
+    - (snow_shared_role_effective | default('') | length) > 0
+  tags:
+    - always
+    - servicenow

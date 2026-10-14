@@ -1,8 +1,13 @@
 ---
-# Temporary host exclusion from patch remediation.
-# Inventory-derived: patching_exception_enabled and/or patching_exception_active.
+# Permanent exemptions: Git inventory (patching_exception_enabled preferred).
+# Temporary exemptions: Full Patch survey (this job only).
+# patching_exception_active is the resolved effective result.
 
 patching_exception_enabled: false
 patching_exception_active: false
 patching_exception_reference: ""
 patching_exception_source: inventory
+
+# Survey-only, current job. Empty hostname list means no temporary exemptions.
+patch_temporary_exempt_hosts: ""
+patch_temporary_exemption_reference: ""

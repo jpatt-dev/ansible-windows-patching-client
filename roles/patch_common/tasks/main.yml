@@ -11,7 +11,6 @@
   ansible.builtin.set_fact:
     patch_ansible_limit: "{{ ansible_limit | default('') | trim }}"
     patch_target_scope: "{{ ansible_limit | default('') | trim }}"
-  run_once: true
   changed_when: false
   tags:
     - always
@@ -36,16 +35,38 @@
   tags:
     - always
 
-- name: Resolve temporary patch-cycle host exceptions for this run
-  ansible.builtin.include_role:
-    name: patch_cycle_exception
+- name: Set patch_wave_name from the validated AAP Limit
+  ansible.builtin.include_tasks: set_wave_name.yml
+
+- name: Resolve Git permanent and survey temporary patch-cycle exceptions
   tags:
     - always
+  block:
+    - name: Include patch_cycle_exception
+      ansible.builtin.include_role:
+        name: patch_cycle_exception
+  rescue:
+    - name: Record exemption validation failure without ending the host
+      ansible.builtin.set_fact:
+        patch_lifecycle_failed: true
+        patch_host_eligible: false
+        patch_lifecycle_failed_message: >-
+          {{ ansible_failed_result.msg | default('Patch-cycle exemption validation failed') }}
+      when: ansible_failed_result is defined
+      changed_when: false
+
+    - name: Report exemption validation failure for later host reporting
+      ansible.builtin.debug:
+        msg: >-
+          Exemption validation failed on {{ inventory_hostname }}.
+          Remediation will not run. Final reporting will use preserved
+          phase history only ({{ patch_lifecycle_failed_message | default('') }}).
+      changed_when: false
 
 - name: Set orchestration guidance facts
   ansible.builtin.set_fact:
     patch_orchestration_guidance:
-      patch_wave_name: "{{ patch_wave_name | default('unspecified') }}"
+      patch_wave_name: "{{ patch_wave_name | default(patch_target_scope | default('unspecified')) }}"
       patch_serial: "{{ patch_serial | default(1) }}"
       ansible_limit: "{{ patch_ansible_limit | default('') }}"
       patch_target_scope: "{{ patch_target_scope }}"

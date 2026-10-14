@@ -1,0 +1,12 @@
+---
+# Synthetic inventory for empty-wave contract tests only.
+# Not a client host inventory. No production hostnames.
+
+all:
+  children:
+    windows_hosts:
+      hosts: {}
+    windows_canary:
+      hosts: {}
+    windows_wave_1:
+      hosts: {}

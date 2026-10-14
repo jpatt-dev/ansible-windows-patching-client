@@ -1,0 +1,46 @@
+---
+# Client-specific AAP object names. Replace REPLACE_ME_* before dispatch.
+# This file does not create organizations, inventories, credentials, or EEs.
+
+controller_organization: REPLACE_ME_ORGANIZATION
+controller_project_name: Windows Patching
+controller_project_scm_url: REPLACE_ME_PROJECT_SCM_URL
+controller_project_scm_branch: REPLACE_ME_SCM_BRANCH
+controller_scm_credential_name: REPLACE_ME_SCM_CREDENTIAL
+controller_execution_environment: REPLACE_ME_EXECUTION_ENVIRONMENT
+controller_inventory_lab: REPLACE_ME_INVENTORY_LAB
+controller_inventory_prod: REPLACE_ME_INVENTORY_PROD
+controller_machine_credential_name: REPLACE_ME_MACHINE_CREDENTIAL
+# Attach on PROD only after the shared ServiceNow role and credential exist.
+controller_servicenow_credential_name: REPLACE_ME_SERVICENOW_CREDENTIAL
+
+# Size above ceil(host_count / patch_serial) * per_host_worst_case + buffer.
+controller_job_timeout_seconds: 86400
+controller_job_forks: 10
+
+# Dispatch is blocked until the client names a verified AAP 2.7 Controller
+# collection (see controller_cac/README.md). Do not assume a Galaxy FQCN.
+controller_cac_collection: ""
+controller_cac_dispatch_enabled: false
+
+# Environments with Job Templates today. DEV/UAT stay reserved; copy LAB or
+# PROD extra_vars when those inventories exist. Do not auto-create templates.
+controller_cac_managed_environments:
+  - LAB
+  - PROD
+controller_cac_reserved_environments:
+  - DEV
+  - UAT
+
+# Must never appear on surveys or ask_variables_on_launch.
+controller_cac_protected_variables:
+  - snow_require_change_validation
+  - snow_enabled
+  - snow_shared_role
+  - snow_attach_report
+  - patch_require_maintenance_window
+  - approved_patch_targets
+  - patch_allow_unapproved_target
+  - patch_emergency_acknowledgement
+  - patch_enforce_scoped_target
+  - patch_require_explicit_limit

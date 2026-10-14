@@ -1,0 +1,42 @@
+---
+# Apply Windows patching Controller objects after a client-approved collection
+# is verified. This playbook does not call an unverified Controller API.
+#
+#   ansible-playbook controller_cac/playbooks/configure_controller.yml
+#
+# Expected until controller_cac_collection and controller_cac_dispatch_enabled
+# are set: fail closed. Declarative YAML in controller_cac/vars/ remains the
+# source of truth and is covered by tests/controller_cac/.
+
+- name: Apply Windows patching Controller CaC
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../vars/settings.yml
+    - ../vars/projects.yml
+    - ../vars/job_templates.yml
+  tasks:
+    - name: Show intended Controller objects
+      ansible.builtin.debug:
+        msg:
+          - "project: {{ (controller_projects | map(attribute='name') | list) | join(', ') }}"
+          - "job_templates: {{ (controller_job_templates | map(attribute='name') | list) | join(', ') }}"
+          - "collection: {{ controller_cac_collection | default('') }}"
+          - "dispatch_enabled: {{ controller_cac_dispatch_enabled | default(false) }}"
+
+    - name: Block Controller dispatch until an approved collection is verified
+      ansible.builtin.assert:
+        that:
+          - controller_cac_dispatch_enabled | default(false) | bool
+          - (controller_cac_collection | default('') | trim | length) > 0
+        fail_msg: >-
+          Controller CaC dispatch is blocked. This repository does not declare
+          infra.controller_configuration, ansible.controller, or awx.awx in
+          requirements.yml or the Windows patch EE. Those collections were not
+          verified against this client's AAP 2.7 deployment. Keep
+          controller_cac/vars as the declarative source. Set
+          controller_cac_collection to the client-approved FQCN and
+          controller_cac_dispatch_enabled=true only after that collection is
+          present in the Controller configuration Execution Environment.
+          Do not invent a Controller API wrapper here.

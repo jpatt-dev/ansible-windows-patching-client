@@ -1,21 +1,51 @@
 ---
-# Resolve inventory-derived host exceptions for this job.
-# Inventory-derived truth: patching_exception_enabled / patching_exception_active.
-# Full Patch reporting uses those facts, not a surveyed host list.
+# Resolve permanent (Git inventory) and temporary (this-job survey) exemptions.
+# Permanent reference and enabled flag are never overwritten by the survey.
 
-- name: Normalize patch exception reference
+- name: Normalize exemption survey and inventory strings
   ansible.builtin.set_fact:
     patching_exception_reference: "{{ patching_exception_reference | default('') | string | trim }}"
-    patching_exception_source: "{{ patching_exception_source | default('inventory') }}"
+    patch_temporary_exemption_reference: "{{ patch_temporary_exemption_reference | default('') | string | trim }}"
   changed_when: false
+  tags:
+    - always
+
+- name: Validate temporary exemption survey input
+  ansible.builtin.include_tasks: validate_temporary_exemptions.yml
   tags:
     - always
 
 - name: Derive per-host patch-cycle exception membership
   ansible.builtin.set_fact:
-    patching_exception_active: "{{ (patching_exception_enabled | default(false) | bool) or (patching_exception_active | default(false) | bool) }}"
-    patching_exception_reference_effective: "{{ patching_exception_reference | default('') if ((patching_exception_enabled | default(false) | bool) or (patching_exception_active | default(false) | bool)) else '' }}"
-    patching_exception_source: "{{ patching_exception_source | default('inventory') }}"
+    _patch_exception_permanent: "{{ (patching_exception_enabled | default(false) | bool) or (patching_exception_active | default(false) | bool) }}"
+    _patch_exception_temporary: "{{ inventory_hostname in (patch_temporary_exempt_host_list | default([]) | list) }}"
+  changed_when: false
+  tags:
+    - always
+
+- name: Set effective exemption without disabling a Git permanent exemption
+  ansible.builtin.set_fact:
+    patching_exception_active: "{{ (_patch_exception_permanent | bool) or (_patch_exception_temporary | bool) }}"
+    patching_exception_reference_effective: >-
+      {{
+        patching_exception_reference
+        if (_patch_exception_permanent | bool)
+        else (
+          patch_temporary_exemption_reference
+          if (_patch_exception_temporary | bool)
+          else ''
+        )
+      }}
+    patching_exception_source: >-
+      {{
+        'inventory'
+        if (_patch_exception_permanent | bool)
+        else (
+          'survey'
+          if (_patch_exception_temporary | bool)
+          else 'inventory'
+        )
+      }}
   changed_when: false
   tags:
     - always
@@ -28,6 +58,8 @@
       - "patching_exception_reference_effective: {{ patching_exception_reference_effective | default('') }}"
       - "patching_exception_enabled: {{ patching_exception_enabled | default(false) }}"
       - "patching_exception_source: {{ patching_exception_source | default('inventory') }}"
+      - "patch_exception_permanent: {{ _patch_exception_permanent | default(false) }}"
+      - "patch_exception_temporary: {{ _patch_exception_temporary | default(false) }}"
   changed_when: false
   tags:
     - always

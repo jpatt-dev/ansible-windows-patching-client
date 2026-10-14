@@ -1,0 +1,10 @@
+---
+# patch_wave_name is the validated AAP Limit. Not an inventory or survey var.
+
+- name: Set patch_wave_name from the validated AAP Limit
+  ansible.builtin.set_fact:
+    patch_wave_name: "{{ patch_target_scope }}"
+  changed_when: false
+  tags:
+    - always
+    - report

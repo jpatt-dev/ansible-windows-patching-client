@@ -56,8 +56,10 @@ failed, or unverified search evidence is `unknown`, not `already_compliant`.
 installation counts stay `not_available` and are never reported as `0`. It is
 not a synonym of `success`.
 
-Exemption uses inventory `patching_exception_enabled` and/or
-`patching_exception_active`. It does not use a surveyed host list.
+Exemption uses inventory `patching_exception_enabled` (Git permanent input)
+and the resolved `patching_exception_active` (permanent **or** this-job
+temporary survey membership). `patching_exception_source` records `inventory`
+or `survey`. CSV columns and the `exempt` result vocabulary are unchanged.
 
 ### Canonical `result` values
 
@@ -65,7 +67,7 @@ Exemption uses inventory `patching_exception_enabled` and/or
 | --- | --- |
 | `success` | This execution installed updates, postcheck evidence is present and healthy, no applicable updates remain, and no reboot is pending |
 | `already_compliant` | No applicable updates remain and required final checks are satisfactory |
-| `exempt` | Inventory exemption prevented remediation |
+| `exempt` | Permanent Git or this-job survey exemption prevented remediation |
 | `blocked` | Precheck or safety policy prevented remediation |
 | `failed` | A required patch/reboot/remediation operation failed |
 | `degraded` | Follow-up is required. May occur when updates were installed (`patched: true`) or when no updates were installed (`patched: false`), including an unresolved pending reboot |
@@ -228,4 +230,8 @@ AAP `set_stats` publishes:
 - convenience `patch_workflow_report_csv`
 
 Files under `/tmp/aap-patch-reports` inside the Execution Environment are
-ephemeral convenience exports.
+ephemeral convenience exports. Same-job Play 2 attach uses `patch_report_files`
+from that directory. A later AAP workflow node will not see those paths; keep
+attach in this job. The unpublished shared ServiceNow role should consume
+`patch_workflow_report` / `set_stats` plus those same-job paths. `patch_wave`
+in the report is the validated AAP Limit.

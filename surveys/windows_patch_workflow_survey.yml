@@ -1,7 +1,8 @@
 ---
 # AAP survey for Windows - Full Patch (playbooks/windows/full_patch.yml).
 # Per-run operator decisions only. Do not survey WSUS URLs or provider.
-# Targeting is AAP Limit (required). Do not survey host lists or emergency bypass.
+# Targeting is AAP Limit (required). Do not survey emergency bypass.
+# Temporary exemptions may list exact inventory hostnames for this job only.
 #
 # Confirm survey-variable and Limit propagation during deployment acceptance
 # testing.
@@ -71,21 +72,20 @@ spec:
     default: "false"
     required: true
 
-  - variable: patching_exception_reference
-    question_name: "Patch Exception Reference"
+  - variable: patch_temporary_exempt_hosts
+    question_name: "Temporary exempt hosts"
     question_description: >-
-      Optional approved exception/request reference recorded when inventory
-      exemption is active. Example: EXC-12345.
-    type: text
+      Comma-separated exact inventory hostnames for this job only. Leave empty
+      for no temporary exemptions. Permanent Git inventory exemptions still apply.
+    type: textarea
     default: ""
     required: false
 
-  - variable: snow_enabled
-    question_name: "Enable ServiceNow integration"
-    question_description: Credentials remain AAP Credentials — never surveyed.
-    type: multiplechoice
-    choices:
-      - "false"
-      - "true"
-    default: "false"
-    required: true
+  - variable: patch_temporary_exemption_reference
+    question_name: "Temporary exemption reference"
+    question_description: >-
+      Required when temporary exempt hosts are listed. Example: EXC-12345.
+      Does not change a host's permanent Git exemption or reference.
+    type: text
+    default: ""
+    required: false

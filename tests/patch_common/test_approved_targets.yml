@@ -1,0 +1,139 @@
+---
+# Allowlist and Limit-to-wave tests. Does not contact Windows hosts.
+#   ANSIBLE_ROLES_PATH=roles ansible-playbook tests/patch_common/test_approved_targets.yml
+
+- name: Approved wave 20 is an exact allowlist match
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_target_scope: windows_wave_20
+    patch_allow_unapproved_target: false
+    patch_emergency_acknowledgement: ""
+  tasks:
+    - name: Include approved-target validation
+      ansible.builtin.include_role:
+        name: patch_common
+        tasks_from: validate_approved_target.yml
+
+    - name: Map Limit to patch_wave_name
+      ansible.builtin.include_role:
+        name: patch_common
+        tasks_from: set_wave_name.yml
+
+    - name: Assert wave 20 is allowed and names the report wave
+      ansible.builtin.assert:
+        that:
+          - patch_wave_name == 'windows_wave_20'
+        fail_msg: windows_wave_20 must be an exact approved Limit and report wave name.
+
+- name: Unapproved wave 21 is rejected
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_target_scope: windows_wave_21
+    patch_allow_unapproved_target: false
+    patch_emergency_acknowledgement: ""
+  tasks:
+    - name: Expect unapproved Limit to fail
+      block:
+        - name: Include approved-target validation for wave 21
+          ansible.builtin.include_role:
+            name: patch_common
+            tasks_from: validate_approved_target.yml
+
+        - name: Fail if wave 21 was accepted
+          ansible.builtin.fail:
+            msg: windows_wave_21 must not match the allowlist.
+      rescue:
+        - name: Record that wave 21 was rejected
+          ansible.builtin.set_fact:
+            _wave_21_rejected: true
+
+    - name: Assert exact-match rejection
+      ansible.builtin.assert:
+        that:
+          - _wave_21_rejected | default(false) | bool
+        fail_msg: Unapproved Limit must fail without wildcard matching.
+
+- name: windows_hosts is not an approved remediation Limit
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_target_scope: windows_hosts
+    patch_allow_unapproved_target: false
+    patch_emergency_acknowledgement: ""
+  tasks:
+    - name: Expect windows_hosts Limit to fail
+      block:
+        - name: Include approved-target validation for windows_hosts
+          ansible.builtin.include_role:
+            name: patch_common
+            tasks_from: validate_approved_target.yml
+
+        - name: Fail if windows_hosts was accepted
+          ansible.builtin.fail:
+            msg: windows_hosts must not be an approved wave.
+      rescue:
+        - name: Record that windows_hosts was rejected
+          ansible.builtin.set_fact:
+            _hosts_boundary_rejected: true
+
+    - name: Assert playbook boundary is not a wave
+      ansible.builtin.assert:
+        that:
+          - _hosts_boundary_rejected | default(false) | bool
+        fail_msg: windows_hosts must remain outside approved_patch_targets.
+
+- name: Dual emergency override is extra-var only
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_target_scope: windows_wave_21
+    patch_allow_unapproved_target: true
+    patch_emergency_acknowledgement: "I understand this may patch unapproved hosts"
+  tasks:
+    - name: Include approved-target validation with both override extra-vars
+      ansible.builtin.include_role:
+        name: patch_common
+        tasks_from: validate_approved_target.yml
+
+    - name: Assert override required both extra-vars
+      ansible.builtin.assert:
+        that:
+          - patch_emergency_override_ok | bool
+        fail_msg: Emergency override must require both extra-vars.
+
+- name: Wave name from Limit reaches final reporting
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_target_scope: windows_wave_7
+    change_ticket_id: CHG001
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+    windows_update_search:
+      found_update_count: 0
+  tasks:
+    - name: Map Limit to patch_wave_name
+      ansible.builtin.include_role:
+        name: patch_common
+        tasks_from: set_wave_name.yml
+
+    - name: Build per-host final result
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+
+    - name: Assert report wave equals Limit
+      ansible.builtin.assert:
+        that:
+          - patch_wave_name == 'windows_wave_7'
+          - patch_final_result.patch_wave_name == 'windows_wave_7'
+          - patch_final_result.patch_wave == 'windows_wave_7'
+        fail_msg: Final report did not receive patch_wave_name from the Limit.

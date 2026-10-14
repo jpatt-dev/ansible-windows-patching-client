@@ -61,15 +61,16 @@ configure WSUS servers.
 
 ## Variable Ownership
 
-Controller objects that supply Inventory, Limit, Survey, and Credential values
-are defined in the separate Controller configuration-as-code repository.
+This repository owns the AAP Project and Job Templates in `controller_cac/`.
+Inventories and credentials remain external references.
 
 | Layer | Owns |
 | --- | --- |
-| Git | Playbooks, roles, safety policy, approved target list |
-| Inventory | Hosts, groups, `patching_reboot_allowed`, reboot mode, optional `patch_location`, optional high-latency WinRM group_vars |
-| Limit | Patch wave / launch population |
-| Survey | Per-run authorization, maintenance window, temporary exceptions |
+| Git | Playbooks, roles, safety policy, approved target list, application CaC |
+| Inventory | Hosts, groups, reboot policy, exceptions, optional `patch_location`, optional `snow_ci_sys_id` / `patch_environment`, WinRM |
+| Limit | Patch wave / launch population (`patch_wave_name`) |
+| Survey | Per-run authorization, maintenance window, change display number, temporary exemptions |
+| Job Template extra-vars / RBAC | `snow_require_change_validation`, `snow_enabled`, `snow_shared_role`, `patch_require_maintenance_window` |
 | Credential | Windows and external-service secrets |
 
 ## Targeting
@@ -80,8 +81,14 @@ All Windows patch jobs require an explicit AAP Limit. Blank Limit, `all`, and
 `windows_hosts` is only the playbook `hosts:` boundary.
 
 Full Patch also requires the Limit to be in `approved_patch_targets`
-(`windows_canary`, `windows_wave_1`). `windows_hosts` is not an approved wave.
-Standalone Precheck does not enforce that approved-target list.
+(`windows_canary`, `windows_wave_1` … `windows_wave_20`, exact names).
+`windows_hosts` is not an approved wave. Standalone Precheck does not enforce
+that approved-target list. `patch_wave_name` is set from that Limit.
+
+An approved Limit that intersects **zero** hosts never runs play tasks
+(including fail-closed asserts). Empty waves must be rejected by inventory or
+Controller acceptance, not by assertions inside Full Patch. See
+[controller_cac/README.md](../controller_cac/README.md).
 
 ## WSUS Validation
 
@@ -144,15 +151,29 @@ sets `manual_followup_required`, and does not fail solely for that reason.
 
 ## Temporary Patch Exceptions
 
-Exemption is inventory-derived. Set per host or group:
+Permanent exemptions live in the Git inventory repository. Set per host or group:
 
-- `patching_exception_enabled` — true when the host is exempt
-- `patching_exception_active` — equivalent inventory truth used by reporting and remediation gates
+- `patching_exception_enabled` — Git input when the host is permanently exempt
+- `patching_exception_active` — effective resolved result after this job runs
+- `patching_exception_reference` — permanent exemption/request reference
 
-The exempt host is still inspected and reported. Remediation and reboot are skipped
-(`patched: false`, `exempt: true`, `result: exempt`).
+Temporary exemptions apply to the current Full Patch job only. Survey:
 
-Do not use a surveyed host list for Full Patch reporting.
+- `patch_temporary_exempt_hosts` — comma-separated exact `inventory_hostname` values in this Limit. Empty means none.
+- `patch_temporary_exemption_reference` — required when that list is nonempty
+
+Effective exemption is the logical OR of the permanent Git exemption and
+this-job survey membership. A temporary list never disables a permanent Git
+exemption or overwrites its permanent reference. `patching_exception_source`
+is `inventory` when the Git exemption applies, otherwise `survey` for a
+temporary-only exemption.
+
+Unknown hosts, wildcards, group patterns, and empty CSV entries between commas
+fail closed before remediation. Final reporting still runs. An entirely blank
+list means no temporary exemptions. The exempt host is still inspected and
+reported.
+Install and pre/post reboot are skipped (`patched: false`, `exempt: true`,
+`result: exempt`).
 
 ## Maintenance Window
 
@@ -197,6 +218,7 @@ wall-clock time because Play 1 processes fewer hosts at once. See
 | Temporary exception | Host reported as `exempt`; `patched: false`; install and reboot skipped. Does not fail the job solely because it is exempt. |
 | Client PowerShell precheck failed (when enabled) | Standalone Precheck fails. Full Patch marks the host ineligible. Remediating Apply fails. |
 | Unsupported OS policy | Remediating Apply fails |
+| Production CR validation required but shared ServiceNow role absent, failed, or unknown | Eligible host skips remaining remediation. Final JSON/CSV/Markdown still run. The Full Patch job then fails. Lab templates with `snow_require_change_validation=false` do not require ServiceNow. |
 
 ## PowerShell Client Precheck
 
@@ -213,13 +235,16 @@ When enabled, malformed output, execution failure, `critical_failed=true`, or
 
 ## ServiceNow
 
-Integration is optional. `snow_enabled` defaults to `false`. The ServiceNow
-role is an adapter boundary. The client-specific ServiceNow contract is
-implemented separately.
+See [external-contracts.md](external-contracts.md). EXAMPLE URI tasks stay
+disabled. `snow_enabled` and `snow_require_change_validation` are
+administrator Job Template extra-vars, not survey fields.
 
-When enabled, Full Patch validates the change once before eligible remediation
-and updates work notes after each host's final result. It does not emit
-per-phase ServiceNow chatter.
+Lab Job Template extra-vars: `snow_require_change_validation=false` so
+authorized testing can run without the unpublished shared role. Production
+must set it `true` with `snow_shared_role` empty until that role is in the
+EE; remediating hosts then fail closed. Eligible hosts validate **per host**
+(CI scope) before pre-reboot. Failures skip that host's remaining
+remediation, keep final reporting, then fail the job.
 
 ## SMTP Reporting
 

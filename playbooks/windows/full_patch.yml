@@ -39,6 +39,7 @@
       vars:
         patch_phase: precheck
         windows_precheck_fail_on_blocked: false
+      when: not (patch_lifecycle_failed | default(false) | bool)
 
     - name: Preserve precheck phase result
       ansible.builtin.set_fact:
@@ -48,18 +49,21 @@
 
     - name: Determine host eligibility from precheck status
       ansible.builtin.set_fact:
-        patch_host_eligible: "{{ (precheck_status | default('missing')) in ['passed', 'warning'] }}"
+        patch_host_eligible: >-
+          {{
+            (not (patch_lifecycle_failed | default(false) | bool))
+            and ((precheck_status | default('missing')) in ['passed', 'warning'])
+          }}
       changed_when: false
 
     - name: Continue patch lifecycle for eligible hosts
       when: patch_host_eligible | bool
       block:
-        - name: Validate ServiceNow change before remediation
+        - name: Validate ServiceNow change for this host before remediation
           ansible.builtin.include_role:
             name: servicenow_change
           vars:
             snow_phase: validate
-          run_once: true
           tags:
             - always
             - servicenow

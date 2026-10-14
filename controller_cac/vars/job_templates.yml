@@ -1,0 +1,97 @@
+---
+# Exactly three Job Templates. Waves are selected with AAP Limit, not extra JTs.
+# Surveys are loaded from surveys/*.yml at dispatch/test time (not copied here).
+
+controller_job_templates:
+  - name: Windows Full Patch LAB
+    environment: LAB
+    job_type: run
+    inventory: "{{ controller_inventory_lab }}"
+    project: "{{ controller_project_name }}"
+    playbook: playbooks/windows/full_patch.yml
+    execution_environment: "{{ controller_execution_environment }}"
+    credentials:
+      - "{{ controller_machine_credential_name }}"
+    survey_enabled: true
+    survey_file: surveys/windows_patch_workflow_survey.yml
+    ask_limit_on_launch: true
+    ask_variables_on_launch: false
+    ask_inventory_on_launch: false
+    ask_credential_on_launch: false
+    ask_scm_branch_on_launch: false
+    ask_tags_on_launch: false
+    ask_skip_tags_on_launch: false
+    ask_verbosity_on_launch: false
+    allow_simultaneous: false
+    job_slice_count: 1
+    forks: "{{ controller_job_forks | int }}"
+    timeout: "{{ controller_job_timeout_seconds | int }}"
+    verbosity: 0
+    extra_vars:
+      snow_require_change_validation: false
+      snow_enabled: false
+      snow_shared_role: ""
+      snow_attach_report: false
+      patch_require_maintenance_window: false
+
+  - name: Windows Full Patch PROD
+    environment: PROD
+    job_type: run
+    inventory: "{{ controller_inventory_prod }}"
+    project: "{{ controller_project_name }}"
+    playbook: playbooks/windows/full_patch.yml
+    execution_environment: "{{ controller_execution_environment }}"
+    credentials:
+      - "{{ controller_machine_credential_name }}"
+    survey_enabled: true
+    survey_file: surveys/windows_patch_workflow_survey.yml
+    ask_limit_on_launch: true
+    ask_variables_on_launch: false
+    ask_inventory_on_launch: false
+    ask_credential_on_launch: false
+    ask_scm_branch_on_launch: false
+    ask_tags_on_launch: false
+    ask_skip_tags_on_launch: false
+    ask_verbosity_on_launch: false
+    allow_simultaneous: false
+    job_slice_count: 1
+    forks: "{{ controller_job_forks | int }}"
+    timeout: "{{ controller_job_timeout_seconds | int }}"
+    verbosity: 0
+    extra_vars:
+      snow_require_change_validation: true
+      snow_enabled: false
+      snow_shared_role: ""
+      snow_attach_report: false
+      patch_require_maintenance_window: true
+
+  - name: Windows Precheck
+    environment: PROD
+    job_type: run
+    inventory: "{{ controller_inventory_prod }}"
+    project: "{{ controller_project_name }}"
+    playbook: playbooks/windows/precheck.yml
+    execution_environment: "{{ controller_execution_environment }}"
+    credentials:
+      - "{{ controller_machine_credential_name }}"
+    survey_enabled: true
+    survey_file: surveys/windows_precheck_survey.yml
+    ask_limit_on_launch: true
+    ask_variables_on_launch: false
+    ask_inventory_on_launch: false
+    ask_credential_on_launch: false
+    ask_scm_branch_on_launch: false
+    ask_tags_on_launch: false
+    ask_skip_tags_on_launch: false
+    ask_verbosity_on_launch: false
+    allow_simultaneous: false
+    job_slice_count: 1
+    forks: "{{ controller_job_forks | int }}"
+    timeout: "{{ controller_job_timeout_seconds | int }}"
+    verbosity: 0
+    extra_vars:
+      snow_require_change_validation: false
+      snow_enabled: false
+      snow_shared_role: ""
+      snow_attach_report: false
+      patch_require_maintenance_window: false

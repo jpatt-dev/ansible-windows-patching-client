@@ -1,12 +1,21 @@
 ---
-# Optional ServiceNow change hooks. When snow_enabled=false, skip entirely
-# so local runs do not require ServiceNow.
+# ServiceNow change hooks.
+# Mandatory production CR validation is independent of snow_enabled and of the
+# unpublished EXAMPLE URI tasks. Work notes / attach remain snow_enabled.
 
-- name: Skip ServiceNow integration when disabled
+- name: Enforce production change-request validation
+  ansible.builtin.include_tasks: enforce_change_validation.yml
+  when: (snow_phase | default('validate')) == 'validate'
+  tags:
+    - always
+    - servicenow
+
+- name: Skip optional ServiceNow EXAMPLE integrations when disabled
   ansible.builtin.debug:
     msg: >-
-      ServiceNow integration skipped (snow_enabled=false).
-      Set snow_enabled=true and provide change IDs + AAP credentials to enable.
+      Optional ServiceNow work notes/attach/EXAMPLE URI skipped
+      (snow_enabled={{ snow_enabled | default(false) }},
+      snow_example_integrations_enabled={{ snow_example_integrations_enabled | default(false) }}).
   when: not (snow_enabled | default(false) | bool)
   changed_when: false
   tags:
@@ -22,7 +31,9 @@
         else (lookup('env', 'SNOW_INSTANCE_URL') | default('', true) | trim)
       }}
     snow_auth_type_normalized: "{{ snow_auth_type | default('basic') | trim | lower }}"
-  when: snow_enabled | default(false) | bool
+  when:
+    - snow_enabled | default(false) | bool
+    - snow_example_integrations_enabled | default(false) | bool
   no_log: true
   changed_when: false
   tags:
@@ -31,24 +42,39 @@
 
 - name: Run ServiceNow preflight validation
   ansible.builtin.include_tasks: preflight.yml
-  when: snow_enabled | default(false) | bool
+  when:
+    - snow_enabled | default(false) | bool
+    - snow_example_integrations_enabled | default(false) | bool
   tags:
     - always
     - servicenow
 
-- name: Include ServiceNow validate change tasks
+- name: Include EXAMPLE ServiceNow validate change tasks
   ansible.builtin.include_tasks: validate_change.yml
   when:
     - snow_enabled | default(false) | bool
+    - snow_example_integrations_enabled | default(false) | bool
     - (snow_phase | default('validate')) == 'validate'
   tags:
     - always
     - servicenow
 
-- name: Include ServiceNow work notes tasks
+- name: Include the shared ServiceNow role for optional work notes or attach
+  ansible.builtin.include_role:
+    name: "{{ snow_shared_role | default('') | trim }}"
+  when:
+    - snow_enabled | default(false) | bool
+    - (snow_shared_role | default('') | trim | length) > 0
+    - (snow_phase | default('')) in ['work_notes', 'attach_report', 'close_task']
+  tags:
+    - always
+    - servicenow
+
+- name: Include EXAMPLE ServiceNow work notes tasks
   ansible.builtin.include_tasks: update_work_notes.yml
   when:
     - snow_enabled | default(false) | bool
+    - snow_example_integrations_enabled | default(false) | bool
     - (snow_phase | default('')) == 'work_notes'
     - snow_update_work_notes | default(true) | bool
   tags:
@@ -59,6 +85,7 @@
   ansible.builtin.include_tasks: attach_report.yml
   when:
     - snow_enabled | default(false) | bool
+    - snow_example_integrations_enabled | default(false) | bool
     - (snow_phase | default('')) == 'attach_report'
     - snow_attach_report | default(false) | bool
   tags:
@@ -69,6 +96,7 @@
   ansible.builtin.include_tasks: close_or_complete_task.yml
   when:
     - snow_enabled | default(false) | bool
+    - snow_example_integrations_enabled | default(false) | bool
     - (snow_phase | default('')) == 'close_task'
     - snow_close_task | default(false) | bool
   tags:

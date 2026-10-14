@@ -1,0 +1,143 @@
+---
+# Controller CaC policy tests. Does not contact AAP, Windows, or ServiceNow.
+#   ansible-playbook tests/controller_cac/test_jt_policy.yml
+
+- name: Job Template policy, surveys, and protected extra-vars
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    _cac_root: "{{ playbook_dir }}/../../controller_cac"
+    _repo_root: "{{ playbook_dir }}/../.."
+  tasks:
+    - name: Load Controller CaC settings
+      ansible.builtin.include_vars:
+        file: "{{ _cac_root }}/vars/settings.yml"
+
+    - name: Load Controller CaC projects
+      ansible.builtin.include_vars:
+        file: "{{ _cac_root }}/vars/projects.yml"
+
+    - name: Load Controller CaC Job Templates
+      ansible.builtin.include_vars:
+        file: "{{ _cac_root }}/vars/job_templates.yml"
+
+    - name: Load Full Patch survey
+      ansible.builtin.include_vars:
+        file: "{{ _repo_root }}/surveys/windows_patch_workflow_survey.yml"
+        name: _full_patch_survey
+
+    - name: Load Precheck survey
+      ansible.builtin.include_vars:
+        file: "{{ _repo_root }}/surveys/windows_precheck_survey.yml"
+        name: _precheck_survey
+
+    - name: Index Job Templates by name
+      ansible.builtin.set_fact:
+        _jt_names: "{{ controller_job_templates | map(attribute='name') | list }}"
+        _lab: "{{ controller_job_templates | selectattr('name', 'equalto', 'Windows Full Patch LAB') | first }}"
+        _prod: "{{ controller_job_templates | selectattr('name', 'equalto', 'Windows Full Patch PROD') | first }}"
+        _precheck: "{{ controller_job_templates | selectattr('name', 'equalto', 'Windows Precheck') | first }}"
+        _full_survey_vars: "{{ _full_patch_survey.spec | map(attribute='variable') | list }}"
+        _precheck_survey_vars: "{{ _precheck_survey.spec | map(attribute='variable') | list }}"
+        _wave_jt_names: "{{ controller_job_templates | map(attribute='name') | select('match', '.*wave.*') | list }}"
+
+    - name: Assert exactly three Job Templates and one Project
+      ansible.builtin.assert:
+        that:
+          - "(controller_job_templates | length) == 3"
+          - "(controller_projects | length) == 1"
+          - "'Windows Full Patch LAB' in _jt_names"
+          - "'Windows Full Patch PROD' in _jt_names"
+          - "'Windows Precheck' in _jt_names"
+          - "(_wave_jt_names | length) == 0"
+          - "controller_cac_managed_environments == ['LAB', 'PROD']"
+          - "'DEV' in controller_cac_reserved_environments"
+          - "'UAT' in controller_cac_reserved_environments"
+        fail_msg: CaC must define Project + LAB/PROD Full Patch + Precheck only (no per-wave templates).
+
+    - name: Assert playbooks, Limit prompt, extra-var prompt, and job slicing
+      ansible.builtin.assert:
+        that:
+          - "_lab.playbook == 'playbooks/windows/full_patch.yml'"
+          - "_prod.playbook == 'playbooks/windows/full_patch.yml'"
+          - "_precheck.playbook == 'playbooks/windows/precheck.yml'"
+          - "_lab.survey_file == 'surveys/windows_patch_workflow_survey.yml'"
+          - "_prod.survey_file == 'surveys/windows_patch_workflow_survey.yml'"
+          - "_precheck.survey_file == 'surveys/windows_precheck_survey.yml'"
+          - "_lab.ask_limit_on_launch | bool"
+          - "_prod.ask_limit_on_launch | bool"
+          - "_precheck.ask_limit_on_launch | bool"
+          - "not (_lab.ask_variables_on_launch | bool)"
+          - "not (_prod.ask_variables_on_launch | bool)"
+          - "not (_precheck.ask_variables_on_launch | bool)"
+          - "(_lab.job_slice_count | int) == 1"
+          - "(_prod.job_slice_count | int) == 1"
+          - "(_precheck.job_slice_count | int) == 1"
+          - "not (_lab.allow_simultaneous | bool)"
+          - "not (_prod.allow_simultaneous | bool)"
+          - "_lab.survey_enabled | bool"
+          - "_prod.survey_enabled | bool"
+          - "_precheck.survey_enabled | bool"
+        fail_msg: Job Templates must prompt Limit only, disable extra-var prompt, and keep job_slice_count=1.
+
+    - name: Assert LAB vs PROD administrator extra-vars
+      ansible.builtin.assert:
+        that:
+          - "not (_lab.extra_vars.snow_require_change_validation | bool)"
+          - "not (_lab.extra_vars.patch_require_maintenance_window | bool)"
+          - "_prod.extra_vars.snow_require_change_validation | bool"
+          - "_prod.extra_vars.patch_require_maintenance_window | bool"
+          - "(_prod.extra_vars.snow_shared_role | default('') | length) == 0"
+          - "not (_prod.extra_vars.snow_enabled | bool)"
+          - "not (_precheck.extra_vars.snow_require_change_validation | bool)"
+        fail_msg: LAB must not require CR/MW; PROD must require both and stay fail-closed while snow_shared_role is empty.
+
+    - name: Assert surveys omit protected variables
+      ansible.builtin.assert:
+        that:
+          - "(controller_cac_protected_variables | intersect(_full_survey_vars) | length) == 0"
+          - "(controller_cac_protected_variables | intersect(_precheck_survey_vars) | length) == 0"
+          - "'change_ticket_id' in _full_survey_vars"
+          - "'operator_authorize_patch_install' in _full_survey_vars"
+          - "'patch_temporary_exempt_hosts' in _full_survey_vars"
+          - "'patch_temporary_exemption_reference' in _full_survey_vars"
+          - "'patching_exception_reference' not in _full_survey_vars"
+          - "_precheck_survey_vars == ['change_ticket_id']"
+        fail_msg: Surveys must match surveys/*.yml and must not expose protected administrator variables.
+
+    - name: Assert Project updates on launch and does not prompt SCM branch
+      ansible.builtin.assert:
+        that:
+          - "controller_projects[0].scm_update_on_launch | bool"
+          - "not (_lab.ask_scm_branch_on_launch | bool)"
+          - "not (_prod.ask_scm_branch_on_launch | bool)"
+        fail_msg: Promote via SCM branch on the Project, not Job Template branch prompt.
+
+    - name: Assert dispatcher stays blocked without a verified collection
+      ansible.builtin.assert:
+        that:
+          - "not (controller_cac_dispatch_enabled | bool)"
+          - "(controller_cac_collection | default('') | length) == 0"
+        fail_msg: Dispatch must stay disabled until the client verifies a Controller collection.
+
+- name: Dispatcher playbook fails closed without an approved collection
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Run blocked dispatcher
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - "{{ playbook_dir }}/../../controller_cac/playbooks/configure_controller.yml"
+      register: _dispatch
+      failed_when: false
+      changed_when: false
+
+    - name: Assert dispatcher is blocked
+      ansible.builtin.assert:
+        that:
+          - "_dispatch.rc != 0"
+          - "'Controller CaC dispatch is blocked' in ((_dispatch.stdout | default('')) ~ (_dispatch.stderr | default('')))"
+        fail_msg: Controller dispatch must fail closed until a verified collection is configured.
