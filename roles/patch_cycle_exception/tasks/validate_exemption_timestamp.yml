@@ -1,0 +1,45 @@
+---
+# Classify one temporary exemption timestamp.
+# ISO-8601 Z shape is not enough; the UTC calendar date and time must exist.
+# Sets _exemption_timestamp_ok for the caller to copy.
+
+- name: Classify exemption timestamp format
+  ansible.builtin.set_fact:
+    _exemption_timestamp_format_ok: >-
+      {{
+        (_exemption_timestamp | default('') | string | trim | length) > 0
+        and (
+          (_exemption_timestamp | default('') | string | trim)
+          | regex_search('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$')
+        ) is not none
+      }}
+  changed_when: false
+  tags:
+    - always
+
+- name: Classify exemption timestamp as a real UTC calendar datetime
+  ansible.builtin.set_fact:
+    _exemption_timestamp_ok: >-
+      {%- set ts = (_exemption_timestamp | default('') | string | trim) -%}
+      {%- if not (_exemption_timestamp_format_ok | bool) -%}
+      false
+      {%- else -%}
+      {%- set y = ts[0:4] | int -%}
+      {%- set m = ts[5:7] | int -%}
+      {%- set d = ts[8:10] | int -%}
+      {%- set h = ts[11:13] | int -%}
+      {%- set mi = ts[14:16] | int -%}
+      {%- set s = ts[17:19] | int -%}
+      {%- set leap = (y % 4 == 0) and ((y % 100 != 0) or (y % 400 == 0)) -%}
+      {%- set dim = [31, (29 if leap else 28), 31, 30, 31, 30, 31, 31, 30, 31, 30, 31] -%}
+      {{
+        (m >= 1) and (m <= 12)
+        and (d >= 1) and (d <= dim[m - 1])
+        and (h >= 0) and (h <= 23)
+        and (mi >= 0) and (mi <= 59)
+        and (s >= 0) and (s <= 59)
+      }}
+      {%- endif -%}
+  changed_when: false
+  tags:
+    - always

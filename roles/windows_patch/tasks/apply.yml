@@ -25,6 +25,8 @@
     windows_os_policy:
       policy_id: not_available
       categories: not_available
+    updates_installed_kbs: not_available
+    updates_failed_kbs: not_available
   when: patching_exception_active | default(false) | bool
   changed_when: false
   tags:
@@ -164,6 +166,13 @@
       }}
   when: not (patching_exception_active | default(false) | bool)
   changed_when: false
+  tags:
+    - apply
+    - report
+
+- name: Extract compact installed and failed KB identifiers
+  ansible.builtin.include_tasks: extract_update_kbs.yml
+  when: not (patching_exception_active | default(false) | bool)
   tags:
     - apply
     - report

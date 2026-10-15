@@ -21,14 +21,17 @@ template. Runtime collections come from that EE, not from a project
 
 ## Inventory
 
-Create an AAP Inventory **object** and attach it on job templates. Inside that
-inventory, define groups:
+Create **separate** AAP Inventory objects for LAB, IST, UAT, and PROD and
+attach each Job Template to exactly one of them (`ask_inventory_on_launch:
+false`). Inside each inventory, define groups:
 
 | Group | Role |
 | --- | --- |
 | `windows_hosts` | Playbook `hosts:` boundary. Not a patch wave. |
 | `windows_canary` | Approved Limit target |
 | `windows_wave_1` … `windows_wave_20` | Approved Limit targets (`N` unpadded) |
+| `windows_patch_exempt_temp` | Temporary patch exemption (Ops-managed) |
+| `windows_reboot_exempt_temp` | Temporary reboot exemption (Ops-managed) |
 
 See [external-contracts.md](external-contracts.md) for the inventory variable
 contract. This repository does not ship host inventories.
@@ -55,10 +58,10 @@ the final report (for example `Lexington Datacenter` or `Azure-East-US`). If
 unset, the report uses an empty string. Do not survey this value.
 
 Permanent exemptions belong in the Git inventory repository
-(`patching_exception_enabled`, optional `patching_exception_active` /
-`patching_exception_reference`). Full Patch may also take a this-job
-temporary hostname list on the survey; that list never disables a permanent
-Git exemption.
+(`patching_exception_enabled` / `patching_exception_reference` and
+`patching_reboot_exception_enabled` / `patching_reboot_exception_reference`).
+Temporary exemptions are AAP group membership plus expiration metadata, not
+survey fields. Full Patch never modifies those groups.
 
 High-latency / WAN WinRM hosts should use inventory group_vars, not a global
 `ansible.cfg` change. See `inventory/group_vars/windows_remote_sites.yml` for
@@ -90,18 +93,25 @@ Limit only (`ask_limit_on_launch: true`). Extra-var prompting stays off
 | Job Template | Playbook | Survey file | Inventory |
 | --- | --- | --- | --- |
 | Windows Full Patch LAB | `playbooks/windows/full_patch.yml` | `surveys/windows_patch_workflow_survey.yml` | LAB inventory object |
+| Windows Full Patch IST | `playbooks/windows/full_patch.yml` | `surveys/windows_patch_workflow_survey.yml` | IST inventory object |
+| Windows Full Patch UAT | `playbooks/windows/full_patch.yml` | `surveys/windows_patch_workflow_survey.yml` | UAT inventory object |
 | Windows Full Patch PROD | `playbooks/windows/full_patch.yml` | `surveys/windows_patch_workflow_survey.yml` | PROD inventory object |
-| Windows Precheck | `playbooks/windows/precheck.yml` | `surveys/windows_precheck_survey.yml` | PROD inventory object |
+| Windows Precheck LAB | `playbooks/windows/precheck.yml` | `surveys/windows_precheck_survey.yml` | LAB inventory object |
+| Windows Precheck IST | `playbooks/windows/precheck.yml` | `surveys/windows_precheck_survey.yml` | IST inventory object |
+| Windows Precheck UAT | `playbooks/windows/precheck.yml` | `surveys/windows_precheck_survey.yml` | UAT inventory object |
+| Windows Precheck PROD | `playbooks/windows/precheck.yml` | `surveys/windows_precheck_survey.yml` | PROD inventory object |
 
-LAB extra-vars: `snow_require_change_validation=false`,
-`patch_require_maintenance_window=false`. PROD extra-vars:
+LAB and IST extra-vars: `snow_require_change_validation=false`,
+`patch_require_maintenance_window=false`. UAT and PROD Full Patch extra-vars:
 `snow_require_change_validation=true`,
 `patch_require_maintenance_window=true`, `snow_shared_role` empty until the
-shared role is in the EE (remediating hosts fail closed).
+shared role is in the EE (remediating hosts fail closed). Precheck stays
+read-only (`snow_require_change_validation=false`) and is bound to the same
+environment inventory (`ask_inventory_on_launch: false`).
 
-DEV and UAT are reserved labels. Do not auto-create Job Templates for them.
-Do not create one Job Template per wave. Operators set Limit to
-`windows_canary` or `windows_wave_1` … `windows_wave_20`.
+DEV is a reserved label with no Job Templates. Do not create one Job Template
+per wave. Operators set Limit to `windows_canary` or `windows_wave_1` …
+`windows_wave_20`.
 
 Do not create separate Job Templates for Pre-Reboot, Discovery, Apply,
 Post-Reboot, Postcheck, or Final Report against this repository. Those phases
@@ -125,16 +135,15 @@ Operator-facing inputs for **Windows - Full Patch**:
 | `operator_authorize_patch_install` | `false` | Authorize install. Does not authorize reboot. |
 | `operator_allow_pre_patch_reboot` | `false` | Authorize this job's pre-patch reboot (inventory mode still applies) |
 | `operator_allow_post_patch_reboot` | `false` | Authorize this job's post-patch reboot (inventory mode still applies) |
-| `patch_temporary_exempt_hosts` | empty | Comma-separated exact inventory hostnames for this job only |
-| `patch_temporary_exemption_reference` | empty | Required when temporary exempt hosts are listed |
 
 Do not survey WSUS URLs, provider, patch mode, reboot policy
 (`windows_pre_patch_reboot_mode` / `windows_post_patch_reboot_mode`),
 `patching_reboot_allowed`, `patching_exception_enabled`,
-`patching_exception_active`, `patch_require_maintenance_window`,
-`snow_enabled`, `snow_require_change_validation`, `approved_patch_targets`,
-or Limit/wave targeting. Temporary exemption hostnames are the only surveyed
-host list, and they must be exact names already in this job's Limit.
+`patching_reboot_exception_enabled`, `patching_exception_active`,
+`patch_require_maintenance_window`, `snow_enabled`,
+`snow_require_change_validation`, `approved_patch_targets`, Limit/wave
+targeting, or temporary exemption hostnames. Ops playbooks manage AAP
+exemption groups.
 
 Set `snow_require_change_validation=true` on production Full Patch Job
 Template extra-vars (RBAC, not survey). Leave it `false` on lab templates

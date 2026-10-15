@@ -171,7 +171,7 @@
 
 - name: Normalize canonical reporting inputs
   ansible.builtin.set_fact:
-    _rpt_exempt: "{{ (patching_exception_enabled | default(false) | bool) or (patching_exception_active | default(false) | bool) }}"
+    _rpt_exempt: "{{ (patching_exception_enabled | default(false) | bool) or (patching_reboot_exception_enabled | default(false) | bool) or (patching_exception_active | default(false) | bool) }}"
     _rpt_unreachable: "{{ (not (windows_connectivity_ok | default(false) | bool)) or (windows_winrm_ping.unreachable | default(false) | bool) }}"
     _rpt_eligible: "{{ patch_host_eligible | default(false) | bool }}"
     _rpt_precheck_status: "{{ precheck_status | default(_upstream_precheck.precheck_status | default('missing')) }}"
@@ -244,8 +244,20 @@
         else ''
       }}
     _rpt_os_build: "{{ windows_os_build | default('') }}"
+    _rpt_os_build_pre: "{{ windows_os_build_pre | default('not_available') }}"
+    _rpt_os_version: "{{ windows_os_version | default('not_available') }}"
     _rpt_location: "{{ patch_location | default('') }}"
     _rpt_aap_job_id: "{{ tower_job_id | default(awx_job_id | default('')) }}"
+    _rpt_snow_ci_sys_id: "{{ snow_ci_sys_id | default('') }}"
+    _rpt_patch_environment: "{{ patch_environment | default('') }}"
+    _rpt_platform: "{{ patch_report_platform | default('windows') }}"
+    _rpt_installed_kbs: "{{ _upstream_apply.updates_installed_kbs if (_upstream_apply is mapping and (_upstream_apply.updates_installed_kbs is defined)) else (updates_installed_kbs if (updates_installed_kbs is defined) else 'not_available') }}"
+    _rpt_failed_kbs: "{{ _upstream_apply.updates_failed_kbs if (_upstream_apply is mapping and (_upstream_apply.updates_failed_kbs is defined)) else (updates_failed_kbs if (updates_failed_kbs is defined) else 'not_available') }}"
+    _rpt_git_revision: >-
+      {{
+        lookup('ansible.builtin.env', 'GIT_COMMIT')
+        | default(lookup('ansible.builtin.env', 'CI_COMMIT_SHA') | default('not_available', true), true)
+      }}
   changed_when: false
   tags:
     - report
@@ -519,8 +531,15 @@
       hostname: "{{ _rpt_hostname }}"
       fqdn: "{{ _rpt_fqdn }}"
       os_release: "{{ _rpt_os_release }}"
+      os_version: "{{ _rpt_os_version }}"
       os_build: "{{ _rpt_os_build }}"
+      os_build_pre: "{{ _rpt_os_build_pre }}"
       location: "{{ _rpt_location }}"
+      snow_ci_sys_id: "{{ _rpt_snow_ci_sys_id }}"
+      patch_environment: "{{ _rpt_patch_environment }}"
+      platform: "{{ _rpt_platform }}"
+      report_source: "{{ patch_report_source | default('windows_full_patch') }}"
+      git_revision: "{{ _rpt_git_revision }}"
       host: "{{ inventory_hostname }}"
       inventory_hostname: "{{ inventory_hostname }}"
       change_ticket_id: "{{ change_ticket_id | default('') }}"
@@ -538,6 +557,17 @@
       patching_exception_active: "{{ _rpt_exempt | bool }}"
       patching_exception_reference: "{{ patching_exception_reference_effective | default('') }}"
       patching_exception_source: "{{ patching_exception_source | default('inventory') }}"
+      patching_exception_kind: "{{ patching_exception_kind | default('none') }}"
+      patching_exception_status: "{{ patching_exception_status | default('none') }}"
+      patching_exception_expires_at: "{{ patching_exception_expires_at | default('') }}"
+      patching_exception_patch_source: "{{ patching_exception_patch_source | default(patching_exception_source | default('inventory')) }}"
+      patching_exception_patch_reference: "{{ patching_exception_patch_reference | default('') }}"
+      patching_exception_patch_expires_at: "{{ patching_exception_patch_expires_at | default('') }}"
+      patching_reboot_exception_active: "{{ patching_reboot_exception_active | default(false) | bool }}"
+      patching_reboot_exception_enabled: "{{ patching_reboot_exception_enabled | default(false) | bool }}"
+      patching_reboot_exception_reference: "{{ patching_reboot_exception_reference_effective | default('') }}"
+      patching_reboot_exception_source: "{{ patching_reboot_exception_source | default('inventory') }}"
+      patching_reboot_exception_expires_at: "{{ patching_reboot_exception_expires_at | default('') }}"
       patching_reboot_allowed: "{{ patching_reboot_allowed | default(false) | bool }}"
       patch_provider: "{{ windows_patch_provider_effective | default('unknown') }}"
       windows_patch_provider_effective: "{{ windows_patch_provider_effective | default('unknown') }}"
@@ -552,6 +582,8 @@
       patch_attempted: "{{ _final_patch_attempted }}"
       updates_installed: "{{ _final_updates_installed }}"
       updates_failed: "{{ _final_updates_failed }}"
+      updates_installed_kbs: "{{ _rpt_installed_kbs }}"
+      updates_failed_kbs: "{{ _rpt_failed_kbs }}"
       pre_patch_reboot_required: "{{ _final_pre_reboot_required }}"
       pre_patch_reboot_performed: "{{ _final_pre_reboot_performed }}"
       post_patch_reboot_required: "{{ _final_post_reboot_required }}"

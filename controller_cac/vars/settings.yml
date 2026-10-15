@@ -9,9 +9,11 @@ controller_project_scm_branch: REPLACE_ME_SCM_BRANCH
 controller_scm_credential_name: REPLACE_ME_SCM_CREDENTIAL
 controller_execution_environment: REPLACE_ME_EXECUTION_ENVIRONMENT
 controller_inventory_lab: REPLACE_ME_INVENTORY_LAB
+controller_inventory_ist: REPLACE_ME_INVENTORY_IST
+controller_inventory_uat: REPLACE_ME_INVENTORY_UAT
 controller_inventory_prod: REPLACE_ME_INVENTORY_PROD
 controller_machine_credential_name: REPLACE_ME_MACHINE_CREDENTIAL
-# Attach on PROD only after the shared ServiceNow role and credential exist.
+# Attach on PROD/UAT only after the shared ServiceNow role and credential exist.
 controller_servicenow_credential_name: REPLACE_ME_SERVICENOW_CREDENTIAL
 
 # Size above ceil(host_count / patch_serial) * per_host_worst_case + buffer.
@@ -23,14 +25,15 @@ controller_job_forks: 10
 controller_cac_collection: ""
 controller_cac_dispatch_enabled: false
 
-# Environments with Job Templates today. DEV/UAT stay reserved; copy LAB or
-# PROD extra_vars when those inventories exist. Do not auto-create templates.
+# Isolated inventories. Do not bind one environment's Job Template to another
+# environment's inventory. DEV remains reserved (no templates).
 controller_cac_managed_environments:
   - LAB
+  - IST
+  - UAT
   - PROD
 controller_cac_reserved_environments:
   - DEV
-  - UAT
 
 # Must never appear on surveys or ask_variables_on_launch.
 controller_cac_protected_variables:

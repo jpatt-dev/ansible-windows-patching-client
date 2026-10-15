@@ -44,6 +44,7 @@
       {{
         (_snow_policy_on | bool)
         and (not (_snow_host_exempt | bool))
+        and (not (patch_lifecycle_failed | default(false) | bool))
         and (
           (_snow_install_authorized | bool)
           or (_snow_pre_reboot_authorized | bool)

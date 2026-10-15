@@ -149,31 +149,38 @@ override `patching_reboot_allowed: false`.
 If reboot is required but inventory denies it, the reboot phase skips the reboot,
 sets `manual_followup_required`, and does not fail solely for that reason.
 
-## Temporary Patch Exceptions
+## Patch and reboot exemptions
 
 Permanent exemptions live in the Git inventory repository. Set per host or group:
 
-- `patching_exception_enabled` — Git input when the host is permanently exempt
-- `patching_exception_active` — effective resolved result after this job runs
-- `patching_exception_reference` — permanent exemption/request reference
+- `patching_exception_enabled` / `patching_exception_reference` — permanent patch exemption
+- `patching_reboot_exception_enabled` / `patching_reboot_exception_reference` — permanent reboot exemption
 
-Temporary exemptions apply to the current Full Patch job only. Survey:
+Temporary exemptions are AAP group membership, managed by separate Ops
+playbooks. Full Patch only consumes them:
 
-- `patch_temporary_exempt_hosts` — comma-separated exact `inventory_hostname` values in this Limit. Empty means none.
-- `patch_temporary_exemption_reference` — required when that list is nonempty
+- `windows_patch_exempt_temp` with `patch_temp_reference` and `patch_temp_expires_at`
+- `windows_reboot_exempt_temp` with `reboot_temp_reference` and `reboot_temp_expires_at`
 
-Effective exemption is the logical OR of the permanent Git exemption and
-this-job survey membership. A temporary list never disables a permanent Git
-exemption or overwrites its permanent reference. `patching_exception_source`
-is `inventory` when the Git exemption applies, otherwise `survey` for a
-temporary-only exemption.
+Timestamps must be real UTC calendar datetimes (`YYYY-MM-DDTHH:MM:SSZ`).
+Matching the ISO-8601 Z shape is not enough; impossible dates such as
+February 30, 24:00, or February 29 on a non-leap year fail closed before
+remediation. A correctly expired membership no longer grants exemption; the
+job reports stale membership and does not modify AAP groups.
 
-Unknown hosts, wildcards, group patterns, and empty CSV entries between commas
-fail closed before remediation. Final reporting still runs. An entirely blank
-list means no temporary exemptions. The exempt host is still inspected and
-reported.
-Install and pre/post reboot are skipped (`patched: false`, `exempt: true`,
-`result: exempt`).
+`patching_exception_active` is the resolved result (permanent or active
+temporary, patch or reboot). Permanent Git flags and references are never
+disabled or overwritten by temporary AAP metadata.
+`patching_exception_source` is `inventory` when any Git exemption applies,
+otherwise `aap_group` for a temporary-only exemption.
+
+An active patch exemption skips patch installation and both reboot phases.
+An active reboot exemption skips both reboot phases and blocks patch
+installation so the cycle cannot complete halfway. `patching_reboot_allowed`
+remains an independent inventory permission and is not an exemption.
+
+Exempt hosts are still inspected and reported (`patched: false`,
+`exempt: true`, `result: exempt`).
 
 ## Maintenance Window
 

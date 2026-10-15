@@ -1,65 +1,239 @@
 ---
-# Resolve permanent (Git inventory) and temporary (this-job survey) exemptions.
-# Permanent reference and enabled flag are never overwritten by the survey.
+# Resolve permanent Git and temporary AAP-group exemptions.
+# Permanent Git flags and references are never overwritten by AAP metadata.
+# This role never modifies AAP group membership.
 
-- name: Normalize exemption survey and inventory strings
+- name: Normalize permanent exemption inventory strings
   ansible.builtin.set_fact:
+    patching_exception_enabled: "{{ patching_exception_enabled | default(false) | bool }}"
+    patching_reboot_exception_enabled: "{{ patching_reboot_exception_enabled | default(false) | bool }}"
     patching_exception_reference: "{{ patching_exception_reference | default('') | string | trim }}"
-    patch_temporary_exemption_reference: "{{ patch_temporary_exemption_reference | default('') | string | trim }}"
+    patching_reboot_exception_reference: "{{ patching_reboot_exception_reference | default('') | string | trim }}"
   changed_when: false
   tags:
     - always
 
-- name: Validate temporary exemption survey input
+- name: Validate temporary AAP exemption group metadata
   ansible.builtin.include_tasks: validate_temporary_exemptions.yml
   tags:
     - always
 
-- name: Derive per-host patch-cycle exception membership
+- name: Derive independent permanent and temporary exemption membership
   ansible.builtin.set_fact:
     _patch_exception_permanent: "{{ (patching_exception_enabled | default(false) | bool) or (patching_exception_active | default(false) | bool) }}"
-    _patch_exception_temporary: "{{ inventory_hostname in (patch_temporary_exempt_host_list | default([]) | list) }}"
+    _reboot_exception_permanent: "{{ patching_reboot_exception_enabled | default(false) | bool }}"
+    _patch_exception_temporary: "{{ _patch_temp_active | default(false) | bool }}"
+    _reboot_exception_temporary: "{{ _reboot_temp_active | default(false) | bool }}"
   changed_when: false
   tags:
     - always
 
 - name: Set effective exemption without disabling a Git permanent exemption
   ansible.builtin.set_fact:
-    patching_exception_active: "{{ (_patch_exception_permanent | bool) or (_patch_exception_temporary | bool) }}"
+    patching_exception_patch_active: "{{ (_patch_exception_permanent | bool) or (_patch_exception_temporary | bool) }}"
+    patching_reboot_exception_active: "{{ (_reboot_exception_permanent | bool) or (_reboot_exception_temporary | bool) }}"
+    patching_exception_active: >-
+      {{
+        (_patch_exception_permanent | bool)
+        or (_patch_exception_temporary | bool)
+        or (_reboot_exception_permanent | bool)
+        or (_reboot_exception_temporary | bool)
+      }}
     patching_exception_reference_effective: >-
       {{
         patching_exception_reference
         if (_patch_exception_permanent | bool)
         else (
-          patch_temporary_exemption_reference
+          patch_temp_reference
           if (_patch_exception_temporary | bool)
+          else (
+            patching_reboot_exception_reference
+            if (_reboot_exception_permanent | bool)
+            else (
+              reboot_temp_reference
+              if (_reboot_exception_temporary | bool)
+              else ''
+            )
+          )
+        )
+      }}
+    patching_reboot_exception_reference_effective: >-
+      {{
+        patching_reboot_exception_reference
+        if (_reboot_exception_permanent | bool)
+        else (
+          reboot_temp_reference
+          if (_reboot_exception_temporary | bool)
           else ''
         )
       }}
     patching_exception_source: >-
       {{
         'inventory'
-        if (_patch_exception_permanent | bool)
+        if ((_patch_exception_permanent | bool) or (_reboot_exception_permanent | bool))
         else (
-          'survey'
-          if (_patch_exception_temporary | bool)
+          'aap_group'
+          if ((_patch_exception_temporary | bool) or (_reboot_exception_temporary | bool))
           else 'inventory'
+        )
+      }}
+    patching_exception_kind: >-
+      {{
+        'patch_and_reboot'
+        if (
+          ((_patch_exception_permanent | bool) or (_patch_exception_temporary | bool))
+          and ((_reboot_exception_permanent | bool) or (_reboot_exception_temporary | bool))
+        )
+        else (
+          'patch'
+          if ((_patch_exception_permanent | bool) or (_patch_exception_temporary | bool) or (_patch_temp_stale | default(false) | bool))
+          else (
+            'reboot'
+            if ((_reboot_exception_permanent | bool) or (_reboot_exception_temporary | bool) or (_reboot_temp_stale | default(false) | bool))
+            else 'none'
+          )
+        )
+      }}
+    patching_exception_status: >-
+      {{
+        'invalid'
+        if ((_patch_temp_invalid | default(false) | bool) or (_reboot_temp_invalid | default(false) | bool))
+        else (
+          'active'
+          if (
+            (_patch_exception_permanent | bool)
+            or (_patch_exception_temporary | bool)
+            or (_reboot_exception_permanent | bool)
+            or (_reboot_exception_temporary | bool)
+          )
+          else (
+            'expired'
+            if ((_patch_temp_stale | default(false) | bool) or (_reboot_temp_stale | default(false) | bool))
+            else 'none'
+          )
+        )
+      }}
+    patching_exception_expires_at: >-
+      {{
+        patch_temp_expires_at
+        if ((_patch_exception_temporary | bool) or (_patch_temp_stale | default(false) | bool))
+        else (
+          reboot_temp_expires_at
+          if ((_reboot_exception_temporary | bool) or (_reboot_temp_stale | default(false) | bool))
+          else ''
         )
       }}
   changed_when: false
   tags:
     - always
 
+- name: Set independent patch and reboot exemption snapshot fields
+  ansible.builtin.set_fact:
+    patching_exception_patch_source: >-
+      {{
+        'inventory'
+        if (_patch_exception_permanent | bool)
+        else (
+          'aap_group'
+          if (
+            (_patch_exception_temporary | bool)
+            or (_patch_temp_stale | default(false) | bool)
+            or (_patch_temp_invalid | default(false) | bool)
+            or (_patch_temp_group_member | default(false) | bool)
+          )
+          else 'inventory'
+        )
+      }}
+    patching_exception_patch_reference: >-
+      {{
+        patching_exception_reference
+        if (_patch_exception_permanent | bool)
+        else (
+          patch_temp_reference
+          if (
+            (_patch_exception_temporary | bool)
+            or (_patch_temp_stale | default(false) | bool)
+            or (_patch_temp_invalid | default(false) | bool)
+            or (_patch_temp_group_member | default(false) | bool)
+          )
+          else ''
+        )
+      }}
+    patching_exception_patch_expires_at: >-
+      {{
+        ''
+        if (_patch_exception_permanent | bool)
+        else (
+          patch_temp_expires_at
+          if (
+            (_patch_exception_temporary | bool)
+            or (_patch_temp_stale | default(false) | bool)
+            or (_patch_temp_invalid | default(false) | bool)
+            or (_patch_temp_group_member | default(false) | bool)
+          )
+          else ''
+        )
+      }}
+    patching_reboot_exception_source: >-
+      {{
+        'inventory'
+        if (_reboot_exception_permanent | bool)
+        else (
+          'aap_group'
+          if (
+            (_reboot_exception_temporary | bool)
+            or (_reboot_temp_stale | default(false) | bool)
+            or (_reboot_temp_invalid | default(false) | bool)
+            or (_reboot_temp_group_member | default(false) | bool)
+          )
+          else 'inventory'
+        )
+      }}
+    patching_reboot_exception_expires_at: >-
+      {{
+        ''
+        if (_reboot_exception_permanent | bool)
+        else (
+          reboot_temp_expires_at
+          if (
+            (_reboot_exception_temporary | bool)
+            or (_reboot_temp_stale | default(false) | bool)
+            or (_reboot_temp_invalid | default(false) | bool)
+            or (_reboot_temp_group_member | default(false) | bool)
+          )
+          else ''
+        )
+      }}
+  changed_when: false
+  tags:
+    - always
+    - report
+
 - name: Report patch-cycle exception resolution for this host
   ansible.builtin.debug:
     msg:
       - "host: {{ inventory_hostname }}"
       - "patching_exception_active: {{ patching_exception_active | default(false) }}"
+      - "patching_exception_kind: {{ patching_exception_kind | default('none') }}"
+      - "patching_exception_status: {{ patching_exception_status | default('none') }}"
+      - "patching_exception_source: {{ patching_exception_source | default('inventory') }}"
       - "patching_exception_reference_effective: {{ patching_exception_reference_effective | default('') }}"
       - "patching_exception_enabled: {{ patching_exception_enabled | default(false) }}"
-      - "patching_exception_source: {{ patching_exception_source | default('inventory') }}"
+      - "patching_reboot_exception_enabled: {{ patching_reboot_exception_enabled | default(false) }}"
+      - "patching_reboot_exception_active: {{ patching_reboot_exception_active | default(false) }}"
+      - "patching_reboot_exception_reference_effective: {{ patching_reboot_exception_reference_effective | default('') }}"
+      - "patching_exception_patch_source: {{ patching_exception_patch_source | default('inventory') }}"
+      - "patching_exception_patch_reference: {{ patching_exception_patch_reference | default('') }}"
+      - "patching_exception_patch_expires_at: {{ patching_exception_patch_expires_at | default('') }}"
+      - "patching_reboot_exception_source: {{ patching_reboot_exception_source | default('inventory') }}"
+      - "patching_reboot_exception_expires_at: {{ patching_reboot_exception_expires_at | default('') }}"
       - "patch_exception_permanent: {{ _patch_exception_permanent | default(false) }}"
       - "patch_exception_temporary: {{ _patch_exception_temporary | default(false) }}"
+      - "reboot_exception_permanent: {{ _reboot_exception_permanent | default(false) }}"
+      - "reboot_exception_temporary: {{ _reboot_exception_temporary | default(false) }}"
+      - "patch_temp_stale: {{ _patch_temp_stale | default(false) }}"
+      - "reboot_temp_stale: {{ _reboot_temp_stale | default(false) }}"
+      - "patching_exception_expires_at: {{ patching_exception_expires_at | default('') }}"
   changed_when: false
   tags:
     - always

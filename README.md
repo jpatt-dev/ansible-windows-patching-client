@@ -7,8 +7,8 @@ WSUS remains the update source. AAP controls targeting, authorization, reboot
 handling, validation, and reporting.
 
 This repository contains the Windows patching automation and its application
-Controller CaC (`controller_cac/`): the AAP Project and the Full Patch LAB,
-Full Patch PROD, and Precheck Job Templates. Surveys stay in `surveys/`.
+Controller CaC (`controller_cac/`): the AAP Project and Full Patch plus
+Precheck Job Templates for LAB, IST, UAT, and PROD. Surveys stay in `surveys/`.
 Inventories, credentials, organizations, and Execution Environments are
 referenced by name from central platform CaC and the inventory repository.
 
@@ -73,10 +73,11 @@ execution-environments/
 | Layer | Owns |
 | --- | --- |
 | Git | Playbooks, roles, allowlist, application Controller CaC |
-| AAP Inventory | Hosts, groups, reboot policy, permanent exemptions (inventory repo) |
+| AAP Inventory | Hosts, wave groups, reboot policy, permanent Git exemptions (inventory repo) |
 | AAP Limit | Wave / canary launch population |
-| Full Patch survey | Per-run operator authorization and temporary exemptions |
-| Job Template extra-vars | LAB/PROD CR and maintenance-window policy |
+| AAP exemption groups | Temporary patch/reboot exemptions and expiration metadata (Ops playbooks) |
+| Full Patch survey | Per-run operator authorization, maintenance window, and change ticket |
+| Job Template extra-vars | Per-environment CR and maintenance-window policy |
 | AAP Credential | Authentication and secrets (central CaC) |
 
 Normal patch operations do not require Git changes.
@@ -92,7 +93,7 @@ Normal patch operations do not require Git changes.
 - Pre-patch and post-patch reboot each require their own operator flag.
 - `patching_reboot_allowed` is inventory-owned. A survey cannot override `false`.
 - Inventory `windows_pre_patch_reboot_mode` / `windows_post_patch_reboot_mode` are `if_required` (default) or `always`. Not survey controls.
-- Temporary patch-cycle exceptions skip install and reboot for listed hosts.
+- Permanent Git and active temporary AAP exemptions skip install and both reboot phases.
 - Apply fails closed when a pending reboot remains.
 - Standalone Precheck is fail-closed on `precheck_status` `blocked` or `failed`.
 

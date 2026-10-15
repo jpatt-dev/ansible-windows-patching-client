@@ -10,6 +10,13 @@ change_ticket_id: ""
 # Optional inventory/group_vars location label for reporting. Not surveyed.
 # Examples: Lexington Datacenter, London, Azure-East-US, Physical
 patch_location: ""
+# Optional inventory/group_vars. LAB / IST / UAT / PROD. Reporting only.
+patch_environment: ""
+# Optional ServiceNow CMDB CI sys_id. Inventory-owned. Reporting join key.
+snow_ci_sys_id: ""
+# Cross-platform envelope identity. Do not survey.
+patch_report_source: windows_full_patch
+patch_report_platform: windows
 
 # Optional overrides passed by callers when recording a phase.
 patch_report_precheck_status: ""

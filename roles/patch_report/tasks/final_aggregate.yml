@@ -36,8 +36,15 @@
       inventory_hostname: "{{ item }}"
       fqdn: ""
       os_release: ""
+      os_version: not_available
       os_build: ""
+      os_build_pre: not_available
       location: "{{ hostvars[item].patch_location | default('') }}"
+      snow_ci_sys_id: "{{ hostvars[item].snow_ci_sys_id | default('') }}"
+      patch_environment: "{{ hostvars[item].patch_environment | default('') }}"
+      platform: windows
+      report_source: windows_full_patch
+      git_revision: not_available
       result: unknown
       reason: Final result was not produced for this host
       reason_code: UNKNOWN_RESULT
@@ -45,9 +52,22 @@
       patched: false
       exempt: false
       patching_exception_reference: ""
+      patching_exception_source: inventory
+      patching_exception_kind: none
+      patching_exception_status: none
+      patching_exception_expires_at: ""
+      patching_exception_patch_source: inventory
+      patching_exception_patch_reference: ""
+      patching_exception_patch_expires_at: ""
+      patching_reboot_exception_active: false
+      patching_reboot_exception_reference: ""
+      patching_reboot_exception_source: inventory
+      patching_reboot_exception_expires_at: ""
       updates_installed: not_available
       updates_remaining: not_available
       updates_failed: not_available
+      updates_installed_kbs: not_available
+      updates_failed_kbs: not_available
       patch_attempted: not_available
       pre_patch_reboot_performed: not_available
       post_patch_reboot_performed: not_available
@@ -170,10 +190,33 @@
   tags:
     - report
 
+- name: Collect unique host patch_environment values
+  ansible.builtin.set_fact:
+    _rpt_patch_environments: "{{ patch_workflow_hosts | map(attribute='patch_environment', default='') | map('string') | map('trim') | unique | list | sort }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Resolve run-level patch_environment from the full host set
+  ansible.builtin.set_fact:
+    _rpt_run_patch_environment: "{{ '' if ((_rpt_patch_environments | length) == 0) else (_rpt_patch_environments[0] if ((_rpt_patch_environments | length) == 1) else 'inconsistent') }}"
+  changed_when: false
+  tags:
+    - report
+
 - name: Build patch_workflow_report aggregate
   ansible.builtin.set_fact:
     patch_workflow_report:
       schema_version: "3"
+      report_source: "{{ patch_report_source | default('windows_full_patch') }}"
+      platform: "{{ patch_report_platform | default('windows') }}"
+      patch_environment: "{{ _rpt_run_patch_environment }}"
+      patch_environments: "{{ _rpt_patch_environments }}"
+      git_revision: >-
+        {{
+          lookup('ansible.builtin.env', 'GIT_COMMIT')
+          | default(lookup('ansible.builtin.env', 'CI_COMMIT_SHA') | default('not_available', true), true)
+        }}
       report_generated_at_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
       change_ticket_id: "{{ change_ticket_id | default('') }}"
       aap_job_id: "{{ tower_job_id | default(awx_job_id | default('')) }}"

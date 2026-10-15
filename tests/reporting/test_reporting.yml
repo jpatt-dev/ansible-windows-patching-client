@@ -1185,3 +1185,430 @@
           - "'Fail after reporting if any host failed' in _agg_task_names"
           - _agg_task_blob is search('(?s)Aggregate Final Patch Report.*Write canonical Final Report.*Email Windows patching report.*Attach Final Report files to ServiceNow change.*Fail after reporting if any host failed')
         fail_msg: Final AAP failure assertion is not after reporting and SMTP.
+
+- name: Register hosts for Power BI additive JSON fields
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add successful install host
+      ansible.builtin.add_host:
+        name: win-pbi-ok
+        groups: mock_pbi_multi
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        pending_reboot: false
+        snow_ci_sys_id: ci-ok-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        patch_environment: PROD
+        windows_os_build_pre: "17763.7000"
+        windows_os_build: "17763.7553"
+        windows_os_version: "10.0.17763"
+        windows_os_caption: Microsoft Windows Server 2019 Datacenter
+        windows_hostname: WINPBIOK
+        windows_fqdn: winpbiok.example.com
+        windows_update_search:
+          found_update_count: 0
+        patch_phase_apply:
+          win-pbi-ok:
+            patch_attempted: true
+            updates_installed: 2
+            updates_failed: 0
+            updates_installed_kbs:
+              - "5005565"
+              - "5007189"
+            updates_failed_kbs: []
+            patch_status: success
+        patch_phase_postcheck:
+          win-pbi-ok:
+            postcheck_status: passed
+
+    - name: Add no-updates-available host
+      ansible.builtin.add_host:
+        name: win-pbi-none
+        groups: mock_pbi_multi
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        pending_reboot: false
+        snow_ci_sys_id: ci-none-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        patch_environment: PROD
+        windows_os_build_pre: "20348.1"
+        windows_os_build: "20348.1"
+        windows_hostname: WINPBINONE
+        windows_update_search:
+          found_update_count: 0
+        patch_phase_apply:
+          win-pbi-none:
+            patch_attempted: false
+            updates_installed: 0
+            updates_failed: 0
+            updates_installed_kbs: []
+            updates_failed_kbs: []
+            patch_status: check_only
+        patch_phase_postcheck:
+          win-pbi-none:
+            postcheck_status: passed
+
+    - name: Add failed-install host
+      ansible.builtin.add_host:
+        name: win-pbi-fail
+        groups: mock_pbi_multi
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        pending_reboot: false
+        snow_ci_sys_id: ci-fail-cccccccccccccccccccccccccccccc
+        patch_environment: PROD
+        windows_os_build_pre: "17763.7000"
+        windows_os_build: "17763.7000"
+        windows_hostname: WINPBIFAIL
+        windows_update_search:
+          found_update_count: 1
+        patch_phase_apply:
+          win-pbi-fail:
+            patch_attempted: true
+            updates_installed: 0
+            updates_failed: 1
+            updates_installed_kbs: []
+            updates_failed_kbs:
+              - "5003646"
+            patch_status: failed
+
+    - name: Add host with unavailable KB evidence
+      ansible.builtin.add_host:
+        name: win-pbi-misskb
+        groups: mock_pbi_multi
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        pending_reboot: false
+        snow_ci_sys_id: ci-miss-dddddddddddddddddddddddddddddd
+        patch_environment: PROD
+        windows_hostname: WINPBIMISSKB
+        windows_update_search:
+          found_update_count: 4
+        patch_phase_apply:
+          win-pbi-misskb:
+            patch_attempted: true
+            updates_installed: not_available
+            updates_failed: not_available
+            patch_status: failed
+
+    - name: Add exempt host with snapshot fields
+      ansible.builtin.add_host:
+        name: win-pbi-exempt
+        groups: mock_pbi_exempt
+        ansible_connection: local
+        windows_connectivity_ok: true
+        snow_ci_sys_id: ci-ex-eeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+        patch_environment: PROD
+        windows_hostname: WINPBIEX
+        patching_exception_enabled: true
+        patching_exception_active: true
+        patching_exception_kind: patch
+        patching_exception_status: active
+        patching_exception_source: inventory
+        patching_exception_reference: EXC-GIT-PERM
+        patching_exception_reference_effective: EXC-GIT-PERM
+        patching_exception_expires_at: ""
+        patching_reboot_exception_active: false
+        patching_reboot_exception_enabled: false
+
+    - name: Add mixed Git reboot plus temporary AAP patch exemption host
+      ansible.builtin.add_host:
+        name: win-pbi-mixed-src
+        groups:
+          - mock_pbi_exempt
+          - windows_patch_exempt_temp
+        ansible_connection: local
+        windows_connectivity_ok: true
+        snow_ci_sys_id: ci-mix-111111111111111111111111111111
+        patch_environment: PROD
+        windows_hostname: WINPBIMIX
+        patching_reboot_exception_enabled: true
+        patching_reboot_exception_reference: EXC-GIT-REBOOT-MIX
+        patch_temp_reference: EXC-AAP-PATCH-MIX
+        patch_temp_expires_at: "2099-06-15T12:00:00Z"
+
+    - name: Add IST host for mixed-environment run
+      ansible.builtin.add_host:
+        name: win-pbi-ist
+        groups: mock_pbi_mixed
+        ansible_connection: local
+        windows_connectivity_ok: true
+        patch_environment: IST
+        snow_ci_sys_id: ci-ist-ffffffffffffffffffffffffffffff
+        windows_hostname: WINPBIIST
+
+    - name: Add PROD host for mixed-environment run
+      ansible.builtin.add_host:
+        name: win-pbi-prod
+        groups: mock_pbi_mixed
+        ansible_connection: local
+        windows_connectivity_ok: true
+        patch_environment: PROD
+        snow_ci_sys_id: ci-prod-000000000000000000000000000000
+        windows_hostname: WINPBIPROD
+
+- name: Multi-host additive JSON aggregation
+  hosts: mock_pbi_multi
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Build per-host final results
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+
+    - name: Aggregate multi-host report
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+
+    - name: Assert schema 3, run envelope, and per-host fields
+      ansible.builtin.assert:
+        that:
+          - "patch_final_result.schema_version == '3'"
+          - "patch_workflow_report.schema_version == '3'"
+          - "patch_workflow_report.report_source == 'windows_full_patch'"
+          - "patch_workflow_report.platform == 'windows'"
+          - "patch_workflow_report.patch_environment == 'PROD'"
+          - "patch_workflow_report.patch_environments == ['PROD']"
+          - "patch_workflow_report.git_revision is defined"
+          - "(patch_workflow_report.hosts | length) == 4"
+          - "(patch_workflow_report.hosts | map(attribute='inventory_hostname') | list | unique | length) == 4"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-ok') | map(attribute='snow_ci_sys_id') | first) == 'ci-ok-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-ok') | map(attribute='patch_environment') | first) == 'PROD'"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-ok') | map(attribute='platform') | first) == 'windows'"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-ok') | map(attribute='updates_installed_kbs') | first) == ['5005565', '5007189']"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-ok') | map(attribute='os_build_pre') | first) == '17763.7000'"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-ok') | map(attribute='os_build') | first) == '17763.7553'"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-ok') | map(attribute='os_version') | first) == '10.0.17763'"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-ok') | map(attribute='os_release') | first) == 'Microsoft Windows Server 2019 Datacenter'"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-ok') | map(attribute='result') | first) == 'success'"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-fail') | map(attribute='snow_ci_sys_id') | first) == 'ci-fail-cccccccccccccccccccccccccccccc'"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-none') | map(attribute='os_build_pre') | first) == '20348.1'"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-none') | map(attribute='os_build') | first) == '20348.1'"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-none') | map(attribute='result') | first) == 'already_compliant'"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-none') | map(attribute='updates_installed_kbs') | first) == []"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-fail') | map(attribute='result') | first) == 'failed'"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-fail') | map(attribute='updates_failed_kbs') | first) == ['5003646']"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-misskb') | map(attribute='updates_installed_kbs') | first) == 'not_available'"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-misskb') | map(attribute='updates_failed_kbs') | first) == 'not_available'"
+        fail_msg: Additive JSON must keep schema 3, unique host rows, and distinguish empty KB lists from not_available.
+      run_once: true
+
+- name: Exemption snapshot fields remain in final JSON
+  hosts: mock_pbi_exempt
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Resolve exemptions before JSON snapshot
+      ansible.builtin.include_role:
+        name: patch_cycle_exception
+
+    - name: Build exempt host final result
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+
+    - name: Assert exemption snapshot is preserved
+      ansible.builtin.assert:
+        that:
+          - "patch_final_result.schema_version == '3'"
+          - "patch_final_result.result == 'exempt'"
+          - "patch_final_result.patching_exception_kind == 'patch'"
+          - "patch_final_result.patching_exception_status == 'active'"
+          - "patch_final_result.patching_exception_source == 'inventory'"
+          - "patch_final_result.patching_exception_reference == 'EXC-GIT-PERM'"
+          - "patch_final_result.patching_exception_expires_at == ''"
+          - "patch_final_result.patching_exception_patch_source == 'inventory'"
+          - "patch_final_result.patching_exception_patch_reference == 'EXC-GIT-PERM'"
+          - "patch_final_result.patching_exception_patch_expires_at == ''"
+          - "not (patch_final_result.patching_reboot_exception_active | bool)"
+          - "patch_final_result.snow_ci_sys_id == 'ci-ex-eeeeeeeeeeeeeeeeeeeeeeeeeeeeee'"
+        fail_msg: Final JSON must retain the existing exemption snapshot fields.
+      when: inventory_hostname == 'win-pbi-exempt'
+
+    - name: Assert mixed-source exemption JSON keeps independent patch and reboot fields
+      ansible.builtin.assert:
+        that:
+          - "patch_final_result.schema_version == '3'"
+          - "patch_final_result.result == 'exempt'"
+          - "patch_final_result.patching_exception_kind == 'patch_and_reboot'"
+          - "patch_final_result.patching_exception_status == 'active'"
+          - "patch_final_result.patching_exception_source == 'inventory'"
+          - "patch_final_result.patching_exception_reference == 'EXC-AAP-PATCH-MIX'"
+          - "patch_final_result.patching_exception_patch_source == 'aap_group'"
+          - "patch_final_result.patching_exception_patch_reference == 'EXC-AAP-PATCH-MIX'"
+          - "patch_final_result.patching_exception_patch_expires_at == '2099-06-15T12:00:00Z'"
+          - "patch_final_result.patching_reboot_exception_active | bool"
+          - "patch_final_result.patching_reboot_exception_source == 'inventory'"
+          - "patch_final_result.patching_reboot_exception_reference == 'EXC-GIT-REBOOT-MIX'"
+          - "patch_final_result.patching_reboot_exception_expires_at == ''"
+        fail_msg: Mixed Git reboot and AAP patch exemptions must appear independently in schema 3 JSON.
+      when: inventory_hostname == 'win-pbi-mixed-src'
+
+- name: os_version is populated from windows_os_version in final JSON
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add host with windows_os_version for focused JSON check
+      ansible.builtin.add_host:
+        name: win-os-version
+        groups: mock_os_version
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        pending_reboot: false
+        windows_os_version: "10.0.20348"
+        windows_os_caption: Microsoft Windows Server 2022 Datacenter
+        windows_os_build_pre: "20348.1"
+        windows_os_build: "20348.2227"
+        windows_hostname: WINOSVER
+        windows_update_search:
+          found_update_count: 0
+        patch_phase_postcheck:
+          win-os-version:
+            postcheck_status: passed
+
+- name: Confirm os_version remains on patch_final_result and hosts[]
+  hosts: mock_os_version
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Build final result with os_version
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+
+    - name: Aggregate report containing os_version
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+
+    - name: Assert os_version is in final JSON and existing OS fields are unchanged
+      ansible.builtin.assert:
+        that:
+          - "patch_final_result.schema_version == '3'"
+          - "patch_final_result.os_version == '10.0.20348'"
+          - "patch_final_result.os_release == 'Microsoft Windows Server 2022 Datacenter'"
+          - "patch_final_result.os_build_pre == '20348.1'"
+          - "patch_final_result.os_build == '20348.2227'"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-os-version') | map(attribute='os_version') | first) == '10.0.20348'"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-os-version') | map(attribute='os_release') | first) == 'Microsoft Windows Server 2022 Datacenter'"
+        fail_msg: os_version must come from windows_os_version and remain in final JSON without replacing os_release or os_build.
+      run_once: true
+
+- name: Mixed host environments are not collapsed to the first host
+  hosts: mock_pbi_mixed
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Build mixed-environment host results
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+
+    - name: Aggregate mixed-environment report
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+
+    - name: Assert run-level environment inconsistency is explicit
+      ansible.builtin.assert:
+        that:
+          - "patch_workflow_report.patch_environment == 'inconsistent'"
+          - "'IST' in patch_workflow_report.patch_environments"
+          - "'PROD' in patch_workflow_report.patch_environments"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-ist') | map(attribute='patch_environment') | first) == 'IST'"
+          - "(patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-pbi-prod') | map(attribute='patch_environment') | first) == 'PROD'"
+        fail_msg: Run-level patch_environment must not hide mixed host environments.
+      run_once: true
+
+- name: Compact KB extraction from win_updates.updates
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    windows_update_install:
+      skipped: false
+      updates:
+        guid-installed-list:
+          installed: true
+          failed: false
+          kb:
+            - "5005565"
+        guid-installed-string:
+          installed: true
+          failed: false
+          kb: "5007189"
+        guid-failed:
+          installed: false
+          failed: true
+          kb:
+            - "5003646"
+        guid-filtered:
+          installed: false
+          failed: false
+          kb:
+            - "5001234"
+  tasks:
+    - name: Extract KB lists
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/windows_patch/tasks/extract_update_kbs.yml"
+
+    - name: Assert compact KB lists ignore filtered updates
+      ansible.builtin.assert:
+        that:
+          - "updates_installed_kbs | sort == ['5005565', '5007189']"
+          - "updates_failed_kbs == ['5003646']"
+        fail_msg: KB extraction must keep compact installed/failed ids only.
+
+- name: Empty win_updates.updates is a confirmed empty KB list
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    windows_update_install:
+      skipped: false
+      updates: {}
+  tasks:
+    - name: Reset leftover KB facts
+      ansible.builtin.set_fact:
+        updates_installed_kbs: leftover
+        updates_failed_kbs: leftover
+
+    - name: Extract empty updates mapping
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/windows_patch/tasks/extract_update_kbs.yml"
+
+    - name: Assert confirmed empty lists
+      ansible.builtin.assert:
+        that:
+          - "updates_installed_kbs == []"
+          - "updates_failed_kbs == []"
+        fail_msg: A present empty updates mapping must be [] not not_available.
+
+- name: Missing win_updates evidence is not_available
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Reset leftover KB facts
+      ansible.builtin.set_fact:
+        updates_installed_kbs: leftover
+        updates_failed_kbs: leftover
+
+    - name: Extract without win_updates result
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/windows_patch/tasks/extract_update_kbs.yml"
+
+    - name: Assert unavailable KB evidence
+      ansible.builtin.assert:
+        that:
+          - "updates_installed_kbs == 'not_available'"
+          - "updates_failed_kbs == 'not_available'"
+        fail_msg: Missing win_updates.updates must be not_available, not an empty list.

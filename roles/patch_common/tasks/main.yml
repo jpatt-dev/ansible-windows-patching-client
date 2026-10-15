@@ -38,7 +38,7 @@
 - name: Set patch_wave_name from the validated AAP Limit
   ansible.builtin.include_tasks: set_wave_name.yml
 
-- name: Resolve Git permanent and survey temporary patch-cycle exceptions
+- name: Resolve Git permanent and AAP-group temporary patch-cycle exceptions
   tags:
     - always
   block:

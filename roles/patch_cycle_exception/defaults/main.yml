@@ -1,13 +1,28 @@
 ---
-# Permanent exemptions: Git inventory (patching_exception_enabled preferred).
-# Temporary exemptions: Full Patch survey (this job only).
-# patching_exception_active is the resolved effective result.
+# Permanent exemptions: Git inventory (this repository never writes them).
+# Temporary exemptions: AAP group membership + per-host metadata.
+# patching_exception_active is the resolved effective result (patch OR reboot).
+# patching_reboot_allowed remains an independent reboot permission, not an exemption.
 
 patching_exception_enabled: false
 patching_exception_active: false
 patching_exception_reference: ""
 patching_exception_source: inventory
+patching_exception_kind: none
+patching_exception_status: none
+patching_exception_patch_source: inventory
+patching_exception_patch_reference: ""
+patching_exception_patch_expires_at: ""
 
-# Survey-only, current job. Empty hostname list means no temporary exemptions.
-patch_temporary_exempt_hosts: ""
-patch_temporary_exemption_reference: ""
+patching_reboot_exception_enabled: false
+patching_reboot_exception_reference: ""
+patching_reboot_exception_active: false
+patching_reboot_exception_source: inventory
+patching_reboot_exception_expires_at: ""
+
+patch_temp_exempt_group: windows_patch_exempt_temp
+reboot_temp_exempt_group: windows_reboot_exempt_temp
+patch_temp_reference: ""
+patch_temp_expires_at: ""
+reboot_temp_reference: ""
+reboot_temp_expires_at: ""

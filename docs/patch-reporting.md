@@ -56,10 +56,29 @@ failed, or unverified search evidence is `unknown`, not `already_compliant`.
 installation counts stay `not_available` and are never reported as `0`. It is
 not a synonym of `success`.
 
-Exemption uses inventory `patching_exception_enabled` (Git permanent input)
-and the resolved `patching_exception_active` (permanent **or** this-job
-temporary survey membership). `patching_exception_source` records `inventory`
-or `survey`. CSV columns and the `exempt` result vocabulary are unchanged.
+Exemption uses Git `patching_exception_enabled` /
+`patching_reboot_exception_enabled` and AAP groups
+`windows_patch_exempt_temp` / `windows_reboot_exempt_temp`. The resolved
+`patching_exception_active` is true when any active patch or reboot exemption
+applies. Combined JSON fields stay for compatibility: `patching_exception_kind`
+(`patch`, `reboot`, `patch_and_reboot`, `none`), `patching_exception_source`
+(`inventory` or `aap_group`), `patching_exception_status` (`active`,
+`expired`, `invalid`, `none`), reference, and temporary expiration.
+
+Independent patch and reboot snapshot fields are authoritative for historical
+audit reporting:
+
+- `patching_exception_patch_source` / `patching_exception_patch_reference` /
+  `patching_exception_patch_expires_at`
+- `patching_reboot_exception_source` / `patching_reboot_exception_reference` /
+  `patching_reboot_exception_expires_at`
+
+A permanent Git reboot exemption plus a temporary AAP patch exemption therefore
+records both sources. Combined `patching_exception_source`,
+`patching_exception_reference`, and `patching_exception_expires_at` remain for
+compatibility and may summarize multiple active exemption sources. Combined
+`patching_exception_source` remains `inventory` when any Git exemption applies.
+CSV columns and the `exempt` result vocabulary are unchanged.
 
 ### Canonical `result` values
 
@@ -67,7 +86,7 @@ or `survey`. CSV columns and the `exempt` result vocabulary are unchanged.
 | --- | --- |
 | `success` | This execution installed updates, postcheck evidence is present and healthy, no applicable updates remain, and no reboot is pending |
 | `already_compliant` | No applicable updates remain and required final checks are satisfactory |
-| `exempt` | Permanent Git or this-job survey exemption prevented remediation |
+| `exempt` | Permanent Git or active temporary AAP exemption prevented remediation |
 | `blocked` | Precheck or safety policy prevented remediation |
 | `failed` | A required patch/reboot/remediation operation failed |
 | `degraded` | Follow-up is required. May occur when updates were installed (`patched: true`) or when no updates were installed (`patched: false`), including an unresolved pending reboot |
@@ -92,8 +111,14 @@ is `degraded`, `failed`, or `unknown`.
 | `hostname` | Windows CSName when collected; otherwise inventory hostname |
 | `fqdn` | Windows DNS hostname + domain when collected |
 | `os_release` | Windows OS caption (final/post-patch collection) |
-| `os_build` | Windows build including UBR when collected (`BuildNumber.UBR`); `BuildNumber` only when UBR is unavailable |
+| `os_version` | Existing `windows_os_version` fact (Windows `Version`, for example `10.0.17763`) |
+| `os_build` | Post-patch / final Windows build (`BuildNumber.UBR` when collected) |
+| `os_build_pre` | Precheck snapshot of the same build field; `not_available` if precheck did not collect it |
 | `location` | Optional inventory/group_vars `patch_location` |
+| `snow_ci_sys_id` | Optional inventory ServiceNow CMDB CI sys_id (stable host join key) |
+| `patch_environment` | Optional inventory `LAB` / `IST` / `UAT` / `PROD` |
+| `platform` | `windows` on this report |
+| `updates_installed_kbs` / `updates_failed_kbs` | Compact KB ids from `win_updates.updates`. `[]` means the module returned no matching KBs. `not_available` means install evidence was not produced. |
 
 `patch_location` is a generic label. Examples: `Lexington Datacenter`, `London`,
 `vCenter-East`, `Azure-East-US`, `Physical`. If unset, the report uses an empty
@@ -229,9 +254,79 @@ AAP `set_stats` publishes:
 - aggregate `patch_workflow_report` / `patch_workflow_report_json`
 - convenience `patch_workflow_report_csv`
 
+`patch_workflow_report` is one record per Full Patch job that reaches Play 2.
+`hosts[]` is one record per targeted host. Schema stays `3`. Additive envelope
+fields: `report_source` (`windows_full_patch`), `platform` (`windows`),
+`patch_environment`, `patch_environments`, `git_revision`. Do not rename
+existing fields.
+
+Run-level `patch_environment` is the unique host `patch_environment` set, not
+the first host. One value is copied as-is. An empty set is `""`. Mixed values
+set `patch_environment: inconsistent` and list the distinct values in
+`patch_environments`.
+
+`git_revision` is the existing `GIT_COMMIT` / `CI_COMMIT_SHA` value already
+recorded on host results (`not_available` when unset). Do not invent a
+revision. Do not duplicate AAP job status, timestamps, duration, inventory
+identity, Job Template, or launched-by; the ingest collector reads those from
+the job API.
+
 Files under `/tmp/aap-patch-reports` inside the Execution Environment are
 ephemeral convenience exports. Same-job Play 2 attach uses `patch_report_files`
 from that directory. A later AAP workflow node will not see those paths; keep
 attach in this job. The unpublished shared ServiceNow role should consume
 `patch_workflow_report` / `set_stats` plus those same-job paths. `patch_wave`
 in the report is the validated AAP Limit.
+
+## Historical reporting (Power BI) — outside this repository
+
+This repository does not implement Power BI REST, a historical database, or
+CMDB synchronization. Ingest `patch_workflow_report` from the AAP job API.
+
+**Retrieve**
+
+`GET /api/v2/jobs/{id}/` → `artifacts.patch_workflow_report`
+
+Ingest **Full Patch** jobs. Standalone Precheck does not build the aggregate
+report.
+
+**Stamp from the AAP job API at ingest time (do not duplicate in playbooks)**
+
+| API field | Use |
+| --- | --- |
+| `status` | `successful` / `failed` / `canceled` |
+| `started` / `finished` / `elapsed` | Job timestamps and duration |
+| `inventory` | Inventory name/id. Do not substitute playbook first-host environment |
+| `job_template` | Template name (LAB/IST/UAT/PROD) |
+| `limit` | Wave Limit |
+| `summary_fields.created_by` | Operator |
+
+**Retention**
+
+`set_stats` exists only while AAP retains the job. Copy the artifact plus API
+fields into an external store **independent of AAP job retention**. Power BI
+reads that store.
+
+**Failed / cancelled / zero-host jobs**
+
+- Failed jobs that reach Play 2 still emit JSON, then fail. Keep host `result`
+  values; join API `status=failed`.
+- Cancelled before Play 2: no JSON. Job-level API row only (`hosts=[]`).
+- Empty Limit (`windows_hosts` ∩ wave = 0): no play tasks and no `set_stats`.
+  Represent from the AAP job. Do not treat a skipped play as a successful wave.
+
+**CMDB reconciliation**
+
+Inventory must populate `snow_ci_sys_id` and `patch_environment` on Windows
+hosts. Power BI left-joins the ServiceNow Windows CI list to historical host
+rows:
+
+| Question | Join |
+| --- | --- |
+| Never targeted | CMDB CIs in env minus any stored host row for that `snow_ci_sys_id` |
+| Targeted, never patched | Host rows with `patched=false` and `result` not `success` or `already_compliant` |
+| Exempt / blocked / failed | Existing `result` plus exemption snapshot as of that execution |
+| Missing CI id | Inventory gap; hostname/FQDN fallback is unstable |
+
+Do not sync CMDB from this playbook. Linux/database reports should reuse the
+same job/host envelope with a different `report_source` / `platform`.

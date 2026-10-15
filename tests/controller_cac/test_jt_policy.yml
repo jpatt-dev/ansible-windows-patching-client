@@ -35,83 +35,117 @@
     - name: Index Job Templates by name
       ansible.builtin.set_fact:
         _jt_names: "{{ controller_job_templates | map(attribute='name') | list }}"
-        _lab: "{{ controller_job_templates | selectattr('name', 'equalto', 'Windows Full Patch LAB') | first }}"
-        _prod: "{{ controller_job_templates | selectattr('name', 'equalto', 'Windows Full Patch PROD') | first }}"
-        _precheck: "{{ controller_job_templates | selectattr('name', 'equalto', 'Windows Precheck') | first }}"
+        _fp_lab: "{{ controller_job_templates | selectattr('name', 'equalto', 'Windows Full Patch LAB') | first }}"
+        _fp_ist: "{{ controller_job_templates | selectattr('name', 'equalto', 'Windows Full Patch IST') | first }}"
+        _fp_uat: "{{ controller_job_templates | selectattr('name', 'equalto', 'Windows Full Patch UAT') | first }}"
+        _fp_prod: "{{ controller_job_templates | selectattr('name', 'equalto', 'Windows Full Patch PROD') | first }}"
+        _pc_lab: "{{ controller_job_templates | selectattr('name', 'equalto', 'Windows Precheck LAB') | first }}"
+        _pc_ist: "{{ controller_job_templates | selectattr('name', 'equalto', 'Windows Precheck IST') | first }}"
+        _pc_uat: "{{ controller_job_templates | selectattr('name', 'equalto', 'Windows Precheck UAT') | first }}"
+        _pc_prod: "{{ controller_job_templates | selectattr('name', 'equalto', 'Windows Precheck PROD') | first }}"
         _full_survey_vars: "{{ _full_patch_survey.spec | map(attribute='variable') | list }}"
         _precheck_survey_vars: "{{ _precheck_survey.spec | map(attribute='variable') | list }}"
-        _wave_jt_names: "{{ controller_job_templates | map(attribute='name') | select('match', '.*wave.*') | list }}"
+        _wave_jt_names: "{{ controller_job_templates | map(attribute='name') | select('match', '.*[Ww]ave.*') | list }}"
+        _full_patch_jts: "{{ controller_job_templates | selectattr('playbook', 'equalto', 'playbooks/windows/full_patch.yml') | list }}"
+        _precheck_jts: "{{ controller_job_templates | selectattr('playbook', 'equalto', 'playbooks/windows/precheck.yml') | list }}"
 
-    - name: Assert exactly three Job Templates and one Project
+    - name: Assert isolated environment Job Templates and one Project
       ansible.builtin.assert:
         that:
-          - "(controller_job_templates | length) == 3"
+          - "(controller_job_templates | length) == 8"
           - "(controller_projects | length) == 1"
+          - "(_full_patch_jts | length) == 4"
+          - "(_precheck_jts | length) == 4"
           - "'Windows Full Patch LAB' in _jt_names"
+          - "'Windows Full Patch IST' in _jt_names"
+          - "'Windows Full Patch UAT' in _jt_names"
           - "'Windows Full Patch PROD' in _jt_names"
-          - "'Windows Precheck' in _jt_names"
+          - "'Windows Precheck LAB' in _jt_names"
+          - "'Windows Precheck IST' in _jt_names"
+          - "'Windows Precheck UAT' in _jt_names"
+          - "'Windows Precheck PROD' in _jt_names"
+          - "'Windows Precheck' not in _jt_names"
           - "(_wave_jt_names | length) == 0"
-          - "controller_cac_managed_environments == ['LAB', 'PROD']"
+          - "controller_cac_managed_environments == ['LAB', 'IST', 'UAT', 'PROD']"
           - "'DEV' in controller_cac_reserved_environments"
-          - "'UAT' in controller_cac_reserved_environments"
-        fail_msg: CaC must define Project + LAB/PROD Full Patch + Precheck only (no per-wave templates).
+          - "'UAT' not in controller_cac_reserved_environments"
+        fail_msg: CaC must define Project + Full Patch/Precheck per LAB/IST/UAT/PROD (no per-wave templates).
 
-    - name: Assert playbooks, Limit prompt, extra-var prompt, and job slicing
+    - name: Assert playbooks, Limit prompt, extra-var prompt, inventory prompt, and job slicing
       ansible.builtin.assert:
         that:
-          - "_lab.playbook == 'playbooks/windows/full_patch.yml'"
-          - "_prod.playbook == 'playbooks/windows/full_patch.yml'"
-          - "_precheck.playbook == 'playbooks/windows/precheck.yml'"
-          - "_lab.survey_file == 'surveys/windows_patch_workflow_survey.yml'"
-          - "_prod.survey_file == 'surveys/windows_patch_workflow_survey.yml'"
-          - "_precheck.survey_file == 'surveys/windows_precheck_survey.yml'"
-          - "_lab.ask_limit_on_launch | bool"
-          - "_prod.ask_limit_on_launch | bool"
-          - "_precheck.ask_limit_on_launch | bool"
-          - "not (_lab.ask_variables_on_launch | bool)"
-          - "not (_prod.ask_variables_on_launch | bool)"
-          - "not (_precheck.ask_variables_on_launch | bool)"
-          - "(_lab.job_slice_count | int) == 1"
-          - "(_prod.job_slice_count | int) == 1"
-          - "(_precheck.job_slice_count | int) == 1"
-          - "not (_lab.allow_simultaneous | bool)"
-          - "not (_prod.allow_simultaneous | bool)"
-          - "_lab.survey_enabled | bool"
-          - "_prod.survey_enabled | bool"
-          - "_precheck.survey_enabled | bool"
-        fail_msg: Job Templates must prompt Limit only, disable extra-var prompt, and keep job_slice_count=1.
+          - "item.ask_limit_on_launch | bool"
+          - "not (item.ask_variables_on_launch | bool)"
+          - "not (item.ask_inventory_on_launch | bool)"
+          - "not (item.ask_scm_branch_on_launch | bool)"
+          - "(item.job_slice_count | int) == 1"
+          - "not (item.allow_simultaneous | bool)"
+          - "item.survey_enabled | bool"
+        fail_msg: Job Templates must prompt Limit only, bind one inventory, and keep job_slice_count=1.
+      loop: "{{ controller_job_templates }}"
+      loop_control:
+        label: "{{ item.name }}"
 
-    - name: Assert LAB vs PROD administrator extra-vars
+    - name: Assert each environment Job Template stays on that inventory
       ansible.builtin.assert:
         that:
-          - "not (_lab.extra_vars.snow_require_change_validation | bool)"
-          - "not (_lab.extra_vars.patch_require_maintenance_window | bool)"
-          - "_prod.extra_vars.snow_require_change_validation | bool"
-          - "_prod.extra_vars.patch_require_maintenance_window | bool"
-          - "(_prod.extra_vars.snow_shared_role | default('') | length) == 0"
-          - "not (_prod.extra_vars.snow_enabled | bool)"
-          - "not (_precheck.extra_vars.snow_require_change_validation | bool)"
-        fail_msg: LAB must not require CR/MW; PROD must require both and stay fail-closed while snow_shared_role is empty.
+          - "_fp_lab.inventory == _pc_lab.inventory"
+          - "_fp_ist.inventory == _pc_ist.inventory"
+          - "_fp_uat.inventory == _pc_uat.inventory"
+          - "_fp_prod.inventory == _pc_prod.inventory"
+          - "_fp_lab.inventory != _fp_ist.inventory"
+          - "_fp_lab.inventory != _fp_uat.inventory"
+          - "_fp_lab.inventory != _fp_prod.inventory"
+          - "_fp_ist.inventory != _fp_uat.inventory"
+          - "_fp_ist.inventory != _fp_prod.inventory"
+          - "_fp_uat.inventory != _fp_prod.inventory"
+          - "_fp_lab.playbook == 'playbooks/windows/full_patch.yml'"
+          - "_fp_prod.playbook == 'playbooks/windows/full_patch.yml'"
+          - "_pc_prod.playbook == 'playbooks/windows/precheck.yml'"
+          - "_fp_lab.survey_file == 'surveys/windows_patch_workflow_survey.yml'"
+          - "_pc_prod.survey_file == 'surveys/windows_precheck_survey.yml'"
+        fail_msg: Each environment's Full Patch and Precheck must share that environment inventory only.
 
-    - name: Assert surveys omit protected variables
+    - name: Assert LAB/IST vs UAT/PROD administrator extra-vars
+      ansible.builtin.assert:
+        that:
+          - "not (_fp_lab.extra_vars.snow_require_change_validation | bool)"
+          - "not (_fp_lab.extra_vars.patch_require_maintenance_window | bool)"
+          - "not (_fp_ist.extra_vars.snow_require_change_validation | bool)"
+          - "not (_fp_ist.extra_vars.patch_require_maintenance_window | bool)"
+          - "_fp_uat.extra_vars.snow_require_change_validation | bool"
+          - "_fp_uat.extra_vars.patch_require_maintenance_window | bool"
+          - "_fp_prod.extra_vars.snow_require_change_validation | bool"
+          - "_fp_prod.extra_vars.patch_require_maintenance_window | bool"
+          - "(_fp_prod.extra_vars.snow_shared_role | default('') | length) == 0"
+          - "not (_fp_prod.extra_vars.snow_enabled | bool)"
+          - "not (_pc_lab.extra_vars.snow_require_change_validation | bool)"
+          - "not (_pc_ist.extra_vars.snow_require_change_validation | bool)"
+          - "not (_pc_uat.extra_vars.snow_require_change_validation | bool)"
+          - "not (_pc_prod.extra_vars.snow_require_change_validation | bool)"
+        fail_msg: LAB/IST must not require CR/MW; UAT/PROD Full Patch must require both and stay fail-closed while snow_shared_role is empty.
+
+    - name: Assert surveys omit protected and obsolete exemption variables
       ansible.builtin.assert:
         that:
           - "(controller_cac_protected_variables | intersect(_full_survey_vars) | length) == 0"
           - "(controller_cac_protected_variables | intersect(_precheck_survey_vars) | length) == 0"
           - "'change_ticket_id' in _full_survey_vars"
           - "'operator_authorize_patch_install' in _full_survey_vars"
-          - "'patch_temporary_exempt_hosts' in _full_survey_vars"
-          - "'patch_temporary_exemption_reference' in _full_survey_vars"
+          - "'operator_allow_pre_patch_reboot' in _full_survey_vars"
+          - "'operator_allow_post_patch_reboot' in _full_survey_vars"
+          - "'maintenance_window_acknowledged' in _full_survey_vars"
+          - "'patch_temporary_exempt_hosts' not in _full_survey_vars"
+          - "'patch_temporary_exemption_reference' not in _full_survey_vars"
           - "'patching_exception_reference' not in _full_survey_vars"
+          - "'patch_temp_reference' not in _full_survey_vars"
           - "_precheck_survey_vars == ['change_ticket_id']"
-        fail_msg: Surveys must match surveys/*.yml and must not expose protected administrator variables.
+        fail_msg: Surveys must match surveys/*.yml, keep authorization controls, and must not survey exemptions.
 
     - name: Assert Project updates on launch and does not prompt SCM branch
       ansible.builtin.assert:
         that:
           - "controller_projects[0].scm_update_on_launch | bool"
-          - "not (_lab.ask_scm_branch_on_launch | bool)"
-          - "not (_prod.ask_scm_branch_on_launch | bool)"
         fail_msg: Promote via SCM branch on the Project, not Job Template branch prompt.
 
     - name: Assert dispatcher stays blocked without a verified collection

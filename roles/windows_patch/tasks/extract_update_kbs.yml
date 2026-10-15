@@ -1,0 +1,57 @@
+---
+# Compact KB id lists from ansible.windows.win_updates.updates.
+# Do not copy the full update payload into set_stats (artifact size).
+# [] = win_updates.updates was present and yielded no matching KBs.
+# not_available = install evidence was not produced.
+
+- name: Mark KB evidence unavailable unless win_updates.updates is present
+  ansible.builtin.set_fact:
+    updates_installed_kbs: not_available
+    updates_failed_kbs: not_available
+  when: >-
+    not (
+      (windows_update_install is defined)
+      and (not (windows_update_install.skipped | default(false) | bool))
+      and (windows_update_install.updates is defined)
+      and (windows_update_install.updates is mapping)
+    )
+  changed_when: false
+  tags:
+    - apply
+    - report
+
+- name: Initialize confirmed empty KB lists when win_updates.updates is present
+  ansible.builtin.set_fact:
+    updates_installed_kbs: []
+    updates_failed_kbs: []
+  when:
+    - windows_update_install is defined
+    - not (windows_update_install.skipped | default(false) | bool)
+    - windows_update_install.updates is defined
+    - windows_update_install.updates is mapping
+  changed_when: false
+  tags:
+    - apply
+    - report
+
+- name: Collect compact KB identifiers from win_updates
+  ansible.builtin.set_fact:
+    updates_installed_kbs: "{{ (updates_installed_kbs + _kbs) | unique | list if (_installed | bool) else updates_installed_kbs }}"
+    updates_failed_kbs: "{{ (updates_failed_kbs + _kbs) | unique | list if (_failed | bool) else updates_failed_kbs }}"
+  vars:
+    _installed: "{{ item.value.installed | default(false) | bool }}"
+    _failed: "{{ item.value.failed | default(false) | bool }}"
+    _kb_raw: "{{ item.value.kb | default([]) }}"
+    _kbs: "{{ (_kb_raw | list) if (_kb_raw is sequence and _kb_raw is not string) else ([_kb_raw | string] if ((_kb_raw | string) not in ['', 'None']) else []) }}"
+  loop: "{{ windows_update_install.updates | default({}) | dict2items }}"
+  when:
+    - windows_update_install is defined
+    - not (windows_update_install.skipped | default(false) | bool)
+    - windows_update_install.updates is defined
+    - windows_update_install.updates is mapping
+  loop_control:
+    label: "{{ item.key }}"
+  changed_when: false
+  tags:
+    - apply
+    - report

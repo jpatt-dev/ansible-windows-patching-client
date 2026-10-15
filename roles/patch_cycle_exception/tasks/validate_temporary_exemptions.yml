@@ -1,89 +1,231 @@
 ---
-# Validate survey temporary exemptions against this play's Limit population.
-# Fail closed before remediation. Does not change Git inventory exemption vars.
+# Consume AAP temporary exemption groups and per-host metadata.
+# This role never adds, removes, or expires group membership.
 
-- name: Normalize temporary exemption input to a CSV string
+- name: Detect temporary exemption group membership
   ansible.builtin.set_fact:
-    _patch_temporary_exempt_csv: >-
+    _patch_temp_group_member: "{{ (patch_temp_exempt_group | default('windows_patch_exempt_temp')) in (group_names | default([])) }}"
+    _reboot_temp_group_member: "{{ (reboot_temp_exempt_group | default('windows_reboot_exempt_temp')) in (group_names | default([])) }}"
+    patch_temp_reference: "{{ patch_temp_reference | default('') | string | trim }}"
+    patch_temp_expires_at: "{{ patch_temp_expires_at | default('') | string | trim }}"
+    reboot_temp_reference: "{{ reboot_temp_reference | default('') | string | trim }}"
+    reboot_temp_expires_at: "{{ reboot_temp_expires_at | default('') | string | trim }}"
+    _exemption_now_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+  changed_when: false
+  tags:
+    - always
+
+- name: Validate patch temporary expiration is a real UTC calendar datetime
+  ansible.builtin.include_tasks: validate_exemption_timestamp.yml
+  vars:
+    _exemption_timestamp: "{{ patch_temp_expires_at }}"
+  tags:
+    - always
+
+- name: Record patch temporary expiration validity
+  ansible.builtin.set_fact:
+    _patch_temp_expires_ok: "{{ _exemption_timestamp_ok | bool }}"
+  changed_when: false
+  tags:
+    - always
+
+- name: Validate reboot temporary expiration is a real UTC calendar datetime
+  ansible.builtin.include_tasks: validate_exemption_timestamp.yml
+  vars:
+    _exemption_timestamp: "{{ reboot_temp_expires_at }}"
+  tags:
+    - always
+
+- name: Record reboot temporary expiration validity
+  ansible.builtin.set_fact:
+    _reboot_temp_expires_ok: "{{ _exemption_timestamp_ok | bool }}"
+  changed_when: false
+  tags:
+    - always
+
+- name: Classify temporary patch exemption membership state
+  ansible.builtin.set_fact:
+    _patch_temp_invalid: >-
       {{
-        (patch_temporary_exempt_hosts | default('', true))
-        if (patch_temporary_exempt_hosts | default('', true) is string)
-        else (patch_temporary_exempt_hosts | default([], true) | join(','))
+        (_patch_temp_group_member | bool)
+        and (
+          (patch_temp_reference | length) == 0
+          or (not (_patch_temp_expires_ok | bool))
+        )
+      }}
+    _patch_temp_stale: >-
+      {{
+        (_patch_temp_group_member | bool)
+        and (patch_temp_reference | length) > 0
+        and (_patch_temp_expires_ok | bool)
+        and (patch_temp_expires_at < _exemption_now_utc)
+      }}
+    _patch_temp_active: >-
+      {{
+        (_patch_temp_group_member | bool)
+        and (patch_temp_reference | length) > 0
+        and (_patch_temp_expires_ok | bool)
+        and (patch_temp_expires_at >= _exemption_now_utc)
       }}
   changed_when: false
   tags:
     - always
 
-- name: Trim the temporary exemption CSV
+- name: Classify temporary reboot exemption membership state
   ansible.builtin.set_fact:
-    _patch_temporary_exempt_csv_trimmed: "{{ _patch_temporary_exempt_csv | trim }}"
+    _reboot_temp_invalid: >-
+      {{
+        (_reboot_temp_group_member | bool)
+        and (
+          (reboot_temp_reference | length) == 0
+          or (not (_reboot_temp_expires_ok | bool))
+        )
+      }}
+    _reboot_temp_stale: >-
+      {{
+        (_reboot_temp_group_member | bool)
+        and (reboot_temp_reference | length) > 0
+        and (_reboot_temp_expires_ok | bool)
+        and (reboot_temp_expires_at < _exemption_now_utc)
+      }}
+    _reboot_temp_active: >-
+      {{
+        (_reboot_temp_group_member | bool)
+        and (reboot_temp_reference | length) > 0
+        and (_reboot_temp_expires_ok | bool)
+        and (reboot_temp_expires_at >= _exemption_now_utc)
+      }}
   changed_when: false
   tags:
     - always
 
-- name: Treat a blank temporary exemption CSV as no hosts
-  ansible.builtin.set_fact:
-    patch_temporary_exempt_host_list: []
-  when: (_patch_temporary_exempt_csv_trimmed | length) == 0
+- name: Report stale temporary exemption membership for inventory cleanup
+  ansible.builtin.debug:
+    msg: >-
+      STALE: {{ inventory_hostname }} remains in
+      {{
+        (
+          ([patch_temp_exempt_group] if (_patch_temp_stale | bool) else [])
+          + ([reboot_temp_exempt_group] if (_reboot_temp_stale | bool) else [])
+        ) | join(', ')
+      }}
+      after UTC expiration. This playbook does not modify AAP groups.
+      expired_at={{ patch_temp_expires_at if (_patch_temp_stale | bool) else reboot_temp_expires_at }}.
+  when: (_patch_temp_stale | bool) or (_reboot_temp_stale | bool)
   changed_when: false
   tags:
     - always
+    - report
 
-- name: Parse temporary exemption hostname list
+- name: Record invalid temporary exemption status before fail-closed
   ansible.builtin.set_fact:
-    patch_temporary_exempt_host_list: "{{ _patch_temporary_exempt_csv_trimmed.split(',') | map('trim') | list }}"
-  when: (_patch_temporary_exempt_csv_trimmed | length) > 0
+    patching_exception_active: false
+    patching_exception_status: invalid
+    patching_exception_source: aap_group
+    patching_exception_kind: >-
+      {{
+        'patch_and_reboot'
+        if ((_patch_temp_invalid | bool) and (_reboot_temp_invalid | bool))
+        else (
+          'patch'
+          if (_patch_temp_invalid | bool)
+          else (
+            'reboot'
+            if (_reboot_temp_invalid | bool)
+            else 'none'
+          )
+        )
+      }}
+    patching_exception_expires_at: >-
+      {{
+        patch_temp_expires_at
+        if (_patch_temp_group_member | bool)
+        else reboot_temp_expires_at
+      }}
+    patching_exception_patch_source: >-
+      {{
+        'inventory'
+        if (patching_exception_enabled | default(false) | bool)
+        else (
+          'aap_group'
+          if (_patch_temp_group_member | bool)
+          else 'inventory'
+        )
+      }}
+    patching_exception_patch_reference: >-
+      {{
+        patching_exception_reference
+        if (patching_exception_enabled | default(false) | bool)
+        else (
+          patch_temp_reference
+          if (_patch_temp_group_member | bool)
+          else ''
+        )
+      }}
+    patching_exception_patch_expires_at: >-
+      {{
+        ''
+        if (patching_exception_enabled | default(false) | bool)
+        else (
+          patch_temp_expires_at
+          if (_patch_temp_group_member | bool)
+          else ''
+        )
+      }}
+    patching_reboot_exception_source: >-
+      {{
+        'inventory'
+        if (patching_reboot_exception_enabled | default(false) | bool)
+        else (
+          'aap_group'
+          if (_reboot_temp_group_member | bool)
+          else 'inventory'
+        )
+      }}
+    patching_reboot_exception_expires_at: >-
+      {{
+        ''
+        if (patching_reboot_exception_enabled | default(false) | bool)
+        else (
+          reboot_temp_expires_at
+          if (_reboot_temp_group_member | bool)
+          else ''
+        )
+      }}
+  when: (_patch_temp_invalid | bool) or (_reboot_temp_invalid | bool)
   changed_when: false
   tags:
     - always
+    - report
 
-- name: Reject empty hostname entries between commas
+- name: Fail closed when temporary patch exemption metadata is missing or malformed
   ansible.builtin.assert:
     that:
-      - (patch_temporary_exempt_host_list | select('equalto', '') | list | length) == 0
+      - not (_patch_temp_invalid | bool)
     fail_msg: >-
-      patch_temporary_exempt_hosts contains empty entries between commas
-      ({{ _patch_temporary_exempt_csv_trimmed | default('') }}). Leave the field
-      blank for no temporary exemptions, or use comma-separated exact
-      inventory_hostname values with no empty elements.
-  when: (_patch_temporary_exempt_csv_trimmed | default('') | length) > 0
+      Host {{ inventory_hostname }} is in {{ patch_temp_exempt_group }} but
+      patch_temp_reference and patch_temp_expires_at must both be set.
+      patch_temp_expires_at must be a real UTC calendar datetime
+      (YYYY-MM-DDTHH:MM:SSZ). Matching the ISO-8601 Z shape is not enough;
+      impossible dates such as February 30 are rejected. Missing or malformed
+      metadata blocks remediation. This playbook does not modify AAP group
+      membership.
+  when: _patch_temp_group_member | bool
   tags:
     - always
 
-- name: Require a reference when temporary exemption hosts are listed
+- name: Fail closed when temporary reboot exemption metadata is missing or malformed
   ansible.builtin.assert:
     that:
-      - (patch_temporary_exemption_reference | default('') | string | trim | length) > 0
+      - not (_reboot_temp_invalid | bool)
     fail_msg: >-
-      patch_temporary_exempt_hosts is not empty but
-      patch_temporary_exemption_reference is blank. Provide an approved
-      exemption/request reference for this job, or clear the hostname list.
-  when: (patch_temporary_exempt_host_list | default([]) | length) > 0
-  tags:
-    - always
-
-- name: Reject wildcards, group patterns, and malformed temporary hostnames
-  ansible.builtin.assert:
-    that:
-      - (patch_temporary_exempt_host_list | select('match', '.*[\\*\\?\\[\\]@:/].*') | list | length) == 0
-      - ('all' not in (patch_temporary_exempt_host_list | map('lower') | list))
-      - ('*' not in patch_temporary_exempt_host_list)
-    fail_msg: >-
-      Temporary exemption hostnames must be exact inventory_hostname values
-      in the current Limit. Wildcards, group patterns, and malformed entries
-      are not allowed ({{ patch_temporary_exempt_host_list | join(', ') }}).
-  when: (patch_temporary_exempt_host_list | default([]) | length) > 0
-  tags:
-    - always
-
-- name: Reject temporary exemption hosts that are not in this play
-  ansible.builtin.assert:
-    that:
-      - (patch_temporary_exempt_host_list | difference(ansible_play_hosts_all | default([])) | length) == 0
-    fail_msg: >-
-      Temporary exemption host(s) are not in the current Limit population:
-      {{ patch_temporary_exempt_host_list | difference(ansible_play_hosts_all | default([])) | join(', ') }}.
-      Use exact inventory_hostname values from this job's Limit.
-  when: (patch_temporary_exempt_host_list | default([]) | length) > 0
+      Host {{ inventory_hostname }} is in {{ reboot_temp_exempt_group }} but
+      reboot_temp_reference and reboot_temp_expires_at must both be set.
+      reboot_temp_expires_at must be a real UTC calendar datetime
+      (YYYY-MM-DDTHH:MM:SSZ). Matching the ISO-8601 Z shape is not enough;
+      impossible dates such as February 30 are rejected. Missing or malformed
+      metadata blocks remediation. This playbook does not modify AAP group
+      membership.
+  when: _reboot_temp_group_member | bool
   tags:
     - always

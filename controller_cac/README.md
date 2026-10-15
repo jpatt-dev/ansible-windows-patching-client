@@ -1,7 +1,8 @@
 # Controller configuration as code
 
 This directory is the declarative AAP 2.7 configuration for Windows patching
-**application** objects: one Project and three Job Templates.
+**application** objects: one Project and eight Job Templates (Full Patch and
+Precheck for LAB, IST, UAT, and PROD).
 
 It does **not** create organizations, inventories, credentials, Execution
 Environments, instance groups, or workflow templates. Those are referenced by
@@ -29,38 +30,43 @@ Do not invent a REST/module wrapper in this repository.
 | --- | --- |
 | Project | `Windows Patching` (SCM URL is a placeholder) |
 | Job Template | `Windows Full Patch LAB` |
+| Job Template | `Windows Full Patch IST` |
+| Job Template | `Windows Full Patch UAT` |
 | Job Template | `Windows Full Patch PROD` |
-| Job Template | `Windows Precheck` |
+| Job Template | `Windows Precheck LAB` |
+| Job Template | `Windows Precheck IST` |
+| Job Template | `Windows Precheck UAT` |
+| Job Template | `Windows Precheck PROD` |
 
 Waves are **not** Job Templates. Operators set Limit to `windows_canary` or
 `windows_wave_1` … `windows_wave_20`.
 
-DEV and UAT are reserved environment labels. Do not auto-create templates for
-them. Copy the LAB or PROD extra_vars block when those inventories exist.
+Each Job Template binds one inventory (`ask_inventory_on_launch: false`).
+DEV is reserved with no templates.
 
 ## Surveys
 
 Job Templates set `survey_file` to:
 
-- `surveys/windows_patch_workflow_survey.yml` (both Full Patch templates)
-- `surveys/windows_precheck_survey.yml` (Precheck)
+- `surveys/windows_patch_workflow_survey.yml` (all Full Patch templates)
+- `surveys/windows_precheck_survey.yml` (all Precheck templates)
 
 Do not copy question lists into `vars/`. Load those files at dispatch.
 
-## LAB vs PROD extra-vars
+## Extra-vars by environment
 
-| Variable | LAB Full Patch | PROD Full Patch | Precheck |
+| Variable | LAB / IST Full Patch | UAT / PROD Full Patch | All Precheck |
 | --- | --- | --- | --- |
 | `snow_require_change_validation` | `false` | `true` | `false` |
 | `snow_enabled` | `false` | `false` until shared role + attach/work notes are accepted | `false` |
 | `snow_shared_role` | empty | empty until the shared role is in the EE | empty |
 | `patch_require_maintenance_window` | `false` | `true` | `false` |
 
-PROD remediating hosts **fail closed** while `snow_shared_role` is empty.
+UAT/PROD remediating hosts **fail closed** while `snow_shared_role` is empty.
 Exempt and read-only hosts still skip CR validation in the playbook.
 
 All templates: `ask_limit_on_launch: true`, `ask_variables_on_launch: false`,
-`job_slice_count: 1`.
+`ask_inventory_on_launch: false`, `job_slice_count: 1`.
 
 Protected variables must not be surveyed. See
 `controller_cac_protected_variables` in `vars/settings.yml`.
@@ -102,7 +108,7 @@ See `tests/controller_cac/test_empty_wave_detection.yml`.
 
 ## RBAC
 
-- Operators: Execute on the three Job Templates. Cannot prompt extra-vars or
+- Operators: Execute on the eight Job Templates. Cannot prompt extra-vars or
   edit templates.
 - Administrators: may change PROD extra-vars (`snow_shared_role`, SMTP,
   `snow_enabled`) after change control.

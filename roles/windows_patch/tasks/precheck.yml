@@ -18,6 +18,15 @@
   tags:
     - precheck
 
+- name: Snapshot pre-patch OS build for historical reporting
+  ansible.builtin.set_fact:
+    windows_os_build_pre: "{{ windows_os_build | default('not_available') }}"
+  when: windows_os_build_pre is not defined
+  changed_when: false
+  tags:
+    - precheck
+    - report
+
 - name: Resolve patch provider / WSUS source context (validate only)
   ansible.builtin.include_role:
     name: windows_patch_source

@@ -120,6 +120,7 @@
       ansible.builtin.set_fact:
         snow_change_validation_ok: false
         snow_change_validation_reason: unknown
+        patch_lifecycle_failed: false
 
     - name: Expect unknown confirmation to fail
       block:
@@ -273,6 +274,7 @@
         snow_change_validation_reason: leftover_success
         patching_exception_active: false
         operator_authorize_patch_install: true
+        patch_lifecycle_failed: false
 
     - name: Expect stale confirmation to be ignored
       block:
