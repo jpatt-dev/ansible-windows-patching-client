@@ -2,8 +2,9 @@
 # Collections for windows-patch-ee (declared only — do not vendor into the repo).
 # Aligns with repository root requirements.yml.
 #
-# servicenow.itsm is NOT included — this pack uses ansible.builtin.uri stubs.
-# Client forks may add servicenow.itsm after pinning a Hub-supported version.
+# servicenow.itsm is NOT included. ServiceNow REST is not implemented in
+# this repository. Client forks may add servicenow.itsm after pinning a
+# Hub-supported version and publishing the shared ServiceNow role.
 
 collections:
   - name: ansible.windows

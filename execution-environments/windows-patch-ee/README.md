@@ -10,8 +10,9 @@ email reporting.
 Collections are **declared** only — they are **not** vendored into this git
 repository.
 
-`servicenow.itsm` is **not** included (URI stubs in-repo). Add it in a client
-fork if you replace EXAMPLE ServiceNow tasks.
+`servicenow.itsm` is **not** included. ServiceNow REST is not implemented in
+this repository. Add it in a client fork after the shared ServiceNow role is
+published.
 
 ## Build with ansible-builder
 

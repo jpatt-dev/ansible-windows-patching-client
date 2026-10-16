@@ -7,7 +7,6 @@
 # Local / generated artifacts — excluded from git archive packages if present.
 .pytest_cache/ export-ignore
 **/__pycache__/ export-ignore
-*.py export-ignore
 *.pyc export-ignore
 *.pyo export-ignore
 .venv/ export-ignore

@@ -7,8 +7,8 @@
 # Production runtime collections come from the Execution Environment
 # (execution-environments/windows-patch-ee/) — do not vendor collections/ into git.
 #
-# ServiceNow: this pack uses ansible.builtin.uri stubs. Do not add
-# servicenow.itsm unless a client fork replaces the stubs.
+# ServiceNow REST is not implemented here. Do not add servicenow.itsm
+# unless a client fork includes the unpublished shared ServiceNow role.
 
 collections:
   - name: ansible.windows

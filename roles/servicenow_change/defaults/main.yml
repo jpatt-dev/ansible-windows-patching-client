@@ -1,6 +1,7 @@
 ---
 # ServiceNow change integration.
-# EXAMPLE URI tasks stay disabled until the shared ServiceNow role is published.
+# This role does not implement REST. Work notes/attach use snow_shared_role
+# when that unpublished shared role is published.
 # Do not put the unpublished collection name or version here.
 #
 # Auth and instance URL come from AAP credentials / injected environment
@@ -16,9 +17,6 @@ snow_require_change_validation: false
 
 # Shared role FQCN is supplied by Controller/EE when published. Empty = not delivered.
 snow_shared_role: ""
-
-# Keep EXAMPLE ansible.builtin.uri integrations off until the shared role exists.
-snow_example_integrations_enabled: false
 
 # Display change number (CHG...) versus sys_id. Survey change_ticket_id is the
 # display number. snow_change_id remains a legacy sys_id/number field.
@@ -50,7 +48,3 @@ snow_work_note_message: ""
 
 # Optional path on the execution node for attach_report (set by calling playbook).
 snow_report_path: ""
-
-# EXAMPLE table names — replace per client ServiceNow process.
-snow_change_table: change_request
-snow_task_table: change_task

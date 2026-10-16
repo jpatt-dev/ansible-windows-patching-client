@@ -100,12 +100,14 @@
         _csv_text: "{{ _csv_slurp.content | b64decode }}"
         _csv_lines: "{{ (_csv_slurp.content | b64decode | trim).splitlines() }}"
 
-    - name: Assert CSV quoting preserves field values
+    - name: Assert CSV header, quoting, record count, and published report agreement
       ansible.builtin.assert:
         that:
           - (_csv_lines | length) == 4
-          - _csv_lines[0] is match('^"Hostname","FQDN"')
-          - ('"Reason Code","Pending Reboot","Manual Follow-up Required"' in _csv_lines[0])
+          - (_csv_lines | select('equalto', '') | list | length) == 0
+          - _csv_lines[0] == _csv_header_expected
+          - (_csv_lines[0] | regex_findall('","') | length) == 15
+          - (('\\' ~ 'n') not in (_csv_lines | join('')))
           - ('"WINHOST01"' in _csv_lines[1])
           - ('"Microsoft Windows Server 2019 Datacenter"' in _csv_lines[1])
           - ('"17763.7553"' in _csv_lines[1])
@@ -118,16 +120,9 @@
           - _csv_lines[3] is match('^"HOST,COMMA",""')
           - _csv_lines[3] is match('.*"UNKNOWN_RESULT","not_available","False"$')
           - (_csv_text | trim) == (patch_workflow_report_csv | trim)
-        fail_msg: Generated CSV quoting did not preserve field values.
-
-    - name: Validate generated CSV with Python csv module
-      ansible.builtin.command:
-        argv:
-          - "{{ ansible_playbook_python }}"
-          - "{{ playbook_dir }}/assert_generated_csv.py"
-          - "{{ patch_final_report_csv_path }}"
-          - "4"
-      changed_when: false
+        fail_msg: Generated CSV quoting, header, or published report agreement did not match.
+      vars:
+        _csv_header_expected: '"Hostname","FQDN","OS Release","Post-Patch Kernel/Build","Location","Patched","Exempt","Result","Reason","Updates Installed","Updates Remaining","Change Ticket","Patch Wave","Reason Code","Pending Reboot","Manual Follow-up Required"'
 
 - name: CSV rendering with zero hosts
   hosts: localhost
@@ -167,14 +162,28 @@
         name: patch_report
         tasks_from: final_write.yml
 
-    - name: Validate zero-host CSV with Python csv module
-      ansible.builtin.command:
-        argv:
-          - "{{ ansible_playbook_python }}"
-          - "{{ playbook_dir }}/assert_generated_csv.py"
-          - "{{ patch_final_report_csv_path }}"
-          - "1"
-      changed_when: false
+    - name: Read generated zero-host CSV
+      ansible.builtin.slurp:
+        src: "{{ patch_final_report_csv_path }}"
+      register: _zero_csv_slurp
+
+    - name: Parse generated zero-host CSV lines
+      ansible.builtin.set_fact:
+        _zero_csv_text: "{{ _zero_csv_slurp.content | b64decode }}"
+        _zero_csv_lines: "{{ (_zero_csv_slurp.content | b64decode | trim).splitlines() }}"
+
+    - name: Assert zero-host CSV is header-only and matches the published report
+      ansible.builtin.assert:
+        that:
+          - (_zero_csv_lines | length) == 1
+          - (_zero_csv_lines | select('equalto', '') | list | length) == 0
+          - _zero_csv_lines[0] == _csv_header_expected
+          - (_zero_csv_lines[0] | regex_findall('","') | length) == 15
+          - (('\\' ~ 'n') not in (_zero_csv_lines | join('')))
+          - (_zero_csv_text | trim) == (patch_workflow_report_csv | trim)
+        fail_msg: Zero-host CSV must be the canonical header only and match the published report.
+      vars:
+        _csv_header_expected: '"Hostname","FQDN","OS Release","Post-Patch Kernel/Build","Location","Patched","Exempt","Result","Reason","Updates Installed","Updates Remaining","Change Ticket","Patch Wave","Reason Code","Pending Reboot","Manual Follow-up Required"'
 
 - name: Seed mock hosts for result classification
   hosts: localhost

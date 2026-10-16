@@ -32,6 +32,10 @@ env/
 .cache/
 
 
+# Local env files (never commit)
+.env
+.env.*
+
 # Secrets / vault (should never be committed in plaintext)
 *vault*.yml
 !*vault*.example.yml

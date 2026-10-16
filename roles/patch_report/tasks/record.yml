@@ -48,11 +48,7 @@
             else (
               windows_update_search.found_update_count | default(0) | int
               if (windows_update_search is defined)
-              else (
-                windows_postcheck_search.found_update_count | default(0) | int
-                if (windows_postcheck_search is defined)
-                else 0
-              )
+              else 0
             )
           )
         )

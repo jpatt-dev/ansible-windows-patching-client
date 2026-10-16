@@ -69,7 +69,7 @@ Inventories and credentials remain external references.
 | Git | Playbooks, roles, safety policy, approved target list, application CaC |
 | Inventory | Hosts, groups, reboot policy, exceptions, optional `patch_location`, optional `snow_ci_sys_id` / `patch_environment`, WinRM |
 | Limit | Patch wave / launch population (`patch_wave_name`) |
-| Survey | Per-run authorization, maintenance window, change display number, temporary exemptions |
+| Survey | Per-run authorization, maintenance window, change display number |
 | Job Template extra-vars / RBAC | `snow_require_change_validation`, `snow_enabled`, `snow_shared_role`, `patch_require_maintenance_window` |
 | Credential | Windows and external-service secrets |
 
@@ -242,9 +242,10 @@ When enabled, malformed output, execution failure, `critical_failed=true`, or
 
 ## ServiceNow
 
-See [external-contracts.md](external-contracts.md). EXAMPLE URI tasks stay
-disabled. `snow_enabled` and `snow_require_change_validation` are
-administrator Job Template extra-vars, not survey fields.
+See [external-contracts.md](external-contracts.md). This repository does not
+call ServiceNow REST APIs. `snow_enabled` and
+`snow_require_change_validation` are administrator Job Template extra-vars,
+not survey fields.
 
 Lab Job Template extra-vars: `snow_require_change_validation=false` so
 authorized testing can run without the unpublished shared role. Production

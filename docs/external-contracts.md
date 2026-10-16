@@ -85,9 +85,8 @@ inventory.
 ## ServiceNow adapter interface
 
 This repository's `servicenow_change` role is a thin adapter. It does not
-implement REST. EXAMPLE `uri` tasks remain disabled
-(`snow_example_integrations_enabled: false`) until the shared role is
-published. This repository does not name that collection or version.
+implement REST. Work notes and attach wait for the unpublished shared role.
+This repository does not name that collection or version.
 
 **Identifiers**
 
