@@ -1,0 +1,33 @@
+---
+# Future integration point for patch authorization.
+#
+# Do not treat a successful change_request_info read as permission to patch.
+# Before this operation can return success, it still needs:
+# - the client's approval rules (approved is not the same as "record exists")
+# - the maintenance window
+# - configuration item scope for the hosts in the job
+#
+# Until those checks exist, this task fails closed and never sets success=true.
+
+- name: Record that change validation did not authorize work
+  ansible.builtin.set_fact:
+    snow_result:
+      operation: validate
+      success: false
+      number: ""
+      sys_id: ""
+      state: ""
+      approval: ""
+      message: >-
+        Change validation is not implemented. Approval state, maintenance
+        window, and configuration item scope are required before patching
+        can be authorized.
+
+- name: Fail closed until approval, window, and CI scope checks exist
+  ansible.builtin.fail:
+    msg: >-
+      snow_operation=validate is not available yet.
+      Retrieving a change request does not authorize patching.
+      Approval state, maintenance window, and configuration item scope
+      checks are required before this operation can authorize work.
+      No authorization decision was granted.

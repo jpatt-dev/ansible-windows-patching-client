@@ -1,0 +1,241 @@
+---
+# Runs once from the preparation play. Scope is ansible_limit, not an extra var.
+# The regex is literal so a widened allowlist variable cannot admit another pattern.
+
+- name: Record one preparation execution
+  ansible.builtin.set_fact:
+    snow_prepare_execution_count: "{{ _snow_prepare_execution_count | int }}"
+  vars:
+    _snow_prepare_prior: "{{ hostvars['localhost']['snow_prepare_execution_count'] | default(0, true) }}"
+    _snow_prepare_execution_count: "{{ (_snow_prepare_prior | int) + 1 }}"
+  delegate_to: localhost
+  delegate_facts: true
+  run_once: true
+
+- name: Require one approved wave in the AAP Limit
+  ansible.builtin.assert:
+    that:
+      - (ansible_limit | default('') | string | trim) is match('^windows_wave_([1-9]|1[0-9]|20)$')
+      - (ansible_limit | default('') | string | trim) in snow_prepare_supported_waves
+    fail_msg: >-
+      The AAP Limit must be exactly one of windows_wave_1 through windows_wave_20.
+      Got '{{ ansible_limit | default('') }}'.
+      all, *, windows_hosts, multiple waves, host patterns, and other groups are rejected.
+      patch_wave_name is not used.
+    quiet: true
+  run_once: true
+
+- name: Require the Limit to select every host in that wave
+  ansible.builtin.assert:
+    that:
+      - ansible_play_hosts_all | length > 0
+      - (ansible_play_hosts_all | sort) == (groups[ansible_limit | string | trim] | default([]) | sort)
+    fail_msg: >-
+      Limit {{ ansible_limit | string | trim }} did not select the complete wave.
+      Selected ({{ ansible_play_hosts_all | length }}): {{ ansible_play_hosts_all | sort | join(', ') }}.
+      Wave group ({{ groups[ansible_limit | string | trim] | default([]) | length }}):
+      {{ groups[ansible_limit | string | trim] | default([]) | sort | join(', ') }}.
+      A partial host list, a wave member outside windows_hosts, or an extra host fails preparation.
+      No change was created.
+    quiet: true
+  run_once: true
+
+- name: Collect each selected host sys_id
+  ansible.builtin.set_fact:
+    snow_prepare_ci_map: "{{ snow_prepare_ci_map_text | trim | from_json }}"
+  vars:
+    snow_prepare_ci_map_text: |
+      {% set ns = namespace(rows=[]) %}
+      {% for host in ansible_play_hosts_all | sort %}
+      {% set ns.rows = ns.rows + [{
+        'hostname': host,
+        'sys_id': hostvars[host]['sys_id'] | default('', true) | string | trim
+      }] %}
+      {% endfor %}
+      {{ ns.rows | to_json }}
+  run_once: true
+
+- name: Check the wave CI identifiers
+  ansible.builtin.set_fact:
+    snow_prepare_ci_problems: "{{ snow_prepare_ci_problems_text | trim | from_json }}"
+  vars:
+    snow_prepare_ci_problems_text: |
+      {% set ns = namespace(missing=[], invalid=[], seen=[], duplicates=[]) %}
+      {% for row in snow_prepare_ci_map %}
+      {% if row.sys_id | length == 0 %}
+      {% set ns.missing = ns.missing + [row.hostname] %}
+      {% elif not (row.sys_id is match('^[0-9a-fA-F]{32}$')) %}
+      {% set ns.invalid = ns.invalid + [row.hostname ~ '=' ~ row.sys_id] %}
+      {% else %}
+      {% set key = row.sys_id | lower %}
+      {% if key in ns.seen and key not in ns.duplicates %}
+      {% set ns.duplicates = ns.duplicates + [key] %}
+      {% endif %}
+      {% set ns.seen = ns.seen + [key] %}
+      {% endif %}
+      {% endfor %}
+      {{ {
+        'missing': ns.missing,
+        'invalid': ns.invalid,
+        'duplicates': ns.duplicates
+      } | to_json }}
+  run_once: true
+
+- name: Reject hosts without a usable CI sys_id
+  when: >-
+    snow_prepare_ci_problems.missing | length > 0
+    or snow_prepare_ci_problems.invalid | length > 0
+    or snow_prepare_ci_problems.duplicates | length > 0
+  ansible.builtin.fail:
+    msg: >-
+      The wave cannot be prepared. No change was created.
+      Hosts missing sys_id: {{ snow_prepare_ci_problems.missing | join(', ') }}.
+      Hosts with a sys_id that is not 32 hexadecimal characters:
+      {{ snow_prepare_ci_problems.invalid | join(', ') }}.
+      CI sys_ids used by more than one host:
+      {{ snow_prepare_ci_problems.duplicates | join(', ') }}.
+  run_once: true
+
+- name: Show the selected hosts and CI mapping
+  ansible.builtin.debug:
+    msg:
+      limit: "{{ ansible_limit | string | trim }}"
+      host_count: "{{ ansible_play_hosts_all | length }}"
+      ci_map: "{{ snow_prepare_ci_map }}"
+      preview_only: "{{ snow_prepare_preview_only | bool }}"
+  run_once: true
+
+- name: Stop after preview without calling ServiceNow
+  when: snow_prepare_preview_only | bool
+  ansible.builtin.debug:
+    msg: >-
+      Preview only. No ServiceNow record was created or modified.
+      Set snow_prepare_preview_only=false to continue.
+  run_once: true
+
+- name: Read an existing change instead of creating one
+  when:
+    - not (snow_prepare_preview_only | bool)
+    - snow_prepare_existing_change_number | default('') | string | length > 0
+  run_once: true
+  block:
+    - name: Read the change supplied for resume
+      ansible.builtin.include_role:
+        name: servicenow_patching_change
+      vars:
+        snow_operation: read
+        snow_change_number: "{{ snow_prepare_existing_change_number }}"
+
+    - name: Keep the existing change identity
+      ansible.builtin.set_fact:
+        snow_prepare_change_number: "{{ snow_result.number }}"
+        snow_prepare_change_sys_id: "{{ snow_result.sys_id }}"
+        snow_prepare_created_this_run: false
+
+- name: Require authorization before creating a change
+  when:
+    - not (snow_prepare_preview_only | bool)
+    - snow_prepare_existing_change_number | default('') | string | length == 0
+  ansible.builtin.assert:
+    that:
+      - snow_prepare_allow_create | bool
+      - patch_change_short_description | default('') | string | length > 0
+    fail_msg: >-
+      Creating a change requires snow_prepare_allow_create=true,
+      snow_prepare_preview_only=false, and patch_change_short_description.
+      To finish CI association on a change that already exists, set
+      snow_prepare_existing_change_number instead. This playbook will
+      not open a second change for that resume.
+    quiet: true
+  run_once: true
+
+- name: Create the change request
+  when:
+    - not (snow_prepare_preview_only | bool)
+    - snow_prepare_existing_change_number | default('') | string | length == 0
+  run_once: true
+  block:
+    - name: Open one normal change
+      ansible.builtin.include_role:
+        name: servicenow_patching_change
+      vars:
+        snow_operation: create
+        snow_allow_create: true
+        snow_short_description: "{{ patch_change_short_description }}"
+        snow_description: "{{ patch_change_description }}"
+
+    - name: Keep the new change identity before any later operation
+      ansible.builtin.set_fact:
+        snow_prepare_change_number: "{{ snow_result.number }}"
+        snow_prepare_change_sys_id: "{{ snow_result.sys_id }}"
+        snow_prepare_created_this_run: true
+
+- name: Display and publish the change number
+  when: not (snow_prepare_preview_only | bool)
+  run_once: true
+  block:
+    - name: Show the change number
+      ansible.builtin.debug:
+        msg:
+          change_number: "{{ snow_prepare_change_number }}"
+          change_sys_id: "{{ snow_prepare_change_sys_id }}"
+          created_this_run: "{{ snow_prepare_created_this_run | bool }}"
+
+    - name: Publish the change number for a later job
+      ansible.builtin.set_stats:
+        data:
+          patch_change_number: "{{ snow_prepare_change_number }}"
+          patch_change_sys_id: "{{ snow_prepare_change_sys_id }}"
+
+- name: Associate the wave configuration items
+  when: not (snow_prepare_preview_only | bool)
+  run_once: true
+  block:
+    - name: Link the CMDB sys_ids to the change
+      ansible.builtin.include_role:
+        name: servicenow_patching_change
+      vars:
+        snow_operation: add_cis
+        snow_change_number: "{{ snow_prepare_change_number }}"
+        snow_ci_sys_ids: "{{ snow_prepare_ci_map | map(attribute='sys_id') | list }}"
+
+    - name: Require every wave CI on the change
+      ansible.builtin.assert:
+        that:
+          - snow_result.success | bool
+          - snow_result.operation == 'add_cis'
+          - snow_result.number == snow_prepare_change_number
+          - snow_result.confirmed_ci_sys_ids | length == snow_prepare_ci_map | length
+        fail_msg: >-
+          Change {{ snow_prepare_change_number }} exists, but CI
+          association is incomplete.
+        quiet: true
+
+    - name: Show the affected-CI result
+      ansible.builtin.debug:
+        msg:
+          change_number: "{{ snow_prepare_change_number }}"
+          confirmed_ci_sys_ids: "{{ snow_result.confirmed_ci_sys_ids }}"
+          linked_ci_sys_ids: "{{ snow_result.linked_ci_sys_ids }}"
+          existing_ci_sys_ids: "{{ snow_result.existing_ci_sys_ids }}"
+  rescue:
+    - name: Show the change that still needs CI association
+      ansible.builtin.debug:
+        msg:
+          change_number: "{{ snow_prepare_change_number }}"
+          change_sys_id: "{{ snow_prepare_change_sys_id }}"
+          created_this_run: "{{ snow_prepare_created_this_run | bool }}"
+          ci_association: incomplete
+
+    - name: Fail without creating another change
+      ansible.builtin.fail:
+        msg: >-
+          Change {{ snow_prepare_change_number }} exists, but CI
+          association is incomplete. This job failed.
+          {{ 'This run created that change. ' if snow_prepare_created_this_run | bool else 'This run did not create a change. ' }}
+          Resume with the same AAP Limit, snow_prepare_preview_only=false, and
+          snow_prepare_existing_change_number={{ snow_prepare_change_number }}.
+          Do not enable snow_prepare_allow_create for that resume.
+          The role does not treat a task_ci POST as proof. Inspect the
+          cmdb_ci read and the task_ci confirmation read. Set
+          snow_task_ci_diagnostics=true for row counts and field types.

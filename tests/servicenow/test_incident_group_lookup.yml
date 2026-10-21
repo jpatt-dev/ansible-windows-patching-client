@@ -1,0 +1,95 @@
+---
+# Mocked api_info shapes for the assignment-group lookup. No ServiceNow calls.
+#   ansible-playbook tests/servicenow/test_incident_group_lookup.yml
+
+- name: Assignment group lookup accepts record and records
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_incident_operation: create
+    snow_incident_assignment_group: Windows Patching
+    snow_group_sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    snow_group_other_sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    snow_incident_group_tasks: >-
+      {{
+        playbook_dir ~ '/../../roles/servicenow_incident/tasks/resolve_assignment_group.yml'
+      }}
+    snow_group_cases:
+      - name: records list
+        expect: pass
+        sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        lookup:
+          records:
+            - name: Windows Patching
+              sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      - name: record list
+        expect: pass
+        sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        lookup:
+          record:
+            - name: Windows Patching
+              sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      - name: record mapping
+        expect: pass
+        sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        lookup:
+          record:
+            name: Windows Patching
+            sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      - name: records mapping
+        expect: pass
+        sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        lookup:
+          records:
+            name: Windows Patching
+            sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      - name: empty record falls through to records
+        expect: pass
+        sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        lookup:
+          record: []
+          records:
+            - name: Windows Patching
+              sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      - name: non-empty record wins over records
+        expect: pass
+        sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        lookup:
+          record:
+            - name: Windows Patching
+              sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          records:
+            - name: Windows Patching
+              sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      - name: empty records
+        expect: fail
+        lookup:
+          records: []
+      - name: two records
+        expect: fail
+        lookup:
+          records:
+            - name: Windows Patching
+              sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            - name: Windows Patching
+              sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      - name: name mismatch
+        expect: fail
+        lookup:
+          records:
+            - name: Other Group
+              sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      - name: invalid sys_id
+        expect: fail
+        lookup:
+          record:
+            name: Windows Patching
+            sys_id: not-a-sys-id
+  tasks:
+    - name: Check one mocked assignment group response
+      ansible.builtin.include_tasks: tasks/incident_group_lookup_case.yml
+      loop: "{{ snow_group_cases }}"
+      loop_control:
+        loop_var: snow_group_case
+        label: "{{ snow_group_case.name }}"

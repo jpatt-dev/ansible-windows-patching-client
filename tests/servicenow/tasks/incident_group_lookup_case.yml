@@ -1,0 +1,42 @@
+---
+- name: Start from the mocked api_info result
+  ansible.builtin.set_fact:
+    snow_incident_group_lookup: "{{ snow_group_case.lookup }}"
+    snow_incident_assignment_group_id: ""
+    snow_group_case_failed: false
+    snow_group_case_error: ""
+
+- name: Accept one exact assignment group
+  when: snow_group_case.expect == 'pass'
+  block:
+    - name: Resolve the mocked assignment group
+      ansible.builtin.include_tasks: "{{ snow_incident_group_tasks }}"
+
+    - name: Assert the exact group sys_id was kept
+      ansible.builtin.assert:
+        that:
+          - snow_incident_assignment_group_id == snow_group_case.sys_id
+        fail_msg: "{{ snow_group_case.name }} did not keep the matching group sys_id."
+
+- name: Reject a lookup that is not one exact group
+  when: snow_group_case.expect == 'fail'
+  block:
+    - name: Resolve the mocked assignment group and expect failure
+      block:
+        - name: Resolve the mocked assignment group
+          ansible.builtin.include_tasks: "{{ snow_incident_group_tasks }}"
+      rescue:
+        - name: Record the expected assignment group failure
+          ansible.builtin.set_fact:
+            snow_group_case_failed: true
+            snow_group_case_error: >-
+              {{ ansible_failed_result.msg | default('assignment group lookup failed') }}
+
+    - name: Assert the bad lookup did not choose a group
+      ansible.builtin.assert:
+        that:
+          - snow_group_case_failed | bool
+          - snow_incident_assignment_group_id | length == 0
+          - "'exactly one' in snow_group_case_error"
+          - "'password' not in (snow_group_case_error | lower)"
+        fail_msg: "{{ snow_group_case.name }} did not fail closed."

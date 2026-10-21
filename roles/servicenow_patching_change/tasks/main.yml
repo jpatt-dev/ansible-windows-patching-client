@@ -1,0 +1,300 @@
+---
+# ServiceNow calls run once, on the controller, even if a caller targets
+# a host group. set_fact records snow_result on the current inventory host
+# for that single run, not on every host in the play. Call this role from
+# a localhost play so the current host and the controller are the same.
+
+- name: Run the ServiceNow change operation once on the controller
+  delegate_to: localhost
+  become: false
+  run_once: true
+  vars:
+    ansible_connection: local
+  block:
+    - name: Validate the operation name
+      ansible.builtin.assert:
+        that:
+          - snow_operation is string
+          - snow_operation in snow_supported_operations
+        fail_msg: >-
+          snow_operation must be one of
+          {{ snow_supported_operations | join(', ') }}.
+        quiet: true
+
+    - name: Validate snow_change_fields is a dictionary
+      ansible.builtin.assert:
+        that:
+          - snow_change_fields is mapping
+        fail_msg: snow_change_fields must be a dictionary of change columns.
+        quiet: true
+
+    - name: Validate inputs for read
+      when: snow_operation == 'read'
+      ansible.builtin.assert:
+        that:
+          - snow_change_number | default('') | string | length > 0
+        fail_msg: read requires snow_change_number.
+        quiet: true
+
+    - name: Validate inputs for create
+      when: snow_operation == 'create'
+      ansible.builtin.assert:
+        that:
+          - snow_allow_create | bool
+          - snow_short_description | default('') | string | length > 0
+        fail_msg: >-
+          create requires snow_allow_create=true and a non-empty
+          snow_short_description. Each create opens a new normal change.
+          Duplicate protection is not implemented.
+        quiet: true
+
+    - name: Validate inputs for update
+      when: snow_operation == 'update'
+      ansible.builtin.assert:
+        that:
+          - snow_change_number | default('') | string | length > 0
+          - >-
+            (snow_work_notes | default('') | string | length > 0)
+            or (snow_short_description | default('') | string | length > 0)
+            or (snow_description | default('') | string | length > 0)
+            or (snow_change_fields | length > 0)
+            or (snow_aap_job_id | default('') | string | length > 0)
+            or (tower_job_id | default('') | string | length > 0)
+            or (awx_job_id | default('') | string | length > 0)
+        fail_msg: >-
+          update requires snow_change_number and at least one of
+          snow_work_notes, snow_short_description, snow_description,
+          snow_change_fields, or an AAP job id
+          (snow_aap_job_id, tower_job_id, or awx_job_id).
+        quiet: true
+
+    - name: Validate inputs for close
+      when: snow_operation == 'close'
+      ansible.builtin.assert:
+        that:
+          - snow_allow_close | bool
+          - snow_change_number | default('') | string | length > 0
+          - snow_close_notes | default('') | string | length > 0
+          - snow_close_code in ['successful', 'successful_issues', 'unsuccessful']
+        fail_msg: >-
+          close requires snow_allow_close=true, snow_change_number,
+          snow_close_notes, and snow_close_code set to successful,
+          successful_issues, or unsuccessful. Those are the codes
+          servicenow.itsm.change_request accepts. Client-specific close-code
+          labels need a future mapping and are not translated here.
+        quiet: true
+
+    - name: Validate inputs for add_cis
+      when: snow_operation == 'add_cis'
+      ansible.builtin.assert:
+        that:
+          - >-
+            (snow_change_number | default('') | string | length > 0)
+            or (snow_change_sys_id | default('') | string | length > 0)
+          - snow_ci_sys_ids is not string
+          - snow_ci_sys_ids is sequence
+          - snow_ci_sys_ids | length > 0
+          - snow_invalid_ci_sys_ids | length == 0
+          - >-
+            snow_change_sys_id | default('') | string | length == 0
+            or snow_change_sys_id is match('^[0-9a-fA-F]{32}$')
+        fail_msg: >-
+          add_cis requires snow_change_number or snow_change_sys_id, plus
+          snow_ci_sys_ids as a list of 32-character CI sys_ids.
+          Invalid CI sys_ids: {{ snow_invalid_ci_sys_ids | join(', ') }}.
+          This operation links existing configuration items. It does not create them.
+          A failing format check is not a CMDB existence check.
+        quiet: true
+      vars:
+        snow_invalid_ci_sys_ids: >-
+          {{
+            snow_ci_sys_ids | map('string')
+            | reject('match', '^[0-9a-fA-F]{32}$')
+            | list
+          }}
+
+    - name: Validate inputs for attach_reports
+      when: snow_operation == 'attach_reports'
+      ansible.builtin.assert:
+        that:
+          - snow_change_number | default('') | string | length > 0
+          - snow_report_files is not string
+          - snow_report_files is sequence
+          - snow_report_files | length > 0
+          - snow_report_non_strings | length == 0
+          - snow_report_blank | length == 0
+          - snow_report_basenames | unique | list | length == snow_report_basenames | length
+          - snow_report_unsafe_names | length == 0
+        fail_msg: >-
+          attach_reports requires snow_change_number and snow_report_files,
+          a list of controller file paths. Each file name must be unique
+          because ServiceNow uses that name as the attachment identity.
+          File names: {{ snow_report_basenames | join(', ') }}.
+          {{ snow_report_unsafe_message }}
+        quiet: true
+      vars:
+        snow_report_non_strings: "{{ snow_report_files | reject('string') | list }}"
+        snow_report_blank: >-
+          {{
+            snow_report_files | select('string') | map('trim')
+            | select('equalto', '') | list
+          }}
+        snow_report_basenames: "{{ snow_report_files | select('string') | map('basename') | list }}"
+        snow_report_unsafe_names: "{{ snow_report_basenames | select('search', '[\\^\\r\\n]') | list }}"
+        snow_report_unsafe_message: >-
+          {{
+            'Names containing ^ or a line break: ' ~ (snow_report_unsafe_names | join(', ')) ~ '.'
+            if snow_report_unsafe_names | length > 0
+            else ''
+          }}
+
+    - name: Check that each report file exists
+      when: snow_operation == 'attach_reports'
+      ansible.builtin.stat:
+        path: "{{ snow_report_path }}"
+      loop: "{{ snow_report_files }}"
+      loop_control:
+        loop_var: snow_report_path
+        label: "{{ snow_report_path | basename }}"
+      register: snow_report_file_stats
+
+    - name: Fail when a report file is missing or unreadable
+      when: snow_operation == 'attach_reports'
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists | default(false)
+          - item.stat.isreg | default(false)
+          - item.stat.readable | default(false)
+        fail_msg: "Report file is missing or not a readable file: {{ item.snow_report_path }}"
+        quiet: true
+      loop: "{{ snow_report_file_stats.results }}"
+      loop_control:
+        label: "{{ item.snow_report_path | basename }}"
+
+    - name: Reject change fields this role does not send
+      when: snow_operation in ['create', 'update', 'close']
+      ansible.builtin.assert:
+        that:
+          - snow_rejected_change_fields | length == 0
+        fail_msg: >-
+          snow_change_fields contains
+          {{ snow_rejected_change_fields | join(', ') }}.
+          Remove approval, state, type, template, identity, close fields,
+          and work_notes. Use snow_work_notes for notes and the close
+          operation for closure.
+        quiet: true
+      vars:
+        snow_role_blocked_fields:
+          - approval
+          - approval_history
+          - approval_set
+          - upon_approval
+          - upon_reject
+          - state
+          - type
+          - chg_model
+          - template
+          - std_change_producer_version
+          - number
+          - sys_id
+          - close_code
+          - close_notes
+          - work_notes
+        snow_rejected_change_fields: >-
+          {{
+            snow_change_fields.keys() | list
+            | intersect(snow_role_blocked_fields)
+          }}
+
+    - name: Reject both assignment group name and sys_id
+      when:
+        - "'assignment_group' in snow_change_fields"
+        - "'assignment_group_id' in snow_change_fields"
+      ansible.builtin.fail:
+        msg: >-
+          Pass assignment_group (group name) or assignment_group_id (sys_id),
+          not both. The collection treats those arguments as mutually exclusive.
+
+    - name: Reject hold fields when creating a change
+      when:
+        - snow_operation == 'create'
+        - "'on_hold' in snow_change_fields or 'hold_reason' in snow_change_fields"
+      ansible.builtin.fail:
+        msg: >-
+          create opens the change in New and does not set on_hold.
+          Remove on_hold and hold_reason from snow_change_fields.
+
+    - name: Require hold_reason when a change is placed on hold
+      when:
+        - snow_operation == 'update'
+        - snow_change_fields.on_hold | default(false) | bool
+      ansible.builtin.assert:
+        that:
+          - snow_change_fields.hold_reason | default('') | string | length > 0
+        fail_msg: Setting on_hold to true requires hold_reason in snow_change_fields.
+        quiet: true
+
+    - name: Reject hold fields when closing a change
+      when:
+        - snow_operation == 'close'
+        - "'on_hold' in snow_change_fields or 'hold_reason' in snow_change_fields"
+      ansible.builtin.fail:
+        msg: >-
+          close does not change hold status.
+          Remove on_hold and hold_reason from snow_change_fields.
+
+    # Do not assert SN_HOST, SN_USERNAME, or SN_PASSWORD with lookup('env').
+    # AAP custom-credential injection can authenticate the collection while
+    # that lookup is empty. The module call remains the authentication check.
+    # API tasks are no_log and validate_certs stays true.
+
+    - name: Split module fields from client-specific change columns
+      when: snow_operation in ['create', 'update', 'close']
+      ansible.builtin.set_fact:
+        snow_selected_direct_fields: >-
+          {{
+            snow_change_fields | dict2items
+            | selectattr('key', 'in', snow_direct_change_field_names)
+            | items2dict
+          }}
+        snow_selected_other_fields: >-
+          {{
+            snow_change_fields | dict2items
+            | rejectattr('key', 'in', snow_direct_change_field_names)
+            | items2dict
+          }}
+
+    - name: Read an existing change request
+      when: snow_operation == 'read'
+      ansible.builtin.include_tasks:
+        file: read.yml
+
+    - name: Create a normal change request
+      when: snow_operation == 'create'
+      ansible.builtin.include_tasks:
+        file: create.yml
+
+    - name: Update an existing change request
+      when: snow_operation == 'update'
+      ansible.builtin.include_tasks:
+        file: update.yml
+
+    - name: Close an existing change request
+      when: snow_operation == 'close'
+      ansible.builtin.include_tasks:
+        file: close.yml
+
+    - name: Associate affected configuration items
+      when: snow_operation == 'add_cis'
+      ansible.builtin.include_tasks:
+        file: add_cis.yml
+
+    - name: Attach patch reports to the change request
+      when: snow_operation == 'attach_reports'
+      ansible.builtin.include_tasks:
+        file: attach_reports.yml
+
+    - name: Reject unimplemented change validation
+      when: snow_operation == 'validate'
+      ansible.builtin.include_tasks:
+        file: validate.yml

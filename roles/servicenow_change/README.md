@@ -20,7 +20,7 @@ See [docs/external-contracts.md](../../docs/external-contracts.md).
 
 - Display number: `snow_change_number` or survey `change_ticket_id`
 - sys_id: `snow_change_sys_id` or legacy `snow_change_id`
-- Host CI: inventory `snow_ci_sys_id`
+- Host CI: inventory `sys_id` when `snow_ci_sys_id` is empty. An already set `snow_ci_sys_id` is left as-is. Approval rules are unchanged.
 
 ## Confirmation fact
 

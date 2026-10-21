@@ -1,0 +1,71 @@
+---
+# Select one operation: read, create, update, close, add_cis, attach_reports, or validate.
+snow_operation: ""
+
+# Existing change number. Required for read, update, and close.
+# add_cis accepts this or snow_change_sys_id.
+snow_change_number: ""
+
+# Change sys_id. Optional identity for add_cis when the number is not used.
+snow_change_sys_id: ""
+
+# Configuration item sys_ids to attach to the change. Used by add_cis.
+snow_ci_sys_ids: []
+
+# When true, add_cis logs row counts and reference-field types only.
+# It does not log credentials or the ServiceNow payload.
+snow_task_ci_diagnostics: false
+
+# Optional AAP job id recorded on update work notes.
+# When empty, tower_job_id or awx_job_id is used if AAP defined it.
+snow_aap_job_id: ""
+
+# Report files to attach to the change. Paths are on the controller.
+# Used by attach_reports. The file name is the attachment identity.
+snow_report_files: []
+
+# Used by create. Also applied on update when non-empty.
+snow_short_description: ""
+snow_description: ""
+
+# Journal note. Applied on create and update when non-empty.
+# Close uses snow_close_notes and does not send this value.
+snow_work_notes: ""
+
+# Optional change columns. Direct module fields are listed below.
+# Any other key is forwarded through the collection's other parameter.
+# Approval, state, type, template, identity, and close fields are rejected.
+snow_change_fields: {}
+
+# Create and close do nothing until the caller sets these to true.
+snow_allow_create: false
+snow_allow_close: false
+
+# Close codes accepted by servicenow.itsm.change_request.
+snow_close_code: ""
+snow_close_notes: ""
+
+snow_supported_operations:
+  - read
+  - create
+  - update
+  - close
+  - add_cis
+  - attach_reports
+  - validate
+
+# Arguments that servicenow.itsm.change_request accepts directly.
+# assignment_group is a group name. assignment_group_id is a sys_id.
+snow_direct_change_field_names:
+  - requested_by
+  - assignment_group
+  - assignment_group_id
+  - category
+  - priority
+  - risk
+  - impact
+  - urgency
+  - short_description
+  - description
+  - on_hold
+  - hold_reason

@@ -1,0 +1,556 @@
+---
+# Follow-up incident selection and CI mapping. Does not call ServiceNow.
+#   ansible-playbook tests/servicenow/test_followup_incidents.yml
+
+- name: Incident creation stays disabled and out of the survey
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_patching_tasks_dir: "{{ playbook_dir }}/../../playbooks/windows/tasks"
+  tasks:
+    - name: Load Full Patch and the survey
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      loop:
+        - "{{ playbook_dir }}/../../playbooks/windows/full_patch.yml"
+        - "{{ playbook_dir }}/../../surveys/windows_patch_workflow_survey.yml"
+      register: _snow_followup_slurps
+
+    - name: Assert the playbook default, placement, and survey exclusion
+      ansible.builtin.assert:
+        that:
+          - "'snow_patching_create_incidents_enabled: false' in (_snow_followup_slurps.results[0].content | b64decode)"
+          - "'Create follow-up incidents for hosts that need manual follow-up' in (_snow_followup_slurps.results[0].content | b64decode)"
+          - "'servicenow_incident' in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_incident_one.yml'))"
+          - "'snow_incident_operation: create' in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_incident_one.yml'))"
+          - "'snow_incident_allow_create: true' in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_incident_one.yml'))"
+          - "'snow_patching_create_incidents_enabled' not in (_snow_followup_slurps.results[1].content | b64decode)"
+          - "'snow_incident_caller' not in (_snow_followup_slurps.results[1].content | b64decode)"
+        fail_msg: Follow-up incidents must stay disabled, unsurveyed, and after reporting.
+
+    - name: Include incident handling while it is disabled
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_incidents.yml"
+
+    - name: Assert a disabled run does not build incident results
+      ansible.builtin.assert:
+        that:
+          - snow_patching_incident_results is not defined
+          - not (snow_patching_incident_failed | default(false) | bool)
+        fail_msg: Disabled incident creation must not record results or a failure.
+
+- name: Register hosts for CI sys_id mapping
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add hosts that cover the reporting paths
+      ansible.builtin.add_host:
+        name: "{{ item.name }}"
+        groups: mock_ci_map
+        ansible_connection: local
+        patch_host_eligible: "{{ item.eligible }}"
+        windows_connectivity_ok: "{{ item.connected }}"
+        pending_reboot: "{{ item.pending | default(false) }}"
+        manual_followup_required: "{{ item.follow | default(false) }}"
+        patching_exception_active: "{{ item.exempt | default(false) }}"
+        sys_id: "{{ item.sys_id | default('') }}"
+        snow_ci_sys_id: stale-ci-variable
+        expected_result: "{{ item.expected_result }}"
+        windows_update_search:
+          found_update_count: "{{ item.remaining | default(0) }}"
+        patch_phase_apply: "{{ item.apply | default({}) }}"
+        patch_phase_postcheck: "{{ item.postcheck | default({}) }}"
+      loop:
+        - name: ci-success
+          eligible: true
+          connected: true
+          sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          remaining: 0
+          apply:
+            ci-success:
+              patch_attempted: true
+              updates_installed: 1
+              updates_failed: 0
+              patch_status: success
+          postcheck:
+            ci-success:
+              postcheck_status: passed
+          expected_result: success
+        - name: ci-degraded
+          eligible: true
+          connected: true
+          pending: true
+          follow: true
+          sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          remaining: 0
+          postcheck:
+            ci-degraded:
+              postcheck_status: passed
+          expected_result: degraded
+        - name: ci-failed
+          eligible: true
+          connected: true
+          follow: true
+          sys_id: cccccccccccccccccccccccccccccccc
+          remaining: 2
+          apply:
+            ci-failed:
+              patch_attempted: true
+              updates_installed: 0
+              updates_failed: 2
+              patch_status: failed
+          expected_result: failed
+        - name: ci-unreachable
+          eligible: false
+          connected: false
+          sys_id: dddddddddddddddddddddddddddddddd
+          expected_result: failed
+        - name: ci-exempt
+          eligible: false
+          connected: true
+          exempt: true
+          follow: true
+          pending: true
+          sys_id: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+          expected_result: exempt
+        - name: ci-incomplete
+          eligible: false
+          connected: true
+          sys_id: ffffffffffffffffffffffffffffffff
+          expected_result: unknown
+        - name: ci-missing
+          eligible: true
+          connected: true
+          sys_id: ""
+          remaining: 0
+          apply:
+            ci-missing:
+              patch_attempted: true
+              updates_installed: 1
+              updates_failed: 0
+              patch_status: success
+          postcheck:
+            ci-missing:
+              postcheck_status: passed
+          expected_result: success
+        - name: ci-invalid
+          eligible: true
+          connected: true
+          sys_id: not-a-sys-id
+          remaining: 0
+          apply:
+            ci-invalid:
+              patch_attempted: true
+              updates_installed: 1
+              updates_failed: 0
+              patch_status: success
+          postcheck:
+            ci-invalid:
+              postcheck_status: passed
+          expected_result: success
+
+- name: Map inventory sys_id into snow_ci_sys_id without changing the patch result
+  hosts: mock_ci_map
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: wave_1
+  tasks:
+    - name: Build the final result
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+
+    - name: Assert CI mapping and the original result
+      ansible.builtin.assert:
+        that:
+          - patch_final_result.snow_ci_sys_id == (sys_id | string | trim)
+          - patch_final_result.snow_ci_sys_id != 'stale-ci-variable'
+          - patch_final_result.result == expected_result
+        fail_msg: "{{ inventory_hostname }} did not map sys_id or its patch result changed."
+
+- name: Register a host whose final result was never built
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add a reported host and a missing host
+      ansible.builtin.add_host:
+        name: "{{ item.name }}"
+        groups: mock_ci_missing_result
+        ansible_connection: local
+        sys_id: "{{ item.sys_id }}"
+        snow_ci_sys_id: stale-ci-variable
+        patch_final_result: "{{ item.final | default(omit) }}"
+      loop:
+        - name: ci-present
+          sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          final:
+            inventory_hostname: ci-present
+            hostname: ci-present
+            result: success
+            patched: true
+            exempt: false
+            reason_code: PATCH_SUCCEEDED
+            reason: Updates installed successfully
+            manual_followup_required: false
+            snow_ci_sys_id: stale-ci-variable
+            updates_installed: 1
+            updates_remaining: 0
+            updates_failed: 0
+            patch_attempted: true
+            pre_patch_reboot_performed: false
+            post_patch_reboot_performed: false
+            pending_reboot: false
+            patching_exception_reference: ""
+            change_ticket_id: CHG001
+            patch_wave: wave_1
+        - name: ci-absent
+          sys_id: abcdefabcdefabcdefabcdefabcdefab
+
+- name: Incomplete reporting still copies inventory sys_id
+  hosts: mock_ci_missing_result
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: wave_1
+  tasks:
+    - name: Aggregate including the host that has no final result
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+
+    - name: Assert the synthesized host uses inventory sys_id
+      ansible.builtin.assert:
+        that:
+          - >-
+            {{
+              (patch_workflow_report.hosts
+               | selectattr('inventory_hostname', 'equalto', 'ci-absent')
+               | map(attribute='snow_ci_sys_id') | first)
+              == 'abcdefabcdefabcdefabcdefabcdefab'
+            }}
+          - >-
+            {{
+              (patch_workflow_report.hosts
+               | selectattr('inventory_hostname', 'equalto', 'ci-absent')
+               | map(attribute='result') | first)
+              == 'unknown'
+            }}
+        fail_msg: A host missing its final result did not keep its inventory CI sys_id.
+      run_once: true
+
+- name: Select follow-up candidates without calling ServiceNow
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_patching_tasks_dir: "{{ playbook_dir }}/../../playbooks/windows/tasks"
+    change_ticket_id: CHG0090001
+    patch_workflow_report:
+      hosts:
+        - hostname: WIN-OK
+          inventory_hostname: win-ok
+          result: success
+          exempt: false
+          reason_code: PATCH_SUCCEEDED
+          reason: Updates installed successfully
+          manual_followup_required: false
+          snow_ci_sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          change_ticket_id: CHG0090001
+          aap_job_id: "100"
+        - hostname: WIN-DEGRADED-QUIET
+          inventory_hostname: win-degraded-quiet
+          result: degraded
+          exempt: false
+          reason_code: PENDING_REBOOT
+          reason: A reboot is pending and requires follow-up
+          manual_followup_required: false
+          snow_ci_sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          change_ticket_id: CHG0090001
+          aap_job_id: "100"
+        - hostname: WIN-EXEMPT
+          inventory_hostname: win-exempt
+          result: exempt
+          exempt: true
+          reason_code: PATCH_EXEMPTION
+          reason: Approved exemption
+          manual_followup_required: true
+          snow_ci_sys_id: cccccccccccccccccccccccccccccccc
+          change_ticket_id: CHG0090001
+          aap_job_id: "100"
+        - hostname: WIN-ONE
+          inventory_hostname: win-one
+          result: failed
+          exempt: false
+          reason_code: PATCH_INSTALL_FAILED
+          reason: Update installation failed
+          manual_followup_required: true
+          snow_ci_sys_id: dddddddddddddddddddddddddddddddd
+          change_ticket_id: CHG0090001
+          aap_job_id: "100"
+        - hostname: WIN-TWO
+          inventory_hostname: win-two
+          result: degraded
+          exempt: false
+          reason_code: PENDING_REBOOT
+          reason: A reboot is pending and requires follow-up
+          manual_followup_required: true
+          snow_ci_sys_id: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+          change_ticket_id: CHG0090001
+          aap_job_id: "200"
+        - hostname: WIN-MISSING
+          inventory_hostname: win-missing
+          result: failed
+          exempt: false
+          reason_code: UNREACHABLE
+          reason: Host unreachable
+          manual_followup_required: true
+          snow_ci_sys_id: ""
+          change_ticket_id: CHG0090001
+          aap_job_id: "100"
+        - hostname: WIN-INVALID
+          inventory_hostname: win-invalid
+          result: failed
+          exempt: false
+          reason_code: PATCH_INSTALL_FAILED
+          reason: Update installation failed
+          manual_followup_required: true
+          snow_ci_sys_id: not-a-sys-id
+          change_ticket_id: CHG0090001
+          aap_job_id: "100"
+  tasks:
+    - name: Build the candidate list
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_candidates.yml"
+
+    - name: Assert who is selected and how the correlation id is built
+      ansible.builtin.assert:
+        that:
+          - snow_patching_incident_candidates | map(attribute='hostname') | list == ['WIN-ONE', 'WIN-TWO', 'WIN-MISSING', 'WIN-INVALID']
+          - "(snow_patching_incident_candidates | selectattr('hostname', 'equalto', 'WIN-ONE') | first).action == 'create'"
+          - >-
+            {{
+              (snow_patching_incident_candidates
+               | selectattr('hostname', 'equalto', 'WIN-ONE')
+               | first).correlation_id
+              == 'aap-patch:CHG0090001:WIN-ONE:PATCH_INSTALL_FAILED'
+            }}
+          - >-
+            {{
+              (snow_patching_incident_candidates
+               | selectattr('hostname', 'equalto', 'WIN-TWO')
+               | first).correlation_id
+              == 'aap-patch:CHG0090001:WIN-TWO:PENDING_REBOOT'
+            }}
+          - "(snow_patching_incident_candidates | selectattr('hostname', 'equalto', 'WIN-ONE') | first).correlation_id is not search('100')"
+          - "(snow_patching_incident_candidates | selectattr('hostname', 'equalto', 'WIN-TWO') | first).correlation_id is not search('200')"
+          - "(snow_patching_incident_candidates | selectattr('hostname', 'equalto', 'WIN-MISSING') | first).action == 'reject'"
+          - "'missing' in (snow_patching_incident_candidates | selectattr('hostname', 'equalto', 'WIN-MISSING') | first).reject_reason"
+          - "(snow_patching_incident_candidates | selectattr('hostname', 'equalto', 'WIN-INVALID') | first).action == 'reject'"
+          - "'32-character' in (snow_patching_incident_candidates | selectattr('hostname', 'equalto', 'WIN-INVALID') | first).reject_reason"
+        fail_msg: Follow-up candidate selection or correlation id did not match the report.
+
+- name: No follow-up hosts produces an empty incident list
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_patching_tasks_dir: "{{ playbook_dir }}/../../playbooks/windows/tasks"
+    snow_patching_create_incidents_enabled: true
+    patch_workflow_marker: original-report
+    patch_workflow_report:
+      hosts:
+        - hostname: WIN-OK
+          result: success
+          exempt: false
+          reason_code: PATCH_SUCCEEDED
+          reason: Updates installed successfully
+          manual_followup_required: false
+          snow_ci_sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          change_ticket_id: CHG0090001
+  tasks:
+    - name: Run incident handling with nobody to follow up
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_incidents.yml"
+
+    - name: Assert the report is unchanged and no incident failed
+      ansible.builtin.assert:
+        that:
+          - snow_patching_incident_candidates | length == 0
+          - snow_patching_incident_results | length == 0
+          - not (snow_patching_incident_failed | bool)
+          - patch_workflow_marker == 'original-report'
+          - (patch_workflow_report.hosts | first).result == 'success'
+        fail_msg: An empty follow-up list changed the patch report or failed the integration.
+
+- name: Missing configuration fails before any incident call
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_patching_tasks_dir: "{{ playbook_dir }}/../../playbooks/windows/tasks"
+    snow_patching_create_incidents_enabled: true
+    patch_workflow_marker: original-report
+    patch_workflow_report:
+      hosts:
+        - hostname: WIN-ONE
+          result: failed
+          exempt: false
+          reason_code: PATCH_INSTALL_FAILED
+          reason: Update installation failed
+          manual_followup_required: true
+          snow_ci_sys_id: dddddddddddddddddddddddddddddddd
+          change_ticket_id: CHG0090001
+  tasks:
+    - name: Run incident handling without caller, group, or priority
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_incidents.yml"
+
+    - name: Assert configuration failure is separate from the patch result
+      ansible.builtin.assert:
+        that:
+          - snow_patching_incident_failed | bool
+          - snow_patching_incident_results | length == 0
+          - "'snow_incident_caller' in snow_patching_incident_error"
+          - patch_workflow_marker == 'original-report'
+          - (patch_workflow_report.hosts | first).result == 'failed'
+        fail_msg: Missing incident configuration did not fail closed or it changed the patch result.
+
+- name: Invalid CI values are recorded and a role failure does not stop the next host
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_patching_tasks_dir: "{{ playbook_dir }}/../../playbooks/windows/tasks"
+    snow_patching_create_incidents_enabled: true
+    snow_incident_caller: patch.automation
+    patch_workflow_marker: original-report
+    patch_workflow_report:
+      hosts:
+        - hostname: WIN-MISSING
+          result: failed
+          exempt: false
+          reason_code: UNREACHABLE
+          reason: Host unreachable
+          manual_followup_required: true
+          snow_ci_sys_id: ""
+          change_ticket_id: CHG0090001
+          aap_job_id: "100"
+        - hostname: WIN-CALL
+          result: failed
+          exempt: false
+          reason_code: PATCH_INSTALL_FAILED
+          reason: Update installation failed
+          manual_followup_required: true
+          snow_ci_sys_id: dddddddddddddddddddddddddddddddd
+          change_ticket_id: CHG0090001
+          aap_job_id: "100"
+        - hostname: WIN-CALL-TWO
+          result: degraded
+          exempt: false
+          reason_code: PENDING_REBOOT
+          reason: A reboot is pending and requires follow-up
+          manual_followup_required: true
+          snow_ci_sys_id: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+          change_ticket_id: CHG0090001
+          aap_job_id: "100"
+        - hostname: WIN-INVALID
+          result: failed
+          exempt: false
+          reason_code: PATCH_INSTALL_FAILED
+          reason: Update installation failed
+          manual_followup_required: true
+          snow_ci_sys_id: not-a-sys-id
+          change_ticket_id: CHG0090001
+          aap_job_id: "100"
+  tasks:
+    - name: Run incident handling without ServiceNow credentials
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_incidents.yml"
+
+    - name: Assert every candidate was recorded and the patch report survived
+      ansible.builtin.assert:
+        that:
+          - snow_patching_incident_results | map(attribute='hostname') | list == ['WIN-MISSING', 'WIN-CALL', 'WIN-CALL-TWO', 'WIN-INVALID']
+          - snow_patching_incident_results | map(attribute='success') | map('bool') | select | list | length == 0
+          - snow_patching_incident_failed | bool
+          - "(snow_patching_incident_results | selectattr('hostname', 'equalto', 'WIN-MISSING') | first).incident_number == ''"
+          - "'missing' in (snow_patching_incident_results | selectattr('hostname', 'equalto', 'WIN-MISSING') | first).message"
+          - "'32-character' in (snow_patching_incident_results | selectattr('hostname', 'equalto', 'WIN-INVALID') | first).message"
+          - (snow_patching_incident_results | selectattr('hostname', 'equalto', 'WIN-CALL') | first).message | length > 0
+          - (snow_patching_incident_results | selectattr('hostname', 'equalto', 'WIN-CALL-TWO') | first).message | length > 0
+          - "'assignment_group' not in (snow_patching_incident_results | selectattr('hostname', 'equalto', 'WIN-CALL') | first).message"
+          - "'password' not in (snow_patching_incident_results | selectattr('hostname', 'equalto', 'WIN-CALL') | first).message | lower"
+          - patch_workflow_marker == 'original-report'
+          - (patch_workflow_report.hosts | length) == 4
+        fail_msg: Incident failures were not recorded per host, or the patch report changed.
+
+- name: Successful and failed incident rows accumulate for their hostnames
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_patching_tasks_dir: "{{ playbook_dir }}/../../playbooks/windows/tasks"
+    patch_workflow_marker: original-report
+  tasks:
+    - name: Start an empty result list
+      ansible.builtin.set_fact:
+        snow_patching_incident_results: []
+
+    - name: Store a created incident
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_store_result.yml"
+      vars:
+        snow_followup_result_row:
+          hostname: WIN-ONE
+          ci_sys_id: dddddddddddddddddddddddddddddddd
+          change_ticket_id: CHG0090001
+          reason_code: PATCH_INSTALL_FAILED
+          correlation_id: aap-patch:CHG0090001:WIN-ONE:PATCH_INSTALL_FAILED
+          incident_number: INC0001001
+          reused: false
+          success: true
+          message: Created incident INC0001001
+
+    - name: Store a reused incident
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_store_result.yml"
+      vars:
+        snow_followup_result_row:
+          hostname: WIN-TWO
+          ci_sys_id: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+          change_ticket_id: CHG0090001
+          reason_code: PENDING_REBOOT
+          correlation_id: aap-patch:CHG0090001:WIN-TWO:PENDING_REBOOT
+          incident_number: INC0001002
+          reused: true
+          success: true
+          message: Reused incident INC0001002
+
+    - name: Store a failed incident
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_store_result.yml"
+      vars:
+        snow_followup_result_row:
+          hostname: WIN-THREE
+          ci_sys_id: ""
+          change_ticket_id: CHG0090001
+          reason_code: UNREACHABLE
+          correlation_id: aap-patch:CHG0090001:WIN-THREE:UNREACHABLE
+          incident_number: ""
+          reused: false
+          success: false
+          message: Inventory sys_id is missing
+
+    - name: Assert created, reused, and failed rows stay attached to their hosts
+      ansible.builtin.assert:
+        that:
+          - snow_patching_incident_results | length == 3
+          - (snow_patching_incident_results[0].hostname == 'WIN-ONE')
+          - (snow_patching_incident_results[0].incident_number == 'INC0001001')
+          - not (snow_patching_incident_results[0].reused | bool)
+          - snow_patching_incident_results[0].success | bool
+          - (snow_patching_incident_results[1].incident_number == 'INC0001002')
+          - snow_patching_incident_results[1].reused | bool
+          - not (snow_patching_incident_results[2].success | bool)
+          - snow_patching_incident_results[2].incident_number == ''
+          - patch_workflow_marker == 'original-report'
+        fail_msg: Incident result rows were overwritten or dropped.

@@ -1,0 +1,140 @@
+---
+# Update does not send state. Work notes go through other.work_notes.
+# The same work note is appended again on a later run.
+
+- name: Build the incident update note
+  ansible.builtin.set_fact:
+    snow_incident_work_notes_resolved: >-
+      {{
+        [
+          snow_incident_work_notes | default('') | trim,
+          snow_incident_failure_line,
+          snow_incident_job_line
+        ]
+        | reject('equalto', '')
+        | list
+        | join(snow_newline)
+      }}
+  vars:
+    snow_newline: "\n"
+    snow_incident_failure_line: >-
+      {{
+        ('Failure: ' ~ snow_incident_failure)
+        if snow_incident_failure | default('') | length > 0
+        else ''
+      }}
+    snow_incident_job_line: >-
+      {{
+        ('AAP job ' ~ snow_incident_job_id)
+        if snow_incident_job_id | default('') | length > 0
+        else ''
+      }}
+
+- name: Confirm the incident exists before update
+  block:
+    # args[module] does not see the collection env_fallback for SN_USERNAME.
+    - name: Query ServiceNow by incident number before update  # noqa: args[module]
+      servicenow.itsm.incident_info:
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        number: "{{ snow_incident_number }}"
+      register: snow_incident_lookup
+      no_log: true
+  rescue:
+    - name: Report the ServiceNow lookup failure
+      ansible.builtin.fail:
+        msg: >-
+          Could not read incident {{ snow_incident_number }} before update.
+          {{ ansible_failed_result.msg | default('The collection did not return an error message.') }}
+
+- name: Fail when the incident does not exist
+  when: snow_incident_lookup.records | default([]) | length == 0
+  ansible.builtin.fail:
+    msg: "ServiceNow has no incident numbered {{ snow_incident_number }}."
+
+- name: Fail when the incident number matches more than one record
+  when: snow_incident_lookup.records | default([]) | length > 1
+  ansible.builtin.fail:
+    msg: >-
+      ServiceNow returned {{ snow_incident_lookup.records | length }} records
+      for {{ snow_incident_number }}.
+
+- name: Update the incident
+  block:
+    - name: Send the requested field updates to ServiceNow
+      servicenow.itsm.incident:
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        number: "{{ snow_incident_number }}"
+        short_description: >-
+          {{
+            snow_incident_short_description
+            if snow_incident_short_description | default('') | length > 0
+            else omit
+          }}
+        description: >-
+          {{
+            snow_incident_description
+            if snow_incident_description | default('') | length > 0
+            else omit
+          }}
+        impact: "{{ snow_incident_selected_direct_fields.impact | default(omit, true) }}"
+        urgency: "{{ snow_incident_selected_direct_fields.urgency | default(omit, true) }}"
+        other: "{{ snow_incident_update_other | default(omit, true) }}"
+      vars:
+        snow_incident_update_other: >-
+          {{
+            snow_incident_selected_other_fields | default({})
+            | combine(
+                {'work_notes': snow_incident_work_notes_resolved}
+                if snow_incident_work_notes_resolved | default('') | length > 0
+                else {}
+              )
+            | combine(
+                {'cmdb_ci': snow_incident_ci_sys_id}
+                if snow_incident_ci_sys_id | default('') | length > 0
+                else {}
+              )
+            | combine(
+                {'assignment_group': snow_incident_assignment_group_id}
+                if snow_incident_assignment_group_id | default('') | length > 0
+                else {}
+              )
+            | combine(
+                {'priority': snow_incident_priority | string}
+                if snow_incident_priority | default('') | string | length > 0
+                else {}
+              )
+          }}
+      register: snow_incident_api
+      no_log: true
+  rescue:
+    - name: Report the ServiceNow update failure
+      ansible.builtin.fail:
+        msg: >-
+          ServiceNow did not update incident {{ snow_incident_number }}.
+          {{ ansible_failed_result.msg | default('The collection did not return an error message.') }}
+
+- name: Require identity fields on the updated incident
+  ansible.builtin.assert:
+    that:
+      - snow_incident_api.record is mapping
+      - snow_incident_api.record.number | default('') | length > 0
+      - snow_incident_api.record.sys_id | default('') | length > 0
+    fail_msg: ServiceNow did not return an incident number and sys_id.
+    quiet: true
+
+- name: Publish the incident update result
+  ansible.builtin.set_fact:
+    snow_incident_result:
+      operation: update
+      success: true
+      number: "{{ snow_incident_api.record.number }}"
+      sys_id: "{{ snow_incident_api.record.sys_id }}"
+      state: "{{ snow_incident_api.record.state | default('') }}"
+      short_description: "{{ snow_incident_api.record.short_description | default('') }}"
+      message: >-
+        Updated incident {{ snow_incident_api.record.number }}
+        without changing its state.

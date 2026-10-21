@@ -224,7 +224,7 @@
       updates_failed: "{{ windows_update_install.failed_update_count | default('not_available') }}"
       updates_installed_kbs: "{{ updates_installed_kbs | default('not_available') }}"
       updates_failed_kbs: "{{ updates_failed_kbs | default('not_available') }}"
-      snow_ci_sys_id: "{{ snow_ci_sys_id | default('') }}"
+      snow_ci_sys_id: "{{ sys_id | default('') | string | trim }}"
       patch_environment: "{{ patch_environment | default('') }}"
       platform: "{{ patch_report_platform | default('windows') }}"
       os_build_pre: "{{ windows_os_build_pre | default('not_available') }}"

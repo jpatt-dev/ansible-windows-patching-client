@@ -11,12 +11,11 @@ patch_require_explicit_limit: true
 patch_enforce_scoped_target: false
 
 # Git-owned exact Limit allowlist. Inventory must create matching groups.
-# Naming contract: windows_canary, then windows_wave_N with N = 1..20
+# Naming contract: windows_wave_N with N = 1..20
 # (no zero-padding; matches existing windows_wave_1). Exact string match only.
 # windows_hosts is the playbook boundary — not an approved patch wave.
 # Do not survey this list. Do not authorize waves with wildcards.
 approved_patch_targets:
-  - windows_canary
   - windows_wave_1
   - windows_wave_2
   - windows_wave_3

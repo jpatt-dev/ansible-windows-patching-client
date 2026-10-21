@@ -1,0 +1,251 @@
+---
+# AAP job template smoke test for the servicenow_incident role.
+#
+# Playbook: playbooks/tests/snow_incident_test.yml
+# Inventory: localhost. This play does not target Windows, Linux, or database hosts.
+# Credential: custom credential that injects SN_HOST, SN_USERNAME, SN_PASSWORD.
+#
+# Extra variables, all optional:
+#   snow_incident_test_read_number: INC0000001
+#   snow_incident_test_enable_create: false
+#   snow_incident_test_enable_update: false
+#   snow_incident_test_enable_close: false
+#   snow_incident_test_hostname: WIN-TEST-02
+#   snow_incident_test_caller: first.last
+#   snow_incident_test_change_number: CHG0001234
+#   snow_incident_test_job_id: "830"
+#   snow_incident_test_failure: Windows patching failed
+#   snow_incident_test_close_code: "Solution provided"
+#   snow_incident_test_close_notes: ""
+#   snow_incident_test_close_number: ""
+#
+# Create, update, and close stay disabled unless the matching flag is true.
+# Close uses the incident created in this run, or snow_incident_test_close_number
+# when that is set. A follow-up read must show state closed.
+
+- name: Exercise the shared ServiceNow incident role
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    snow_incident_test_read_number: ""
+    snow_incident_test_enable_create: false
+    snow_incident_test_enable_update: false
+    snow_incident_test_enable_close: false
+    snow_incident_test_hostname: ""
+    snow_incident_test_caller: ""
+    snow_incident_test_change_number: ""
+    snow_incident_test_job_id: ""
+    snow_incident_test_failure: "Patching failed during the incident role test."
+    snow_incident_test_close_code: ""
+    snow_incident_test_close_notes: ""
+    snow_incident_test_close_number: ""
+    snow_incident_test_created_number: ""
+    snow_incident_test_short_description: "AAP servicenow_incident role connectivity test"
+    snow_incident_test_updated_summary: "AAP servicenow_incident role update test"
+
+  tasks:
+    - name: Require at least one incident test action
+      ansible.builtin.assert:
+        that:
+          - >-
+            (snow_incident_test_read_number | default('') | string | length > 0)
+            or (snow_incident_test_enable_create | bool)
+            or (snow_incident_test_enable_update | bool)
+            or (snow_incident_test_enable_close | bool)
+        fail_msg: >-
+          Nothing to do. Set snow_incident_test_read_number, or set one of
+          snow_incident_test_enable_create, snow_incident_test_enable_update,
+          or snow_incident_test_enable_close to true.
+          Write flags default to false.
+        quiet: true
+
+    - name: Read an existing incident
+      when: snow_incident_test_read_number | default('') | string | length > 0
+      ansible.builtin.include_role:
+        name: servicenow_incident
+      vars:
+        snow_incident_operation: read
+        snow_incident_number: "{{ snow_incident_test_read_number }}"
+
+    - name: Show the incident read result
+      when: snow_incident_test_read_number | default('') | string | length > 0
+      ansible.builtin.debug:
+        var: snow_incident_result
+
+    - name: Require caller and hostname before creating a test incident
+      when: snow_incident_test_enable_create | bool
+      ansible.builtin.assert:
+        that:
+          - snow_incident_test_caller | default('') | string | length > 0
+          - snow_incident_test_hostname | default('') | string | length > 0
+        fail_msg: >-
+          Set snow_incident_test_caller and snow_incident_test_hostname
+          before creating a test incident.
+        quiet: true
+
+    - name: Create a test incident
+      when: snow_incident_test_enable_create | bool
+      ansible.builtin.include_role:
+        name: servicenow_incident
+      vars:
+        snow_incident_operation: create
+        snow_incident_allow_create: true
+        snow_incident_caller: "{{ snow_incident_test_caller }}"
+        snow_incident_hostname: "{{ snow_incident_test_hostname }}"
+        snow_incident_change_number: "{{ snow_incident_test_change_number }}"
+        snow_incident_aap_job_id: "{{ snow_incident_test_job_id }}"
+        snow_incident_failure: "{{ snow_incident_test_failure }}"
+        snow_incident_short_description: "{{ snow_incident_test_short_description }}"
+
+    - name: Remember the created incident number
+      when: snow_incident_test_enable_create | bool
+      ansible.builtin.set_fact:
+        snow_incident_test_created_number: "{{ snow_incident_result.number }}"
+
+    - name: Show the incident create result
+      when: snow_incident_test_enable_create | bool
+      ansible.builtin.debug:
+        var: snow_incident_result
+
+    - name: Read the incident that was just created
+      when: snow_incident_test_enable_create | bool
+      ansible.builtin.include_role:
+        name: servicenow_incident
+      vars:
+        snow_incident_operation: read
+        snow_incident_number: "{{ snow_incident_test_created_number }}"
+
+    - name: Check the follow-up incident read
+      when: snow_incident_test_enable_create | bool
+      ansible.builtin.assert:
+        that:
+          - snow_incident_result.success | bool
+          - snow_incident_result.number == snow_incident_test_created_number
+          - snow_incident_result.short_description == snow_incident_test_short_description
+        fail_msg: The created incident could not be read back with the expected summary.
+        quiet: true
+
+    - name: Show the follow-up incident read
+      when: snow_incident_test_enable_create | bool
+      ansible.builtin.debug:
+        var: snow_incident_result
+
+    - name: Require an incident number before update
+      when: snow_incident_test_enable_update | bool
+      ansible.builtin.assert:
+        that:
+          - >-
+            (snow_incident_test_created_number | default('') | string | length > 0)
+            or (snow_incident_test_read_number | default('') | string | length > 0)
+        fail_msg: >-
+          Enable snow_incident_test_enable_create or set
+          snow_incident_test_read_number before updating an incident.
+        quiet: true
+
+    - name: Update the test incident
+      when: snow_incident_test_enable_update | bool
+      ansible.builtin.include_role:
+        name: servicenow_incident
+      vars:
+        snow_incident_operation: update
+        snow_incident_number: >-
+          {{
+            snow_incident_test_created_number
+            if snow_incident_test_created_number | default('') | length > 0
+            else snow_incident_test_read_number
+          }}
+        snow_incident_short_description: "{{ snow_incident_test_updated_summary }}"
+        snow_incident_work_notes: "Work note from the servicenow_incident role test playbook."
+        snow_incident_aap_job_id: "{{ snow_incident_test_job_id }}"
+
+    - name: Read the incident after update
+      when: snow_incident_test_enable_update | bool
+      ansible.builtin.include_role:
+        name: servicenow_incident
+      vars:
+        snow_incident_operation: read
+        snow_incident_number: >-
+          {{
+            snow_incident_test_created_number
+            if snow_incident_test_created_number | default('') | length > 0
+            else snow_incident_test_read_number
+          }}
+
+    - name: Check the updated incident
+      when: snow_incident_test_enable_update | bool
+      ansible.builtin.assert:
+        that:
+          - snow_incident_result.success | bool
+          - snow_incident_result.short_description == snow_incident_test_updated_summary
+        fail_msg: The follow-up read did not show the updated short description.
+        quiet: true
+
+    - name: Show the verified incident update
+      when: snow_incident_test_enable_update | bool
+      ansible.builtin.debug:
+        var: snow_incident_result
+
+    - name: Require close details before closing a test incident
+      when: snow_incident_test_enable_close | bool
+      ansible.builtin.assert:
+        that:
+          - >-
+            (snow_incident_test_close_number | default('') | string | length > 0)
+            or (snow_incident_test_created_number | default('') | string | length > 0)
+          - snow_incident_test_close_code | default('') | string | length > 0
+          - snow_incident_test_close_notes | default('') | string | length > 0
+        fail_msg: >-
+          Set snow_incident_test_close_code and snow_incident_test_close_notes.
+          Close uses snow_incident_test_close_number when set, otherwise the
+          incident created in this run.
+        quiet: true
+
+    - name: Close the test incident
+      when: snow_incident_test_enable_close | bool
+      ansible.builtin.include_role:
+        name: servicenow_incident
+      vars:
+        snow_incident_operation: close
+        snow_incident_allow_close: true
+        snow_incident_number: >-
+          {{
+            snow_incident_test_close_number
+            if snow_incident_test_close_number | default('') | length > 0
+            else snow_incident_test_created_number
+          }}
+        snow_incident_close_code: "{{ snow_incident_test_close_code }}"
+        snow_incident_close_notes: "{{ snow_incident_test_close_notes }}"
+
+    - name: Show the incident close result
+      when: snow_incident_test_enable_close | bool
+      ansible.builtin.debug:
+        var: snow_incident_result
+
+    - name: Read the incident after close
+      when: snow_incident_test_enable_close | bool
+      ansible.builtin.include_role:
+        name: servicenow_incident
+      vars:
+        snow_incident_operation: read
+        snow_incident_number: >-
+          {{
+            snow_incident_test_close_number
+            if snow_incident_test_close_number | default('') | length > 0
+            else snow_incident_test_created_number
+          }}
+
+    - name: Check that the incident is closed
+      when: snow_incident_test_enable_close | bool
+      ansible.builtin.assert:
+        that:
+          - snow_incident_result.success | bool
+          - snow_incident_result.state == 'closed'
+        fail_msg: The follow-up read did not show state closed.
+        quiet: true
+
+    - name: Show the verified incident state
+      when: snow_incident_test_enable_close | bool
+      ansible.builtin.debug:
+        var: snow_incident_result

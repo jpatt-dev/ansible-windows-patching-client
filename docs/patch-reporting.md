@@ -115,7 +115,7 @@ is `degraded`, `failed`, or `unknown`.
 | `os_build` | Post-patch / final Windows build (`BuildNumber.UBR` when collected) |
 | `os_build_pre` | Precheck snapshot of the same build field; `not_available` if precheck did not collect it |
 | `location` | Optional inventory/group_vars `patch_location` |
-| `snow_ci_sys_id` | Optional inventory ServiceNow CMDB CI sys_id (stable host join key) |
+| `snow_ci_sys_id` | Inventory `sys_id` (CMDB CI sys_id). Empty when inventory has no `sys_id`. |
 | `patch_environment` | Optional inventory `LAB` / `IST` / `UAT` / `PROD` |
 | `platform` | `windows` on this report |
 | `updates_installed_kbs` / `updates_failed_kbs` | Compact KB ids from `win_updates.updates`. `[]` means the module returned no matching KBs. `not_available` means install evidence was not produced. |
@@ -273,10 +273,10 @@ the job API.
 
 Files under `/tmp/aap-patch-reports` inside the Execution Environment are
 ephemeral convenience exports. Same-job Play 2 attach uses `patch_report_files`
-from that directory. A later AAP workflow node will not see those paths; keep
-attach in this job. The unpublished shared ServiceNow role should consume
-`patch_workflow_report` / `set_stats` plus those same-job paths. `patch_wave`
-in the report is the validated AAP Limit.
+from that directory when `snow_patching_attach_reports_enabled` is true. A
+later AAP workflow node will not see those paths; keep attach in this job.
+The work note reads the same `patch_workflow_report` totals and does not add
+fields. `patch_wave` in the report is the validated AAP Limit.
 
 ## Historical reporting (Power BI) — outside this repository
 
@@ -317,7 +317,7 @@ reads that store.
 
 **CMDB reconciliation**
 
-Inventory must populate `snow_ci_sys_id` and `patch_environment` on Windows
+Inventory must populate `sys_id` (copied to report field `snow_ci_sys_id`) and `patch_environment` on Windows
 hosts. Power BI left-joins the ServiceNow Windows CI list to historical host
 rows:
 

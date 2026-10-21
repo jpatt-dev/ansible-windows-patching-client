@@ -12,8 +12,7 @@ Exact Limit names. No wildcards.
 | Group | Role |
 | --- | --- |
 | `windows_hosts` | Playbook `hosts:` boundary. Never an approved Limit. |
-| `windows_canary` | Approved canary Limit |
-| `windows_wave_1` … `windows_wave_20` | Approved production waves. `N` is 1-20 with **no** zero-padding. |
+| `windows_wave_1` … `windows_wave_20` | Approved patch waves. `N` is 1-20 with **no** zero-padding. |
 | `windows_patch_exempt_temp` | AAP-managed temporary patch exemption. Ops playbooks own membership. |
 | `windows_reboot_exempt_temp` | AAP-managed temporary reboot exemption. Ops playbooks own membership. |
 
@@ -47,9 +46,12 @@ Optional:
 - `patch_environment` (`LAB`, `IST`, `UAT`, or `PROD`) — reporting/correlation only.
   Job Templates bind one inventory each. The inventory repository must keep
   LAB/IST/UAT/PROD membership from overlapping.
-- `snow_ci_sys_id` — CMDB CI sys_id for approved CI scope **and** the stable
-  Power BI/historical join key. Populate it on every Windows host. The final
-  JSON emits it; this repository does not sync CMDB.
+- `sys_id` — CMDB configuration item sys_id synchronized onto the Windows
+  host. The final JSON copies it to `snow_ci_sys_id`. Change preparation
+  reads `hostvars[hostname].sys_id`. Pre-remediation validation uses that
+  same value when `snow_ci_sys_id` is empty, and keeps an already set
+  `snow_ci_sys_id`. Populate `sys_id` on every Windows host. This repository
+  does not sync CMDB and does not add a second CI variable.
 - WinRM connection facts from AAP inventory + Machine credential
 
 High-latency sample: `inventory/group_vars/windows_remote_sites.yml` uses
@@ -68,7 +70,7 @@ denied value is not an approved exemption.
 ## BLOCKING: ServiceNow inventory synchronization
 
 ServiceNow CMDB is the source of truth for **server records**. AAP groups
-(`windows_canary`, `windows_wave_1`–`20`, `windows_patch_exempt_temp`,
+(`windows_wave_1`–`20`, `windows_patch_exempt_temp`,
 `windows_reboot_exempt_temp`) and AAP hostvars (`patch_temp_*`, `reboot_temp_*`)
 are **not** CMDB attributes.
 
@@ -94,14 +96,14 @@ This repository does not name that collection or version.
 | --- | --- |
 | `snow_change_number` / `change_ticket_id` | Display number (`CHG…`) |
 | `snow_change_sys_id` / legacy `snow_change_id` | sys_id |
-| `snow_ci_sys_id` | Host CI sys_id for scope checks |
+| `snow_ci_sys_id` | Host CI sys_id for scope checks. Uses inventory `sys_id` when this value is empty |
 
 **Shared role must eventually perform**
 
 1. Lookup by display change number (and sys_id when provided)
 2. Approval/state validation
 3. Maintenance-window validation
-4. Approved CI scope for **this host** (`snow_ci_sys_id` + Limit membership)
+4. Approved CI scope for **this host** (`snow_ci_sys_id`, from inventory `sys_id` when empty, plus Limit membership)
 
 **This repository's confirmation fact** (not the unpublished collection schema):
 the shared role, or a later mapping task, must set
@@ -113,9 +115,15 @@ false, or any other result is treated as **unknown** and fails closed.
 | Variable | Lab default | Production JT |
 | --- | --- | --- |
 | `snow_require_change_validation` | `false` | `true` |
-| `snow_enabled` | `false` | `true` when work notes/attach should run |
-| `snow_shared_role` | empty | FQCN after the shared role is in the EE |
-| `snow_attach_report` | `false` | `true` when attaching same-job files |
+| `snow_enabled` | `false` | `false`. Not the Full Patch reporting switch |
+| `snow_shared_role` | empty | FQCN of the unpublished validation role. Not `servicenow_patching_change` |
+| `snow_attach_report` | `false` | Retired for Full Patch. Use `snow_patching_attach_reports_enabled` |
+| `snow_patching_update_cr_enabled` | `false` | `true` only after the ServiceNow credential and EE are ready |
+| `snow_patching_attach_reports_enabled` | `false` | `true` only after the ServiceNow credential and EE are ready |
+| `snow_patching_create_incidents_enabled` | `false` | `true` only with a caller, the credential, and the EE, and only for hosts that need follow-up |
+| `snow_incident_caller` | empty | ServiceNow user id. Required when incident creation is enabled and at least one host needs follow-up |
+| `snow_incident_assignment_group` | empty | Optional group name. Omitted when empty |
+| `snow_incident_priority` | empty | Optional instance priority. Omitted when empty |
 | `ask_variables_on_launch` | `false` | `false` |
 
 Production eligible remediation fails closed when the policy is true and the
@@ -133,8 +141,9 @@ can run without ServiceNow until the shared role is delivered.
 
 ## Report consumption
 
-Same-job Play 2 order is unchanged: aggregate → write → SMTP → attach →
-fail-if-failed.
+Same-job Play 2 order: aggregate → write → optional change work note →
+optional report attachment → optional follow-up incidents → SMTP → fail if
+patching or an enabled ServiceNow operation failed.
 
 Durable artifacts: AAP `set_stats` (`patch_final_result`,
 `patch_workflow_report`, `patch_workflow_report_json`,
@@ -144,9 +153,13 @@ Ephemeral EE files: `patch_report_files` under `/tmp/aap-patch-reports`
 (JSON, Markdown, CSV). Attach must use those paths in **this** job. A later
 workflow node will not see the files.
 
-When the shared role is published, `snow_phase=attach_report` should consume
-`snow_report_path` / `patch_report_files` and `patch_workflow_report` from
-this job. Do not add a second Job Template for attach.
+`snow_patching_attach_reports_enabled` passes `patch_report_files` to
+`servicenow_patching_change` as `snow_report_files`. It does not regenerate
+the reports. Do not add a second Job Template for attach. The Windows Full
+Patch Job Template needs the existing ServiceNow credential and an Execution
+Environment that provides `servicenow.itsm`. Leave both reporting switches
+false until that credential and image are in place. Approval validation is
+unchanged.
 
 ## AAP objects
 

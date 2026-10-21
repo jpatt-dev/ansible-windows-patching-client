@@ -42,13 +42,15 @@ Precheck
    Apply history proves this job installed updates. `already_compliant` requires
    no applicable updates and satisfactory final checks. `degraded` may occur
    when no updates were installed if follow-up remains, including
-   `PENDING_REBOOT`. Updates ServiceNow work notes when `snow_enabled=true`.
+   `PENDING_REBOOT`. This step does not update ServiceNow.
 9. **Final aggregate report** — One Limit-wide JSON/CSV/Markdown and AAP
    `set_stats` artifact after every host in the Limit has finished Play 1.
    CSV is the concise operational report and includes Reason Code, Pending
    Reboot, and Manual Follow-up Required. JSON is the richer authoritative
-   artifact. Optional SMTP runs next. If any host result is `failed`, including
-   `UNREACHABLE`, the AAP job fails after those reports. See
+   artifact. Optional ServiceNow work notes, report attachment, and follow-up
+   incidents run once after those files exist, then optional SMTP. If any
+   host result is `failed`, including `UNREACHABLE`, or an enabled ServiceNow
+   operation fails, the AAP job fails after those reports. See
    [patch-reporting.md](patch-reporting.md).
 
 Standalone troubleshooting/readiness: `playbooks/windows/precheck.yml`. That
@@ -67,10 +69,10 @@ Inventories and credentials remain external references.
 | Layer | Owns |
 | --- | --- |
 | Git | Playbooks, roles, safety policy, approved target list, application CaC |
-| Inventory | Hosts, groups, reboot policy, exceptions, optional `patch_location`, optional `snow_ci_sys_id` / `patch_environment`, WinRM |
+| Inventory | Hosts, groups, reboot policy, exceptions, optional `patch_location`, CMDB `sys_id` / `patch_environment`, WinRM |
 | Limit | Patch wave / launch population (`patch_wave_name`) |
 | Survey | Per-run authorization, maintenance window, change display number |
-| Job Template extra-vars / RBAC | `snow_require_change_validation`, `snow_enabled`, `snow_shared_role`, `patch_require_maintenance_window` |
+| Job Template extra-vars / RBAC | `snow_require_change_validation`, `snow_enabled`, `snow_shared_role`, `snow_patching_update_cr_enabled`, `snow_patching_attach_reports_enabled`, `snow_patching_create_incidents_enabled`, `snow_incident_caller`, `snow_incident_assignment_group`, `snow_incident_priority`, `patch_require_maintenance_window` |
 | Credential | Windows and external-service secrets |
 
 ## Targeting
@@ -81,9 +83,16 @@ All Windows patch jobs require an explicit AAP Limit. Blank Limit, `all`, and
 `windows_hosts` is only the playbook `hosts:` boundary.
 
 Full Patch also requires the Limit to be in `approved_patch_targets`
-(`windows_canary`, `windows_wave_1` … `windows_wave_20`, exact names).
+(`windows_wave_1` … `windows_wave_20`, exact names).
 `windows_hosts` is not an approved wave. Standalone Precheck does not enforce
 that approved-target list. `patch_wave_name` is set from that Limit.
+
+Change Request preparation uses that same Limit field.
+`playbooks/servicenow/prepare_patch_change.yml` targets `windows_hosts` with
+`connection: local` and reads `ansible_limit`. It does not read
+`patch_wave_name`. The hosts selected for the play must be the complete
+membership of `windows_wave_1` through `windows_wave_20`. Preview stays the
+default and does not call ServiceNow.
 
 An approved Limit that intersects **zero** hosts never runs play tasks
 (including fail-closed asserts). Empty waves must be rejected by inventory or
@@ -242,10 +251,12 @@ When enabled, malformed output, execution failure, `critical_failed=true`, or
 
 ## ServiceNow
 
-See [external-contracts.md](external-contracts.md). This repository does not
-call ServiceNow REST APIs. `snow_enabled` and
-`snow_require_change_validation` are administrator Job Template extra-vars,
-not survey fields.
+See [external-contracts.md](external-contracts.md).
+
+Pre-remediation validation still uses `roles/servicenow_change`. It does not
+call ServiceNow itself. `snow_require_change_validation`, `snow_enabled`, and
+`snow_shared_role` stay administrator Job Template extra-vars, not survey
+fields. Do not point `snow_shared_role` at `servicenow_patching_change`.
 
 Lab Job Template extra-vars: `snow_require_change_validation=false` so
 authorized testing can run without the unpublished shared role. Production
@@ -253,6 +264,63 @@ must set it `true` with `snow_shared_role` empty until that role is in the
 EE; remediating hosts then fail closed. Eligible hosts validate **per host**
 (CI scope) before pre-reboot. Failures skip that host's remaining
 remediation, keep final reporting, then fail the job.
+
+After Play 2 writes the JSON, CSV, and Markdown reports, Full Patch can
+update the existing change and attach those files through
+`roles/servicenow_patching_change`. Both operations are off unless an
+administrator sets the extra-var:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `snow_patching_update_cr_enabled` | `false` | One work note on the existing `change_ticket_id`. Does not approve, change state, or close the change. |
+| `snow_patching_attach_reports_enabled` | `false` | Attach the report files already written in this job. |
+
+These are not survey fields. Leave both `false` until the Windows Full Patch
+Job Template has the existing ServiceNow credential (`SN_HOST`,
+`SN_USERNAME`, `SN_PASSWORD`) and an Execution Environment that contains
+`servicenow.itsm` and can reach that instance. The calls run once per job
+from the aggregation play, not once per Windows server. A failure is recorded
+separately from patch results, leaves the report files in place, still allows
+optional SMTP, and fails the job.
+
+The report field `snow_ci_sys_id` is copied from the inventory variable
+`sys_id`. That is the CMDB configuration item sys_id already synchronized
+onto each Windows host. This repository does not look up another CI id and
+does not modify CMDB. A missing `sys_id` leaves `snow_ci_sys_id` empty. An
+invalid value is still written on the patch report so the mapping problem is
+visible. Neither case changes the host's patch result.
+
+Follow-up incidents use `roles/servicenow_incident` and stay off unless an
+administrator sets `snow_patching_create_incidents_enabled: true`. The same
+credential and Execution Environment are required. When at least one host
+needs follow-up, set `snow_incident_caller`. `snow_incident_assignment_group`
+and `snow_incident_priority` are optional and are omitted when empty. A job
+with no follow-up hosts does not fail because those values are absent. Do not
+survey them, and do not put a user, group, or priority in Git.
+
+Candidates are hosts in this job's `patch_workflow_report` whose
+`manual_followup_required` is true. Exempt hosts are skipped. A degraded
+host is included only when that flag is already true. Each candidate is one
+create call. The correlation id is
+`aap-patch:<change number>:<hostname>:<reason code>`. It does not include the
+AAP job id, so a rerun of the same change, host, and reason reuses the
+incident. The role still looks up that id before insert. Two creates at the
+same moment can both insert. An incident an operator has already closed is
+reused, not reopened; opening another one needs a new correlation id and a
+separate policy decision.
+
+A missing or invalid CI sys_id is recorded on `snow_patching_incident_results`
+and is not sent to ServiceNow. One failed create does not stop the remaining
+hosts, does not change patch results, and does not delete the report files.
+Optional SMTP still runs. When creation is enabled, any recorded incident
+failure fails the AAP job. Review incidents in ServiceNow by the correlation
+id or the incident number in the job's `snow_patching_incident_results`
+artifact. `patch_workflow_report` is not rewritten.
+
+Safe test: leave the switch false, or run
+`tests/servicenow/test_followup_incidents.yml`. That test does not write to
+ServiceNow. A live test needs a non-production change, the credential, and
+the rebuilt Execution Environment. Do not point the test flags at production.
 
 ## SMTP Reporting
 

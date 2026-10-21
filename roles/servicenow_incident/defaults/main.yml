@@ -1,0 +1,67 @@
+---
+# Select one operation: read, create, update, or close.
+snow_incident_operation: ""
+
+# Existing incident number. Required for read, update, and close.
+snow_incident_number: ""
+
+# Host the patching workflow is reporting. Used in the incident text and,
+# with the change number and job id, as the default retry key.
+snow_incident_hostname: ""
+
+# Related change number recorded in the incident text. Not a related-record link.
+snow_incident_change_number: ""
+
+# Failure text supplied by the patching workflow. The role does not decide
+# which hosts failed.
+snow_incident_failure: ""
+
+snow_incident_short_description: ""
+snow_incident_description: ""
+
+# Journal note. Sent as other.work_notes. Close does not send this value.
+snow_incident_work_notes: ""
+
+# Preferred AAP job id. When empty, tower_job_id or awx_job_id is used if set.
+snow_incident_aap_job_id: ""
+
+# Optional configuration item sys_id copied to cmdb_ci. Format is checked.
+# The role does not create or modify configuration items.
+snow_incident_ci_sys_id: ""
+
+# Assignment group name. The role looks up sys_user_group and sends the sys_id.
+snow_incident_assignment_group: ""
+
+# User id the collection looks up, usually first.last. Required to create.
+snow_incident_caller: ""
+
+# Instance priority value, forwarded unchanged. Often 1 through 5.
+snow_incident_priority: ""
+
+# Retry key. When empty, create uses aap-patch:<hostname>:<change>:<job id>.
+snow_incident_correlation_id: ""
+
+# Optional incident columns. impact and urgency are module arguments.
+# Other keys are forwarded through other. State and close fields are rejected.
+snow_incident_fields: {}
+
+# Create and close do nothing until the caller sets these to true.
+snow_incident_allow_create: false
+snow_incident_allow_close: false
+
+# Close code forwarded to servicenow.itsm.incident. The 2.6.3 default labels are
+# Duplicate, Known error, Resolved by caller, Resolved by change,
+# Resolved by problem, Solution provided, Workaround provided, and User error.
+# Any other non-empty value is forwarded. The instance can reject it.
+snow_incident_close_code: ""
+snow_incident_close_notes: ""
+
+snow_incident_supported_operations:
+  - read
+  - create
+  - update
+  - close
+
+snow_incident_direct_field_names:
+  - impact
+  - urgency

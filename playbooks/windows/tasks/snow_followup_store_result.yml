@@ -1,0 +1,5 @@
+---
+- name: Append the follow-up incident result
+  ansible.builtin.set_fact:
+    snow_patching_incident_results: "{{ snow_patching_incident_results + [snow_followup_result_row] }}"
+  changed_when: false

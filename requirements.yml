@@ -7,13 +7,14 @@
 # Production runtime collections come from the Execution Environment
 # (execution-environments/windows-patch-ee/) — do not vendor collections/ into git.
 #
-# ServiceNow REST is not implemented here. Do not add servicenow.itsm
-# unless a client fork includes the unpublished shared ServiceNow role.
+# servicenow.itsm is used by roles/servicenow_patching_change,
+# roles/servicenow_incident, and playbooks/tests/. Full Patch calls
+# servicenow_patching_change only when an administrator enables the post-report
+# change update or report attachment. The published windows-patch-ee image does
+# not contain this collection until that image is rebuilt.
 
 collections:
   - name: ansible.windows
     version: ">=2.3.0"
-  # community.general.mail for optional SMTP report delivery.
-  # Pin stays on ansible-core 2.16 (AAP 2.7). Rebuild the EE after changing this.
-  - name: community.general
-    version: ">=9.5.0,<11.0.0"
+  - name: servicenow.itsm
+    version: ">=2.6.3"

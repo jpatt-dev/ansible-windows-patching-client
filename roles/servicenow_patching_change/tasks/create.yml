@@ -1,0 +1,63 @@
+---
+# Each call creates a new normal change. This is not idempotent.
+# The collection also sets chg_model from type. No template is sent,
+# so this does not open a standard or pre-approved change.
+
+- name: Create the change request
+  block:
+    - name: Send a new normal change to ServiceNow
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        type: normal
+        state: new
+        short_description: "{{ snow_short_description }}"
+        description: "{{ snow_description | default(omit, true) }}"
+        requested_by: "{{ snow_selected_direct_fields.requested_by | default(omit, true) }}"
+        assignment_group: "{{ snow_selected_direct_fields.assignment_group | default(omit, true) }}"
+        assignment_group_id: "{{ snow_selected_direct_fields.assignment_group_id | default(omit, true) }}"
+        category: "{{ snow_selected_direct_fields.category | default(omit, true) }}"
+        priority: "{{ snow_selected_direct_fields.priority | default(omit, true) }}"
+        risk: "{{ snow_selected_direct_fields.risk | default(omit, true) }}"
+        impact: "{{ snow_selected_direct_fields.impact | default(omit, true) }}"
+        urgency: "{{ snow_selected_direct_fields.urgency | default(omit, true) }}"
+        other: "{{ snow_task_other | default(omit, true) }}"
+      vars:
+        snow_task_other: >-
+          {{
+            snow_selected_other_fields | default({})
+            | combine(
+                {'work_notes': snow_work_notes}
+                if snow_work_notes | default('') | length > 0
+                else {}
+              )
+          }}
+      register: snow_change_api
+      no_log: true
+  rescue:
+    - name: Report the ServiceNow create failure
+      ansible.builtin.fail:
+        msg: >-
+          ServiceNow did not create the change request.
+          {{ ansible_failed_result.msg | default('The collection did not return an error message.') }}
+
+- name: Require identity fields on the created change
+  ansible.builtin.assert:
+    that:
+      - snow_change_api.record is mapping
+      - snow_change_api.record.number | default('') | length > 0
+      - snow_change_api.record.sys_id | default('') | length > 0
+    fail_msg: ServiceNow did not return a change number and sys_id.
+    quiet: true
+
+- name: Publish the create result
+  ansible.builtin.set_fact:
+    snow_result:
+      operation: create
+      success: true
+      number: "{{ snow_change_api.record.number }}"
+      sys_id: "{{ snow_change_api.record.sys_id }}"
+      state: "{{ snow_change_api.record.state | default('') }}"
+      approval: "{{ snow_change_api.record.approval | default('') }}"
+      message: "Created normal change request {{ snow_change_api.record.number }}."

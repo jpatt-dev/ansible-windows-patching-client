@@ -1,0 +1,82 @@
+---
+# Runs from Full Patch play 2. The play is already local and not serial.
+# run_once on the include keeps this to one pass per job. Each candidate is
+# one incident role call. Do not add a localhost play: a wave Limit would
+# skip it.
+
+- name: Skip follow-up incidents when creation is disabled
+  when: not (snow_patching_create_incidents_enabled | default(false) | bool)
+  ansible.builtin.debug:
+    msg: Follow-up incident creation is disabled (snow_patching_create_incidents_enabled=false).
+  changed_when: false
+
+- name: Create follow-up incidents for this patch job
+  when: snow_patching_create_incidents_enabled | default(false) | bool
+  block:
+    - name: Select follow-up incident candidates
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_candidates.yml"
+
+    - name: Start the follow-up incident result list
+      ansible.builtin.set_fact:
+        snow_patching_incident_results: []
+        snow_followup_caller: "{{ snow_incident_caller | default('') | string | trim }}"
+        snow_followup_assignment_group: "{{ snow_incident_assignment_group | default('') | string | trim }}"
+        snow_followup_priority: "{{ snow_incident_priority | default('') | string | trim }}"
+      changed_when: false
+
+    - name: Require the caller when a follow-up host needs an incident
+      when: snow_patching_incident_candidates | length > 0
+      ansible.builtin.assert:
+        that:
+          - snow_followup_caller | length > 0
+        fail_msg: >-
+          snow_patching_create_incidents_enabled requires snow_incident_caller
+          when a host needs follow-up. This playbook does not choose a
+          ServiceNow user. Assignment group and priority stay unset unless
+          an administrator supplies them. No incident was created.
+        quiet: true
+
+    - name: Open or reuse one follow-up incident
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_incident_one.yml"
+      loop: "{{ snow_patching_incident_candidates }}"
+      loop_control:
+        loop_var: snow_followup_candidate
+        label: "{{ snow_followup_candidate.hostname }}"
+
+    - name: Record whether any follow-up incident failed
+      ansible.builtin.set_fact:
+        snow_patching_incident_failed: >-
+          {{
+            (
+              snow_patching_incident_results
+              | map(attribute='success')
+              | map('bool')
+              | reject('equalto', true)
+              | list
+              | length
+            ) > 0
+          }}
+      changed_when: false
+
+    - name: Publish follow-up incident results
+      ansible.builtin.set_stats:
+        data:
+          snow_patching_incident_results: "{{ snow_patching_incident_results }}"
+        per_host: false
+
+  rescue:
+    - name: Record the follow-up incident configuration failure
+      ansible.builtin.set_fact:
+        snow_patching_incident_failed: true
+        snow_patching_incident_error: >-
+          {{ ansible_failed_result.msg | default('Follow-up incident creation failed') }}
+        snow_patching_incident_results: "{{ snow_patching_incident_results | default([]) }}"
+      changed_when: false
+
+    - name: Report the follow-up incident configuration failure
+      ansible.builtin.debug:
+        msg: >-
+          Follow-up incident creation failed
+          ({{ snow_patching_incident_error }}).
+          Patch results and report files were left in place.
+      changed_when: false

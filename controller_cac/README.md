@@ -38,8 +38,8 @@ Do not invent a REST/module wrapper in this repository.
 | Job Template | `Windows Precheck UAT` |
 | Job Template | `Windows Precheck PROD` |
 
-Waves are **not** Job Templates. Operators set Limit to `windows_canary` or
-`windows_wave_1` … `windows_wave_20`.
+Waves are **not** Job Templates. Operators set Limit to `windows_wave_1` …
+`windows_wave_20`.
 
 Each Job Template binds one inventory (`ask_inventory_on_launch: false`).
 DEV is reserved with no templates.
@@ -58,8 +58,11 @@ Do not copy question lists into `vars/`. Load those files at dispatch.
 | Variable | LAB / IST Full Patch | UAT / PROD Full Patch | All Precheck |
 | --- | --- | --- | --- |
 | `snow_require_change_validation` | `false` | `true` | `false` |
-| `snow_enabled` | `false` | `false` until shared role + attach/work notes are accepted | `false` |
-| `snow_shared_role` | empty | empty until the shared role is in the EE | empty |
+| `snow_enabled` | `false` | `false`. Not used for Full Patch reporting | `false` |
+| `snow_shared_role` | empty | empty until the validation role is in the EE | empty |
+| `snow_patching_update_cr_enabled` | `false` | `false` until credential and EE are ready | not set |
+| `snow_patching_attach_reports_enabled` | `false` | `false` until credential and EE are ready | not set |
+| `snow_patching_create_incidents_enabled` | `false` | `false` until caller, group, priority, credential, and EE are ready | not set |
 | `patch_require_maintenance_window` | `false` | `true` | `false` |
 
 UAT/PROD remediating hosts **fail closed** while `snow_shared_role` is empty.
@@ -97,7 +100,7 @@ asserts. Empty waves cannot be detected from inside that play.
 
 The inventory repository must:
 
-- Create `windows_hosts`, `windows_canary`, and `windows_wave_1` … `windows_wave_20`
+- Create `windows_hosts` and `windows_wave_1` … `windows_wave_20`
 - Keep wave membership exclusive (a host in at most one approved wave)
 - Put every wave member in `windows_hosts`
 - Separate LAB / DEV / UAT / PROD (separate inventories, or equivalent
@@ -111,5 +114,13 @@ See `tests/controller_cac/test_empty_wave_detection.yml`.
 - Operators: Execute on the eight Job Templates. Cannot prompt extra-vars or
   edit templates.
 - Administrators: may change PROD extra-vars (`snow_shared_role`, SMTP,
-  `snow_enabled`) after change control.
+  `snow_enabled`, `snow_patching_update_cr_enabled`,
+  `snow_patching_attach_reports_enabled`,
+  `snow_patching_create_incidents_enabled`) after change control. Leave
+  those switches false until the Windows Full Patch Job Template has the
+  existing ServiceNow credential and an Execution Environment that contains
+  `servicenow.itsm`. Incident creation also needs `snow_incident_caller`
+  when a host requires follow-up. Assignment group and priority are optional.
+  Do not change `snow_require_change_validation` as part of
+  enabling those switches.
 - Emergency override variables must not be stored on the templates.

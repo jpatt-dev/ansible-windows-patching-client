@@ -1189,11 +1189,21 @@
         that:
           - "'Aggregate Final Patch Report and print summary' in _agg_task_names"
           - "'Write canonical Final Report JSON/CSV/Markdown from patch_workflow_report' in _agg_task_names"
+          - "'Update ServiceNow change request with the patch summary' in _agg_task_names"
+          - "'Attach final reports to the ServiceNow change request' in _agg_task_names"
+          - "'Create follow-up incidents for hosts that need manual follow-up' in _agg_task_names"
           - "'Email Windows patching report' in _agg_task_names"
-          - "'Attach Final Report files to ServiceNow change' in _agg_task_names"
-          - "'Fail after reporting if any host failed' in _agg_task_names"
-          - _agg_task_blob is search('(?s)Aggregate Final Patch Report.*Write canonical Final Report.*Email Windows patching report.*Attach Final Report files to ServiceNow change.*Fail after reporting if any host failed')
-        fail_msg: Final AAP failure assertion is not after reporting and SMTP.
+          - "'Fail after reporting if patching or ServiceNow integration failed' in _agg_task_names"
+          - >-
+            _agg_task_blob is search('(?s)Aggregate Final Patch Report.*Write canonical
+            Final Report.*Update ServiceNow change request with the patch summary.*Attach
+            final reports to the ServiceNow change request.*Create follow-up incidents
+            for hosts that need manual follow-up.*Email Windows patching
+            report.*Fail after reporting if patching or ServiceNow integration failed')
+          - "'Validate ServiceNow change for this host before remediation' in (_full_patch_slurp.content | b64decode)"
+          - "'Update ServiceNow work notes after host final result' not in (_full_patch_slurp.content | b64decode)"
+          - "'snow_phase: attach_report' not in (_full_patch_slurp.content | b64decode)"
+        fail_msg: Final AAP failure assertion is not after reporting, ServiceNow integration, and SMTP.
 
 - name: Register hosts for Power BI additive JSON fields
   hosts: localhost
@@ -1208,7 +1218,7 @@
         patch_host_eligible: true
         windows_connectivity_ok: true
         pending_reboot: false
-        snow_ci_sys_id: ci-ok-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        sys_id: ci-ok-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
         patch_environment: PROD
         windows_os_build_pre: "17763.7000"
         windows_os_build: "17763.7553"
@@ -1240,7 +1250,7 @@
         patch_host_eligible: true
         windows_connectivity_ok: true
         pending_reboot: false
-        snow_ci_sys_id: ci-none-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        sys_id: ci-none-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
         patch_environment: PROD
         windows_os_build_pre: "20348.1"
         windows_os_build: "20348.1"
@@ -1267,7 +1277,7 @@
         patch_host_eligible: true
         windows_connectivity_ok: true
         pending_reboot: false
-        snow_ci_sys_id: ci-fail-cccccccccccccccccccccccccccccc
+        sys_id: ci-fail-cccccccccccccccccccccccccccccc
         patch_environment: PROD
         windows_os_build_pre: "17763.7000"
         windows_os_build: "17763.7000"
@@ -1292,7 +1302,7 @@
         patch_host_eligible: true
         windows_connectivity_ok: true
         pending_reboot: false
-        snow_ci_sys_id: ci-miss-dddddddddddddddddddddddddddddd
+        sys_id: ci-miss-dddddddddddddddddddddddddddddd
         patch_environment: PROD
         windows_hostname: WINPBIMISSKB
         windows_update_search:
@@ -1310,7 +1320,7 @@
         groups: mock_pbi_exempt
         ansible_connection: local
         windows_connectivity_ok: true
-        snow_ci_sys_id: ci-ex-eeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+        sys_id: ci-ex-eeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         patch_environment: PROD
         windows_hostname: WINPBIEX
         patching_exception_enabled: true
@@ -1332,7 +1342,7 @@
           - windows_patch_exempt_temp
         ansible_connection: local
         windows_connectivity_ok: true
-        snow_ci_sys_id: ci-mix-111111111111111111111111111111
+        sys_id: ci-mix-111111111111111111111111111111
         patch_environment: PROD
         windows_hostname: WINPBIMIX
         patching_reboot_exception_enabled: true
@@ -1347,7 +1357,7 @@
         ansible_connection: local
         windows_connectivity_ok: true
         patch_environment: IST
-        snow_ci_sys_id: ci-ist-ffffffffffffffffffffffffffffff
+        sys_id: ci-ist-ffffffffffffffffffffffffffffff
         windows_hostname: WINPBIIST
 
     - name: Add PROD host for mixed-environment run
@@ -1357,7 +1367,7 @@
         ansible_connection: local
         windows_connectivity_ok: true
         patch_environment: PROD
-        snow_ci_sys_id: ci-prod-000000000000000000000000000000
+        sys_id: ci-prod-000000000000000000000000000000
         windows_hostname: WINPBIPROD
 
 - name: Multi-host additive JSON aggregation

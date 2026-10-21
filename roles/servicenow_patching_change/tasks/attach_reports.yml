@@ -1,0 +1,224 @@
+---
+# servicenow.itsm 2.6.3 provides attachment_upload. The file name is the
+# attachment identity on the change. The same name and the same bytes are
+# left in place. The same name with different bytes overwrites that
+# attachment. A second run does not add another file of the same name.
+# This does not update change fields and it does not close the change.
+# Report paths are files on this job's controller. Another AAP job does
+# not see them.
+#
+# api_info in servicenow.itsm 2.6.3 returns the row list as record.
+# Some responses use records, and a single row may be a mapping.
+# Confirmation accepts both. The upload response is not confirmation.
+
+- name: Build the attachment arguments
+  ansible.builtin.set_fact:
+    snow_report_attachments: "{{ snow_report_attachments_json | trim | from_json }}"
+  vars:
+    snow_report_attachments_json: |
+      {% set ns = namespace(rows=[]) %}
+      {% for path in snow_report_files %}
+      {% set ns.rows = ns.rows + [{'path': path, 'name': path | basename}] %}
+      {% endfor %}
+      {{ ns.rows | to_json }}
+
+- name: Confirm the change request exists before attaching reports
+  block:
+    # args[module] does not see the collection env_fallback for SN_USERNAME.
+    - name: Query ServiceNow by change number before attachment  # noqa: args[module]
+      servicenow.itsm.change_request_info:
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        number: "{{ snow_change_number }}"
+      register: snow_change_lookup
+      no_log: true
+  rescue:
+    - name: Report the ServiceNow lookup failure
+      ansible.builtin.fail:
+        msg: >-
+          Could not read change request {{ snow_change_number }} before
+          attaching reports.
+          {{ ansible_failed_result.msg | default('The collection did not return an error message.') }}
+
+- name: Fail when the change request does not exist
+  when: snow_change_lookup.records | default([]) | length == 0
+  ansible.builtin.fail:
+    msg: "ServiceNow has no change request numbered {{ snow_change_number }}."
+
+- name: Fail when the change number matches more than one record
+  when: snow_change_lookup.records | default([]) | length > 1
+  ansible.builtin.fail:
+    msg: >-
+      ServiceNow returned {{ snow_change_lookup.records | length }} records
+      for {{ snow_change_number }}.
+
+- name: Remember the change identity
+  ansible.builtin.set_fact:
+    snow_change_sys_id_resolved: "{{ snow_change_lookup.records[0].sys_id }}"
+    snow_change_number_resolved: "{{ snow_change_lookup.records[0].number }}"
+
+- name: Upload the report files
+  block:
+    # args[module] does not see the collection env_fallback for SN_USERNAME.
+    - name: Upload reports to the change request  # noqa: args[module]
+      servicenow.itsm.attachment_upload:
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        table_name: change_request
+        table_sys_id: "{{ snow_change_sys_id_resolved }}"
+        attachments: "{{ snow_report_attachments }}"
+      register: snow_attachment_api
+      no_log: true
+  rescue:
+    - name: Report the attachment upload failure
+      ansible.builtin.fail:
+        msg: >-
+          ServiceNow did not attach the reports to
+          {{ snow_change_number_resolved }}.
+          {{ ansible_failed_result.msg | default('The collection did not return an error message.') }}
+
+- name: Normalize the attachment upload response
+  ansible.builtin.set_fact:
+    snow_attachment_upload_rows: "{{ snow_attachment_upload_rows_json | trim | from_json }}"
+  vars:
+    snow_attachment_upload_rows_json: |
+      {% if snow_attachment_api.record is defined and snow_attachment_api.record is mapping %}
+      {% set upload_rows = [snow_attachment_api.record] %}
+      {% elif snow_attachment_api.record is defined and snow_attachment_api.record is not string and snow_attachment_api.record is sequence %}
+      {% set upload_rows = snow_attachment_api.record %}
+      {% elif snow_attachment_api.records is defined and snow_attachment_api.records is not string and snow_attachment_api.records is sequence %}
+      {% set upload_rows = snow_attachment_api.records %}
+      {% else %}
+      {% set upload_rows = [] %}
+      {% endif %}
+      {{ upload_rows | to_json }}
+
+- name: Fail when the upload response omits a report
+  when: snow_missing_upload_names | length > 0
+  ansible.builtin.fail:
+    msg: >-
+      ServiceNow did not return an attachment record for
+      {{ snow_missing_upload_names | join(', ') }}
+      on {{ snow_change_number_resolved }}.
+  vars:
+    snow_missing_upload_names: >-
+      {{
+        snow_report_attachments | map(attribute='name') | list
+        | difference(snow_attachment_upload_rows | default([]) | map(attribute='file_name') | list)
+      }}
+
+- name: Re-read each attachment on the change request
+  block:
+    # args[module] does not see the collection env_fallback for SN_USERNAME.
+    - name: Query sys_attachment for each report name  # noqa: args[module]
+      servicenow.itsm.api_info:
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        resource: sys_attachment
+        sysparm_query: >-
+          table_name=change_request^table_sys_id={{ snow_change_sys_id_resolved }}^file_name={{ snow_report_name }}
+        columns:
+          - sys_id
+          - file_name
+          - table_name
+          - table_sys_id
+          - size_bytes
+        exclude_reference_link: true
+      loop: "{{ snow_report_attachments }}"
+      loop_control:
+        loop_var: snow_report_item
+        label: "{{ snow_report_item.name }}"
+      vars:
+        snow_report_name: "{{ snow_report_item.name }}"
+      register: snow_attachment_confirmations
+      no_log: true
+  rescue:
+    - name: Report the attachment confirmation failure
+      ansible.builtin.fail:
+        msg: >-
+          Could not re-read attachments on {{ snow_change_number_resolved }}.
+          The upload response is not treated as confirmation.
+          {{ ansible_failed_result.msg | default('The collection did not return an error message.') }}
+
+- name: Compare each attachment with the local report
+  ansible.builtin.set_fact:
+    snow_attachment_confirmation: "{{ snow_attachment_confirmation_json | trim | from_json }}"
+  vars:
+    snow_attachment_confirmation_json: |
+      {% set ns = namespace(bad=[], rows=[], row=[]) %}
+      {% for item in snow_attachment_confirmations.results %}
+      {% if item.record is defined and item.record is mapping %}
+      {% set ns.row = [item.record] %}
+      {% elif item.record is defined and item.record is not string and item.record is sequence %}
+      {% set ns.row = item.record %}
+      {% elif item.records is defined and item.records is not string and item.records is sequence %}
+      {% set ns.row = item.records %}
+      {% else %}
+      {% set ns.row = [] %}
+      {% endif %}
+      {% set expected = item.snow_report_item.name %}
+      {% set locals = snow_report_file_stats.results | selectattr('snow_report_path', 'equalto', item.snow_report_item.path) | list %}
+      {% set local_size = locals[0].stat.size if locals | length == 1 else -1 %}
+      {% set ns.hits = [] %}
+      {% for record in ns.row %}
+      {% if (record.file_name | default('') | string) == expected
+         and (record.table_sys_id | default('') | string | lower) == (snow_change_sys_id_resolved | string | lower)
+         and (record.table_name | default('') | string) == 'change_request'
+         and (record.sys_id | default('') | string) is match('^[0-9a-fA-F]{32}$')
+         and (record.size_bytes | default('') | string) == (local_size | string) %}
+      {% set ns.hits = ns.hits + [record] %}
+      {% endif %}
+      {% endfor %}
+      {% if ns.hits | length == 1 %}
+      {% set ns.rows = ns.rows + [{
+        'path': item.snow_report_item.path,
+        'file_name': ns.hits[0].file_name,
+        'sys_id': ns.hits[0].sys_id,
+        'size_bytes': ns.hits[0].size_bytes
+      }] %}
+      {% else %}
+      {% set ns.bad = ns.bad + [expected] %}
+      {% endif %}
+      {% endfor %}
+      {{ {'bad': ns.bad, 'rows': ns.rows} | to_json }}
+
+- name: Fail when an attachment cannot be confirmed
+  when: snow_attachment_confirmation.bad | length > 0
+  ansible.builtin.fail:
+    msg: >-
+      ServiceNow did not confirm attachment
+      {{ snow_attachment_confirmation.bad | join(', ') }}
+      on {{ snow_change_number_resolved }}.
+      The file name, change sys_id, or byte size did not match.
+      Existing attachments were left in place. This role does not delete them.
+
+- name: Publish the attachment result
+  ansible.builtin.set_fact:
+    snow_result:
+      operation: attach_reports
+      success: true
+      number: "{{ snow_change_number_resolved }}"
+      sys_id: "{{ snow_change_sys_id_resolved }}"
+      state: "{{ snow_change_lookup.records[0].state | default('') }}"
+      approval: "{{ snow_change_lookup.records[0].approval | default('') }}"
+      content_updated: "{{ snow_attachment_api.changed | bool }}"
+      attachments: "{{ snow_attachment_confirmation.rows }}"
+      message: "{{ snow_attachment_message }}"
+  vars:
+    snow_attachment_message: >-
+      {{
+        'Confirmed '
+        ~ (snow_report_attachments | length | string)
+        ~ ' report attachment(s) on '
+        ~ snow_change_number_resolved
+        ~ '. ServiceNow stored new or replaced content for at least one file name.'
+        if snow_attachment_api.changed | bool
+        else 'Confirmed '
+        ~ (snow_report_attachments | length | string)
+        ~ ' report attachment(s) on '
+        ~ snow_change_number_resolved
+        ~ '. The file names already matched and were not duplicated.'
+      }}

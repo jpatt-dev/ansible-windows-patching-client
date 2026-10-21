@@ -21,8 +21,8 @@
       - (patch_target_scope | default('') | length) > 0
       - (patch_target_scope | lower) not in (patch_unsafe_targets | default(['all', '*']) | map('lower') | list)
     fail_msg: >-
-      Launch this Job Template with an explicit AAP Limit such as windows_canary
-      or windows_wave_1. Blank Limit, 'all', and '*' are not allowed
+      Launch this Job Template with an explicit AAP Limit such as
+      windows_wave_1. Blank Limit, 'all', and '*' are not allowed
       (ansible_limit='{{ patch_ansible_limit | default('') }}').
   when: patch_require_explicit_limit | default(true) | bool
   run_once: true

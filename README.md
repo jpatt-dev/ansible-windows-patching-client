@@ -74,7 +74,7 @@ execution-environments/
 | --- | --- |
 | Git | Playbooks, roles, allowlist, application Controller CaC |
 | AAP Inventory | Hosts, wave groups, reboot policy, permanent Git exemptions (inventory repo) |
-| AAP Limit | Wave / canary launch population |
+| AAP Limit | Wave launch population |
 | AAP exemption groups | Temporary patch/reboot exemptions and expiration metadata (Ops playbooks) |
 | Full Patch survey | Per-run operator authorization, maintenance window, and change ticket |
 | Job Template extra-vars | Per-environment CR and maintenance-window policy |

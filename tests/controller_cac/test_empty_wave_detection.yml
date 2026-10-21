@@ -31,7 +31,7 @@
       ansible.builtin.assert:
         that:
           - "'windows_hosts' in _fixture_groups"
-          - "'windows_canary' in _fixture_groups"
+          - "'windows_canary' not in _fixture_groups"
           - "'windows_wave_1' in _fixture_groups"
           - "'windows_wave_1' in approved_patch_targets"
           - "(_empty_wave.all.children.windows_wave_1.hosts | default({}) | length) == 0"

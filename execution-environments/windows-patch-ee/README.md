@@ -1,8 +1,9 @@
 # windows-patch-ee
 
 Ansible Automation Platform **2.7** Execution Environment for this Windows
-patching solution. Declares `ansible.windows` and `community.general` in
-`requirements.yml` (aligned with the repository root collection requirements).
+patching solution. Declares `ansible.windows`, `community.general`, and
+`servicenow.itsm` in `requirements.yml` (aligned with the repository root
+collection requirements).
 `community.general` is required for optional SMTP report email
 (`community.general.mail`). Rebuild and republish this EE before enabling
 email reporting.
@@ -10,9 +11,12 @@ email reporting.
 Collections are **declared** only — they are **not** vendored into this git
 repository.
 
-`servicenow.itsm` is **not** included. ServiceNow REST is not implemented in
-this repository. Add it in a client fork after the shared ServiceNow role is
-published.
+`servicenow.itsm` is declared in `requirements.yml`. The image that is already
+published does not contain it until this EE is rebuilt. Rebuild before
+enabling `snow_patching_update_cr_enabled` or
+`snow_patching_attach_reports_enabled`. Those Job Templates also need the
+existing ServiceNow credential. Pre-remediation approval validation does not
+use this collection.
 
 ## Build with ansible-builder
 

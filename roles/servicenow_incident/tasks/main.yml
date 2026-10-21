@@ -1,0 +1,297 @@
+---
+# ServiceNow calls run once, on the controller. set_fact records
+# snow_incident_result on the current inventory host for that single run,
+# not on every host in the play. Call this role from a localhost play so
+# the current host and the controller are the same.
+
+- name: Run the ServiceNow incident operation once on the controller
+  delegate_to: localhost
+  become: false
+  run_once: true
+  vars:
+    ansible_connection: local
+  block:
+    - name: Validate the incident operation name
+      ansible.builtin.assert:
+        that:
+          - snow_incident_operation is string
+          - snow_incident_operation in snow_incident_supported_operations
+        fail_msg: >-
+          snow_incident_operation must be one of
+          {{ snow_incident_supported_operations | join(', ') }}.
+        quiet: true
+
+    - name: Validate snow_incident_fields is a dictionary
+      ansible.builtin.assert:
+        that:
+          - snow_incident_fields is mapping
+        fail_msg: snow_incident_fields must be a dictionary of incident columns.
+        quiet: true
+
+    - name: Validate inputs for incident read
+      when: snow_incident_operation == 'read'
+      ansible.builtin.assert:
+        that:
+          - snow_incident_number | default('') | string | length > 0
+        fail_msg: read requires snow_incident_number.
+        quiet: true
+
+    - name: Validate inputs for incident create
+      when: snow_incident_operation == 'create'
+      ansible.builtin.assert:
+        that:
+          - snow_incident_allow_create | bool
+          - snow_incident_caller | default('') | string | length > 0
+          - >-
+            (snow_incident_short_description | default('') | string | length > 0)
+            or (
+              snow_incident_hostname | default('') | string | length > 0
+              and snow_incident_failure | default('') | string | length > 0
+            )
+          - >-
+            (snow_incident_hostname | default('') | string | length > 0)
+            or (snow_incident_correlation_id | default('') | string | length > 0)
+          - snow_incident_ci_ok | bool
+          - snow_incident_text_ok | bool
+        fail_msg: >-
+          create requires snow_incident_allow_create=true, snow_incident_caller,
+          a short description or both a hostname and a failure, and a hostname
+          or snow_incident_correlation_id so a retry can find the same incident.
+          {{ snow_incident_input_error }}
+        quiet: true
+      vars:
+        snow_incident_ci_ok: >-
+          {{
+            snow_incident_ci_sys_id | default('') | string | length == 0
+            or snow_incident_ci_sys_id is match('^[0-9a-fA-F]{32}$')
+          }}
+        snow_incident_text_ok: >-
+          {{
+            snow_incident_unsafe_text | length == 0
+          }}
+        snow_incident_unsafe_text: >-
+          {{
+            [
+              snow_incident_hostname | default(''),
+              snow_incident_change_number | default(''),
+              snow_incident_correlation_id | default(''),
+              snow_incident_assignment_group | default(''),
+              snow_incident_aap_job_id | default('')
+            ]
+            | map('string')
+            | select('search', '\\^|\\r|\\n')
+            | list
+          }}
+        snow_incident_input_error: >-
+          {{
+            'snow_incident_ci_sys_id must be a 32-character hexadecimal sys_id. That check does not prove the configuration item exists.'
+            if not (snow_incident_ci_ok | bool)
+            else 'Hostname, change number, correlation id, assignment group, and job id cannot contain ^ or a line break.'
+            if not (snow_incident_text_ok | bool)
+            else 'Creation stays disabled until snow_incident_allow_create is true.'
+          }}
+
+    - name: Validate inputs for incident update
+      when: snow_incident_operation == 'update'
+      ansible.builtin.assert:
+        that:
+          - snow_incident_number | default('') | string | length > 0
+          - snow_incident_ci_ok | bool
+          - snow_incident_text_ok | bool
+          - >-
+            (snow_incident_work_notes | default('') | string | length > 0)
+            or (snow_incident_short_description | default('') | string | length > 0)
+            or (snow_incident_description | default('') | string | length > 0)
+            or (snow_incident_failure | default('') | string | length > 0)
+            or (snow_incident_fields | length > 0)
+            or (snow_incident_priority | default('') | string | length > 0)
+            or (snow_incident_assignment_group | default('') | string | length > 0)
+            or (snow_incident_ci_sys_id | default('') | string | length > 0)
+            or (snow_incident_aap_job_id | default('') | string | length > 0)
+            or (tower_job_id | default('') | string | length > 0)
+            or (awx_job_id | default('') | string | length > 0)
+        fail_msg: >-
+          update requires snow_incident_number and at least one field,
+          work note, or AAP job id.
+          {{ snow_incident_input_error }}
+        quiet: true
+      vars:
+        snow_incident_ci_ok: >-
+          {{
+            snow_incident_ci_sys_id | default('') | string | length == 0
+            or snow_incident_ci_sys_id is match('^[0-9a-fA-F]{32}$')
+          }}
+        snow_incident_text_ok: "{{ snow_incident_unsafe_text | length == 0 }}"
+        snow_incident_unsafe_text: >-
+          {{
+            [
+              snow_incident_hostname | default(''),
+              snow_incident_change_number | default(''),
+              snow_incident_assignment_group | default(''),
+              snow_incident_aap_job_id | default('')
+            ]
+            | map('string')
+            | select('search', '\\^|\\r|\\n')
+            | list
+          }}
+        snow_incident_input_error: >-
+          {{
+            'snow_incident_ci_sys_id must be a 32-character hexadecimal sys_id. That check does not prove the configuration item exists.'
+            if not (snow_incident_ci_ok | bool)
+            else 'Hostname, change number, assignment group, and job id cannot contain ^ or a line break.'
+          }}
+
+    - name: Validate inputs for incident close
+      when: snow_incident_operation == 'close'
+      ansible.builtin.assert:
+        that:
+          - snow_incident_allow_close | bool
+          - snow_incident_number | default('') | string | length > 0
+          - snow_incident_close_code | default('') | string | length > 0
+          - snow_incident_close_notes | default('') | string | length > 0
+          - snow_incident_text_ok | bool
+        fail_msg: >-
+          close requires snow_incident_allow_close=true, snow_incident_number,
+          snow_incident_close_code, and snow_incident_close_notes.
+          The role does not walk intermediate states. A later read must show
+          state closed.
+        quiet: true
+      vars:
+        snow_incident_text_ok: "{{ snow_incident_unsafe_text | length == 0 }}"
+        snow_incident_unsafe_text: >-
+          {{
+            [snow_incident_assignment_group | default('')]
+            | map('string')
+            | select('search', '\\^|\\r|\\n')
+            | list
+          }}
+
+    - name: Reject incident fields this role does not send
+      when: snow_incident_operation in ['create', 'update', 'close']
+      ansible.builtin.assert:
+        that:
+          - snow_incident_rejected_fields | length == 0
+        fail_msg: >-
+          snow_incident_fields contains
+          {{ snow_incident_rejected_fields | join(', ') }}.
+          Remove state, close fields, identity, caller, and work_notes.
+          Use snow_incident_work_notes for notes and the close operation
+          for closure.
+        quiet: true
+      vars:
+        snow_incident_blocked_fields:
+          - state
+          - hold_reason
+          - close_code
+          - close_notes
+          - work_notes
+          - number
+          - sys_id
+          - caller
+          - caller_id
+          - correlation_id
+          - cmdb_ci
+          - assignment_group
+          - priority
+          - attachments
+          - incident_mapping
+        snow_incident_rejected_fields: >-
+          {{
+            snow_incident_fields.keys() | list
+            | intersect(snow_incident_blocked_fields)
+          }}
+
+    - name: Resolve the incident AAP job id without requiring it
+      when: snow_incident_operation in ['create', 'update']
+      ansible.builtin.set_fact:
+        snow_incident_job_id: >-
+          {{
+            (
+              [
+                snow_incident_aap_job_id | default(''),
+                tower_job_id | default(''),
+                awx_job_id | default('')
+              ]
+              | map('string')
+              | map('trim')
+              | select('ne', '')
+              | list
+              | first
+              | default('', true)
+            )
+          }}
+
+    # Do not assert SN_HOST, SN_USERNAME, or SN_PASSWORD with lookup('env').
+    # AAP custom-credential injection can authenticate the collection while
+    # that lookup is empty. The module call remains the authentication check.
+    # API tasks are no_log and validate_certs stays true.
+
+    - name: Split module fields from client-specific incident columns
+      when: snow_incident_operation in ['create', 'update', 'close']
+      ansible.builtin.set_fact:
+        snow_incident_selected_direct_fields: >-
+          {{
+            snow_incident_fields | dict2items
+            | selectattr('key', 'in', snow_incident_direct_field_names)
+            | items2dict
+          }}
+        snow_incident_selected_other_fields: >-
+          {{
+            snow_incident_fields | dict2items
+            | rejectattr('key', 'in', snow_incident_direct_field_names)
+            | items2dict
+          }}
+        snow_incident_assignment_group_id: ""
+
+    - name: Resolve the incident assignment group
+      when:
+        - snow_incident_operation in ['create', 'update', 'close']
+        - snow_incident_assignment_group | default('') | string | length > 0
+      block:
+        # args[module] does not see the collection env_fallback for SN_USERNAME.
+        - name: Query sys_user_group by name  # noqa: args[module]
+          servicenow.itsm.api_info:
+            instance:
+              host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+              validate_certs: true
+            resource: sys_user_group
+            sysparm_query: "name={{ snow_incident_assignment_group }}"
+            columns:
+              - sys_id
+              - name
+            exclude_reference_link: true
+          register: snow_incident_group_lookup
+          no_log: true
+      rescue:
+        - name: Report the assignment group lookup failure
+          ansible.builtin.fail:
+            msg: >-
+              Could not look up assignment group {{ snow_incident_assignment_group }}.
+              {{ ansible_failed_result.msg | default('The collection did not return an error message.') }}
+
+    - name: Require one exact assignment group match
+      when:
+        - snow_incident_operation in ['create', 'update', 'close']
+        - snow_incident_assignment_group | default('') | string | length > 0
+      ansible.builtin.include_tasks:
+        file: resolve_assignment_group.yml
+
+    - name: Read an existing incident
+      when: snow_incident_operation == 'read'
+      ansible.builtin.include_tasks:
+        file: read.yml
+
+    - name: Create an incident
+      when: snow_incident_operation == 'create'
+      ansible.builtin.include_tasks:
+        file: create.yml
+
+    - name: Update an existing incident
+      when: snow_incident_operation == 'update'
+      ansible.builtin.include_tasks:
+        file: update.yml
+
+    - name: Close an existing incident
+      when: snow_incident_operation == 'close'
+      ansible.builtin.include_tasks:
+        file: close.yml

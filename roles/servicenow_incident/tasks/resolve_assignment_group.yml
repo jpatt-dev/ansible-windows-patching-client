@@ -1,0 +1,43 @@
+---
+# servicenow.itsm api_info may return the row as record or records.
+# Either key may be one mapping or a list. A non-empty record is used first.
+# An empty record falls through to records. Anything else fails closed.
+
+- name: Normalize assignment group rows from record or records
+  ansible.builtin.set_fact:
+    snow_incident_group_rows: "{{ snow_incident_group_rows_text | trim | from_json }}"
+  vars:
+    snow_incident_group_rows_text: |
+      {% set ns = namespace(rows=[]) %}
+      {% set found = snow_incident_group_lookup | default({}) %}
+      {% set one = found.record | default('') %}
+      {% set many = found.records | default('') %}
+      {% if one is mapping %}
+      {% set ns.rows = [one] %}
+      {% elif one is not string and one is sequence and (one | length) > 0 %}
+      {% set ns.rows = one %}
+      {% elif many is mapping %}
+      {% set ns.rows = [many] %}
+      {% elif many is not string and many is sequence %}
+      {% set ns.rows = many %}
+      {% elif one is not string and one is sequence %}
+      {% set ns.rows = one %}
+      {% endif %}
+      {{ ns.rows | to_json }}
+  changed_when: false
+
+- name: Require one exact assignment group match
+  ansible.builtin.assert:
+    that:
+      - snow_incident_group_rows | length == 1
+      - snow_incident_group_rows[0].name == snow_incident_assignment_group
+      - snow_incident_group_rows[0].sys_id is match('^[0-9a-fA-F]{32}$')
+    fail_msg: >-
+      Assignment group {{ snow_incident_assignment_group }} must match
+      exactly one sys_user_group name. The incident module does not
+      accept a group name, so this role sends the group sys_id.
+    quiet: true
+
+- name: Remember the assignment group sys_id
+  ansible.builtin.set_fact:
+    snow_incident_assignment_group_id: "{{ snow_incident_group_rows[0].sys_id }}"

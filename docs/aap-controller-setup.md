@@ -28,7 +28,6 @@ false`). Inside each inventory, define groups:
 | Group | Role |
 | --- | --- |
 | `windows_hosts` | Playbook `hosts:` boundary. Not a patch wave. |
-| `windows_canary` | Approved Limit target |
 | `windows_wave_1` … `windows_wave_20` | Approved Limit targets (`N` unpadded) |
 | `windows_patch_exempt_temp` | Temporary patch exemption (Ops-managed) |
 | `windows_reboot_exempt_temp` | Temporary reboot exemption (Ops-managed) |
@@ -42,7 +41,7 @@ AAP **Limit** selects the hosts that actually run. Effective hosts are
 Do not put the Inventory object name in Limit. Do not put a group name in the
 job template Inventory field. Do not survey Limit or wave targeting.
 
-Wave groups (`windows_canary`, `windows_wave_1`) control when a host is
+Wave groups (`windows_wave_1` through `windows_wave_20`) control when a host is
 patched. WSUS client configuration is owned by the client's
 provisioning/post-provisioning process. This repository validates the
 effective WSUS configuration before patch discovery or remediation but does
@@ -110,7 +109,7 @@ read-only (`snow_require_change_validation=false`) and is bound to the same
 environment inventory (`ask_inventory_on_launch: false`).
 
 DEV is a reserved label with no Job Templates. Do not create one Job Template
-per wave. Operators set Limit to `windows_canary` or `windows_wave_1` …
+per wave. Operators set Limit to `windows_wave_1` …
 `windows_wave_20`.
 
 Do not create separate Job Templates for Pre-Reboot, Discovery, Apply,
@@ -141,13 +140,29 @@ Do not survey WSUS URLs, provider, patch mode, reboot policy
 `patching_reboot_allowed`, `patching_exception_enabled`,
 `patching_reboot_exception_enabled`, `patching_exception_active`,
 `patch_require_maintenance_window`, `snow_enabled`,
-`snow_require_change_validation`, `approved_patch_targets`, Limit/wave
+`snow_require_change_validation`, `snow_patching_update_cr_enabled`,
+`snow_patching_attach_reports_enabled`,
+`snow_patching_create_incidents_enabled`, `snow_incident_caller`,
+`snow_incident_assignment_group`, `snow_incident_priority`,
+`approved_patch_targets`, Limit/wave
 targeting, or temporary exemption hostnames. Ops playbooks manage AAP
 exemption groups.
 
 Set `snow_require_change_validation=true` on production Full Patch Job
 Template extra-vars (RBAC, not survey). Leave it `false` on lab templates
 until the shared ServiceNow role is in the Execution Environment.
+
+`snow_patching_update_cr_enabled` and `snow_patching_attach_reports_enabled`
+default to `false` on every Windows Full Patch Job Template. They are not
+survey fields and they do not change approval validation. Before either is
+set true, attach the existing ServiceNow credential to that Job Template and
+use an Execution Environment that contains `servicenow.itsm` and can reach
+the instance. The credential injects `SN_HOST`, `SN_USERNAME`, and
+`SN_PASSWORD`. The roles do not pre-check those names with `lookup('env')`.
+`snow_patching_create_incidents_enabled` stays `false` until an administrator
+sets it. A follow-up host then requires `snow_incident_caller`. Assignment
+group and priority are optional. The published image does not include the
+collection until it is rebuilt.
 
 Set `patch_require_maintenance_window` on the Job Template or schedule extra
 variables (default `true`). For recurring AAP schedules, set it `false` so
@@ -161,7 +176,6 @@ Standalone **Windows - Precheck** uses a smaller read-only survey
 
 Every job requires an explicit AAP Limit. Typical values:
 
-- `windows_canary`
 - `windows_wave_1` through `windows_wave_20`
 
 Leave all operator flags `false` for a dry run. Authorize install and each

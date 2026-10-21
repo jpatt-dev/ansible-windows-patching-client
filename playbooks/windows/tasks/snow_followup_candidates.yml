@@ -1,0 +1,53 @@
+---
+# Hosts in patch_workflow_report are the current job's targeted hosts.
+# manual_followup_required is the follow-up criterion. Exempt hosts are not
+# candidates: an exemption is not a follow-up condition. Degraded hosts are
+# candidates only when that flag is already true.
+
+- name: Select follow-up incident candidates from the aggregate report
+  ansible.builtin.set_fact:
+    snow_patching_incident_candidates: "{{ snow_patching_incident_candidates_json | trim | from_json }}"
+  vars:
+    snow_patching_incident_candidates_json: |
+      {% set ns = namespace(rows=[]) %}
+      {% for follow_host in patch_workflow_report.hosts | default([]) %}
+      {% set follow = follow_host.manual_followup_required | default(false) | bool %}
+      {% set exempt = (follow_host.exempt | default(false) | bool) or ((follow_host.result | default('')) == 'exempt') %}
+      {% if follow and not exempt %}
+      {% set ci = follow_host.snow_ci_sys_id | default('') | string | trim %}
+      {% set change = follow_host.change_ticket_id | default(change_ticket_id | default('')) | string | trim %}
+      {% set hostname = follow_host.hostname | default(follow_host.inventory_hostname) | default(follow_host.host) | default('') | string | trim %}
+      {% set reason_code = follow_host.reason_code | default('UNKNOWN_RESULT') | string | trim %}
+      {% set reason = follow_host.reason | default('') | string | trim %}
+      {% set job = follow_host.aap_job_id | default(tower_job_id | default(awx_job_id | default(''))) | string | trim %}
+      {% set correlation = 'aap-patch:' ~ change ~ ':' ~ hostname ~ ':' ~ reason_code %}
+      {% if ci | length == 0 %}
+      {% set ns.action = 'reject' %}
+      {% set ns.reject = 'Inventory sys_id is missing, so snow_ci_sys_id has no CI mapping. No incident was created.' %}
+      {% elif not (ci is match('^[0-9a-fA-F]{32}$')) %}
+      {% set ns.action = 'reject' %}
+      {% set ns.reject = 'Inventory sys_id is not a 32-character hexadecimal CI sys_id. No incident was created.' %}
+      {% elif correlation is search('\\^|\\r|\\n') %}
+      {% set ns.action = 'reject' %}
+      {% set ns.reject = 'The correlation id contains ^ or a line break. No incident was created.' %}
+      {% else %}
+      {% set ns.action = 'create' %}
+      {% set ns.reject = '' %}
+      {% endif %}
+      {% set ns.rows = ns.rows + [{
+        'hostname': hostname,
+        'inventory_hostname': follow_host.inventory_hostname | default(hostname),
+        'ci_sys_id': ci,
+        'change_ticket_id': change,
+        'reason_code': reason_code,
+        'reason': reason,
+        'result': follow_host.result | default(''),
+        'aap_job_id': job,
+        'correlation_id': correlation,
+        'action': ns.action,
+        'reject_reason': ns.reject
+      }] %}
+      {% endif %}
+      {% endfor %}
+      {{ ns.rows | to_json }}
+  changed_when: false

@@ -543,11 +543,12 @@
           - "'windows_post_patch_reboot_mode' in _reboot_text"
           - "'when: patching_exception_active | default(false) | bool' in _apply_text"
           - "'windows_apply_status: excluded' in _apply_text"
-          - "'windows_canary' in approved_patch_targets"
+          - "'windows_canary' not in approved_patch_targets"
+          - "'windows_wave_0' not in approved_patch_targets"
           - "'windows_wave_1' in approved_patch_targets"
           - "'windows_wave_20' in approved_patch_targets"
           - "'windows_wave_21' not in approved_patch_targets"
-          - "(approved_patch_targets | length) == 21"
+          - "(approved_patch_targets | length) == 20"
         fail_msg: Survey must drop hostname exemptions; Apply/reboot skip and wave allowlist must stay unchanged.
 
 - name: Invalid expiration still produces host and aggregate reports

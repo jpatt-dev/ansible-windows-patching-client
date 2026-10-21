@@ -2,6 +2,31 @@
 # Allowlist and Limit-to-wave tests. Does not contact Windows hosts.
 #   ANSIBLE_ROLES_PATH=roles ansible-playbook tests/patch_common/test_approved_targets.yml
 
+- name: Approved wave 1 is an exact allowlist match
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_target_scope: windows_wave_1
+    patch_allow_unapproved_target: false
+    patch_emergency_acknowledgement: ""
+  tasks:
+    - name: Include approved-target validation
+      ansible.builtin.include_role:
+        name: patch_common
+        tasks_from: validate_approved_target.yml
+
+    - name: Map Limit to patch_wave_name
+      ansible.builtin.include_role:
+        name: patch_common
+        tasks_from: set_wave_name.yml
+
+    - name: Assert wave 1 is allowed and names the report wave
+      ansible.builtin.assert:
+        that:
+          - patch_wave_name == 'windows_wave_1'
+        fail_msg: windows_wave_1 must be an exact approved Limit and report wave name.
+
 - name: Approved wave 20 is an exact allowlist match
   hosts: localhost
   connection: local
@@ -26,6 +51,66 @@
         that:
           - patch_wave_name == 'windows_wave_20'
         fail_msg: windows_wave_20 must be an exact approved Limit and report wave name.
+
+- name: Retired canary Limit is rejected
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_target_scope: windows_canary
+    patch_allow_unapproved_target: false
+    patch_emergency_acknowledgement: ""
+  tasks:
+    - name: Expect windows_canary to fail
+      block:
+        - name: Include approved-target validation for windows_canary
+          ansible.builtin.include_role:
+            name: patch_common
+            tasks_from: validate_approved_target.yml
+
+        - name: Fail if windows_canary was accepted
+          ansible.builtin.fail:
+            msg: windows_canary must not match the allowlist.
+      rescue:
+        - name: Record that windows_canary was rejected
+          ansible.builtin.set_fact:
+            _canary_rejected: true
+
+    - name: Assert windows_canary is not an approved wave
+      ansible.builtin.assert:
+        that:
+          - _canary_rejected | default(false) | bool
+        fail_msg: windows_canary must fail as an approved remediation target.
+
+- name: Unapproved wave 0 is rejected
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_target_scope: windows_wave_0
+    patch_allow_unapproved_target: false
+    patch_emergency_acknowledgement: ""
+  tasks:
+    - name: Expect wave 0 to fail
+      block:
+        - name: Include approved-target validation for wave 0
+          ansible.builtin.include_role:
+            name: patch_common
+            tasks_from: validate_approved_target.yml
+
+        - name: Fail if wave 0 was accepted
+          ansible.builtin.fail:
+            msg: windows_wave_0 must not match the allowlist.
+      rescue:
+        - name: Record that wave 0 was rejected
+          ansible.builtin.set_fact:
+            _wave_0_rejected: true
+
+    - name: Assert wave 0 is not an approved wave
+      ansible.builtin.assert:
+        that:
+          - _wave_0_rejected | default(false) | bool
+        fail_msg: windows_wave_0 must fail as an approved remediation target.
 
 - name: Unapproved wave 21 is rejected
   hosts: localhost
@@ -137,3 +222,45 @@
           - patch_final_result.patch_wave_name == 'windows_wave_7'
           - patch_final_result.patch_wave == 'windows_wave_7'
         fail_msg: Final report did not receive patch_wave_name from the Limit.
+
+- name: Change preparation uses the same approved wave list
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Load the patch allowlist
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../../roles/patch_common/defaults/main.yml"
+
+    - name: Load Change Request preparation
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../playbooks/servicenow/prepare_patch_change.yml"
+      register: _prepare_slurp
+
+    - name: Read the preparation wave list
+      ansible.builtin.set_fact:
+        _prepare_play: "{{ (_prepare_slurp.content | b64decode | from_yaml)[0] }}"
+        _prepare_waves: "{{ (_prepare_slurp.content | b64decode | from_yaml)[0].vars.snow_prepare_supported_waves }}"
+
+    - name: Assert preparation and patching allow the same waves
+      ansible.builtin.assert:
+        that:
+          - _prepare_play.hosts == 'windows_hosts'
+          - _prepare_play.connection == 'local'
+          - not (_prepare_play.gather_facts | bool)
+          - _prepare_play.vars.snow_prepare_preview_only | bool
+          - not (_prepare_play.vars.snow_prepare_allow_create | bool)
+          - "'patch_wave_name' not in _prepare_play.vars"
+          - _prepare_play.tasks[0]['ansible.builtin.include_tasks'] == 'tasks/prepare_patch_change.yml'
+          - _prepare_play.tasks[0].run_once | bool
+          - _prepare_waves == approved_patch_targets
+          - "'windows_wave_1' in _prepare_waves"
+          - "'windows_wave_20' in _prepare_waves"
+          - "'windows_canary' not in _prepare_waves"
+          - "'windows_wave_0' not in _prepare_waves"
+          - "'windows_wave_21' not in _prepare_waves"
+          - "(_prepare_waves | length) == 20"
+          - "'all' not in approved_patch_targets"
+          - "'*' not in approved_patch_targets"
+          - "'windows_hosts' not in approved_patch_targets"
+        fail_msg: Change preparation and approved_patch_targets must both be windows_wave_1 through windows_wave_20.

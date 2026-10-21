@@ -170,26 +170,17 @@
       tags:
         - report
 
-    - name: Update ServiceNow work notes after host final result
-      ansible.builtin.include_role:
-        name: servicenow_change
-      vars:
-        snow_phase: work_notes
-        snow_work_note_message: >-
-          AAP Windows full patch host result for {{ inventory_hostname }}:
-          eligible={{ patch_host_eligible | default(false) }},
-          result={{ patch_final_result.result | default(patch_final_result.final_status | default('not_available')) }},
-          patched={{ patch_final_result.patched | default(false) }},
-          scope={{ patch_target_scope | default('not_available') }}
-          (wave={{ patch_wave_name | default('unspecified') }}).
-      tags:
-        - always
-        - servicenow
-
 - name: Windows full patch - aggregate reporting
   hosts: windows_hosts
   connection: local
   gather_facts: false
+  # Disabled unless a Job Template extra-var enables them. Not survey fields.
+  # Extra-vars override these play defaults.
+  vars:
+    snow_patching_update_cr_enabled: false
+    snow_patching_attach_reports_enabled: false
+    snow_patching_create_incidents_enabled: false
+    snow_patching_tasks_dir: "{{ playbook_dir }}/tasks"
   tags:
     - report
     - windows
@@ -212,6 +203,195 @@
       tags:
         - report
 
+    # One controller call for the Limit. A separate localhost play would be
+    # skipped by an AAP wave Limit such as windows_wave_1. run_once keeps
+    # this off the serial per-server path. Do not use snow_enabled or
+    # snow_shared_role here; that adapter is the pre-remediation validator.
+    - name: Clear ServiceNow integration failure flags
+      ansible.builtin.set_fact:
+        snow_patching_update_failed: false
+        snow_patching_attach_failed: false
+        snow_patching_incident_failed: false
+      run_once: true
+      changed_when: false
+      tags:
+        - report
+        - servicenow
+
+    - name: Update ServiceNow change request with the patch summary
+      when: snow_patching_update_cr_enabled | bool
+      run_once: true
+      tags:
+        - report
+        - servicenow
+      block:
+        - name: Require change_ticket_id before the change update
+          ansible.builtin.assert:
+            that:
+              - change_ticket_id | default('') | trim | length > 0
+            fail_msg: >-
+              snow_patching_update_cr_enabled requires an existing
+              change_ticket_id. The change was not created, approved, or closed.
+            quiet: true
+
+        - name: Build the patch summary work note
+          ansible.builtin.set_fact:
+            snow_patching_aap_job_id: "{{ tower_job_id | default(awx_job_id | default('')) }}"
+            snow_patching_work_note: |-
+              Windows full patch results.
+              AAP job: {{ tower_job_id | default(awx_job_id | default('')) | default('not_available', true) }}
+              Systems patched: {{ patch_workflow_report.systems_patched | default('not_available') }}
+              Systems not patched: {{ patch_workflow_report.systems_not_patched | default('not_available') }}
+              Exempt: {{ patch_workflow_report.status_counts.exempt | default('not_available') }}
+              Degraded: {{ patch_workflow_report.status_counts.degraded | default('not_available') }}
+              Failed: {{ patch_workflow_report.status_counts.failed | default('not_available') }}
+              Manual follow-up: {{ patch_workflow_report.manual_followup_hosts | default([]) | length }}
+          changed_when: false
+
+        - name: Write the patch summary to the existing change request
+          ansible.builtin.include_role:
+            name: servicenow_patching_change
+          vars:
+            snow_operation: update
+            snow_change_number: "{{ change_ticket_id | trim }}"
+            snow_aap_job_id: "{{ snow_patching_aap_job_id }}"
+            snow_work_notes: "{{ snow_patching_work_note }}"
+            snow_change_fields: {}
+
+        - name: Keep the ServiceNow change update result
+          ansible.builtin.set_fact:
+            snow_result: "{{ snow_patching_update_kept }}"
+            snow_patching_update_result: "{{ snow_patching_update_kept }}"
+            snow_patching_update_failed: false
+          vars:
+            snow_patching_update_on_host: "{{ snow_result
+              if snow_result is defined and snow_result is mapping
+              and snow_result.operation | default('') == 'update'
+              else {} }}"
+            snow_patching_update_on_controller: "{{
+              hostvars['localhost']['snow_result']
+              if 'localhost' in hostvars
+              and hostvars['localhost']['snow_result'] is defined
+              and hostvars['localhost']['snow_result'] is mapping
+              and hostvars['localhost']['snow_result'].operation | default('') == 'update'
+              else {} }}"
+            snow_patching_update_kept: "{{ snow_patching_update_on_host
+              if (snow_patching_update_on_host | length) > 0
+              else snow_patching_update_on_controller }}"
+
+        - name: Require a successful ServiceNow change update result
+          ansible.builtin.assert:
+            that:
+              - snow_patching_update_result is mapping
+              - snow_patching_update_result.operation | default('') == 'update'
+              - snow_patching_update_result.success | default(false) | bool
+            fail_msg: >-
+              ServiceNow change update did not publish a successful snow_result.
+              Patch results and report files were not changed.
+            quiet: true
+
+      rescue:
+        - name: Record the ServiceNow change update failure
+          ansible.builtin.set_fact:
+            snow_patching_update_failed: true
+            snow_patching_update_error: >-
+              {{ ansible_failed_result.msg | default('ServiceNow change update failed') }}
+          changed_when: false
+
+        - name: Report the ServiceNow change update failure
+          ansible.builtin.debug:
+            msg: >-
+              ServiceNow change update failed
+              ({{ snow_patching_update_error }}).
+              patch_workflow_report and the report files were left in place.
+              The job fails after optional SMTP.
+          changed_when: false
+
+    - name: Attach final reports to the ServiceNow change request
+      when: snow_patching_attach_reports_enabled | bool
+      run_once: true
+      tags:
+        - report
+        - servicenow
+      block:
+        - name: Require change_ticket_id before attaching reports
+          ansible.builtin.assert:
+            that:
+              - change_ticket_id | default('') | trim | length > 0
+              - patch_report_files is sequence
+              - patch_report_files is not string
+              - patch_report_files | length > 0
+            fail_msg: >-
+              snow_patching_attach_reports_enabled requires change_ticket_id
+              and the report files already written in this job.
+              Reports were not regenerated.
+            quiet: true
+
+        - name: Attach the existing report files to the change request
+          ansible.builtin.include_role:
+            name: servicenow_patching_change
+          vars:
+            snow_operation: attach_reports
+            snow_change_number: "{{ change_ticket_id | trim }}"
+            snow_report_files: "{{ patch_report_files }}"
+
+        - name: Keep the ServiceNow report attachment result
+          ansible.builtin.set_fact:
+            snow_result: "{{ snow_patching_attach_kept }}"
+            snow_patching_attach_result: "{{ snow_patching_attach_kept }}"
+            snow_patching_attach_failed: false
+          vars:
+            snow_patching_attach_on_host: "{{ snow_result
+              if snow_result is defined and snow_result is mapping
+              and snow_result.operation | default('') == 'attach_reports'
+              else {} }}"
+            snow_patching_attach_on_controller: "{{
+              hostvars['localhost']['snow_result']
+              if 'localhost' in hostvars
+              and hostvars['localhost']['snow_result'] is defined
+              and hostvars['localhost']['snow_result'] is mapping
+              and hostvars['localhost']['snow_result'].operation | default('') == 'attach_reports'
+              else {} }}"
+            snow_patching_attach_kept: "{{ snow_patching_attach_on_host
+              if (snow_patching_attach_on_host | length) > 0
+              else snow_patching_attach_on_controller }}"
+
+        - name: Require a successful ServiceNow report attachment result
+          ansible.builtin.assert:
+            that:
+              - snow_patching_attach_result is mapping
+              - snow_patching_attach_result.operation | default('') == 'attach_reports'
+              - snow_patching_attach_result.success | default(false) | bool
+            fail_msg: >-
+              ServiceNow report attachment did not publish a successful snow_result.
+              Patch results and report files were not changed.
+            quiet: true
+
+      rescue:
+        - name: Record the ServiceNow report attachment failure
+          ansible.builtin.set_fact:
+            snow_patching_attach_failed: true
+            snow_patching_attach_error: >-
+              {{ ansible_failed_result.msg | default('ServiceNow report attachment failed') }}
+          changed_when: false
+
+        - name: Report the ServiceNow report attachment failure
+          ansible.builtin.debug:
+            msg: >-
+              ServiceNow report attachment failed
+              ({{ snow_patching_attach_error }}).
+              patch_workflow_report and the report files were left in place.
+              The job fails after optional SMTP.
+          changed_when: false
+
+    - name: Create follow-up incidents for hosts that need manual follow-up
+      ansible.builtin.include_tasks: tasks/snow_followup_incidents.yml
+      when: snow_patching_create_incidents_enabled | bool
+      run_once: true
+      tags:
+        - report
+        - servicenow
+
     - name: Email Windows patching report
       ansible.builtin.include_role:
         name: report_email
@@ -221,34 +401,27 @@
         - report
         - email
 
-    - name: Attach Final Report files to ServiceNow change
-      ansible.builtin.include_role:
-        name: servicenow_change
-      vars:
-        snow_phase: attach_report
-        snow_report_path: "{{ item }}"
-      loop: "{{ patch_report_files | default([patch_report_primary_path | default('')]) }}"
-      when:
-        - snow_enabled | default(false) | bool
-        - snow_attach_report | default(false) | bool
-        - (item | default('') | length) > 0
-      run_once: true
-      tags:
-        - report
-        - servicenow
-
-    - name: Fail after reporting if any host failed
+    - name: Fail after reporting if patching or ServiceNow integration failed
       ansible.builtin.assert:
         that:
           - (patch_workflow_report.status_counts.failed | default(0) | int) == 0
           - (ansible_play_hosts_all | map('extract', hostvars, 'patch_lifecycle_failed') | select('defined') | select | list | length) == 0
+          - not (snow_patching_update_failed | default(false) | bool)
+          - not (snow_patching_attach_failed | default(false) | bool)
+          - not (snow_patching_incident_failed | default(false) | bool)
         fail_msg: >-
-          Full Patch reporting completed, but the aggregate report contains
-          failed hosts (failed={{ patch_workflow_report.status_counts.failed | default(0) }}).
-          Unreachable hosts, installation failures, postcheck failures, and
-          remediation lifecycle failures fail the AAP job after JSON/CSV/Markdown
-          and optional SMTP/ServiceNow reporting. See patch_final_result
-          and patch_workflow_report.
+          Full Patch reporting completed, but the job cannot succeed.
+          Patch failures={{ patch_workflow_report.status_counts.failed | default(0) }}.
+          ServiceNow change update failed={{ snow_patching_update_failed | default(false) }}
+          ({{ snow_patching_update_error | default('not run') }}).
+          ServiceNow report attachment failed={{ snow_patching_attach_failed | default(false) }}
+          ({{ snow_patching_attach_error | default('not run') }}).
+          ServiceNow follow-up incidents failed={{ snow_patching_incident_failed | default(false) }}
+          ({{ snow_patching_incident_error | default('see snow_patching_incident_results') }}).
+          JSON/CSV/Markdown and patch_workflow_report were left unchanged.
+          Unreachable hosts, installation failures, postcheck failures,
+          remediation lifecycle failures, and an enabled ServiceNow integration
+          failure all fail the AAP job after reporting.
       run_once: true
       tags:
         - report

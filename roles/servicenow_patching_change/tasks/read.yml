@@ -1,0 +1,49 @@
+---
+- name: Retrieve the change request
+  block:
+    # args[module] does not see the collection env_fallback for SN_USERNAME.
+    - name: Query ServiceNow by change number  # noqa: args[module]
+      servicenow.itsm.change_request_info:
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        number: "{{ snow_change_number }}"
+      register: snow_change_api
+      no_log: true
+  rescue:
+    - name: Report the ServiceNow read failure
+      ansible.builtin.fail:
+        msg: >-
+          Could not read change request {{ snow_change_number }}.
+          {{ ansible_failed_result.msg | default('The collection did not return an error message.') }}
+
+- name: Fail when the change request does not exist
+  when: snow_change_api.records | default([]) | length == 0
+  ansible.builtin.fail:
+    msg: "ServiceNow has no change request numbered {{ snow_change_number }}."
+
+- name: Fail when the change number matches more than one record
+  when: snow_change_api.records | default([]) | length > 1
+  ansible.builtin.fail:
+    msg: >-
+      ServiceNow returned {{ snow_change_api.records | length }} records
+      for {{ snow_change_number }}.
+
+- name: Require identity fields on the retrieved change
+  ansible.builtin.assert:
+    that:
+      - snow_change_api.records[0].number | default('') | length > 0
+      - snow_change_api.records[0].sys_id | default('') | length > 0
+    fail_msg: ServiceNow did not return a change number and sys_id.
+    quiet: true
+
+- name: Publish the read result
+  ansible.builtin.set_fact:
+    snow_result:
+      operation: read
+      success: true
+      number: "{{ snow_change_api.records[0].number }}"
+      sys_id: "{{ snow_change_api.records[0].sys_id }}"
+      state: "{{ snow_change_api.records[0].state | default('') }}"
+      approval: "{{ snow_change_api.records[0].approval | default('') }}"
+      message: "Retrieved change request {{ snow_change_api.records[0].number }}."

@@ -1,0 +1,64 @@
+---
+# Prepare one ServiceNow change for a Windows patch wave.
+#
+# Launch this job with an AAP Limit of windows_wave_1 through windows_wave_20.
+# The play targets windows_hosts and uses connection local, so it does not
+# open WinRM sessions. ansible_limit is the only wave selector. patch_wave_name
+# is not read. Each host's inventory variable sys_id is the CMDB CI sys_id.
+#
+# An empty wave matches no hosts, so Ansible skips this play before these
+# tasks can fail it. Inventory acceptance must reject an empty wave group.
+#
+# Defaults do not create or modify ServiceNow records:
+#   snow_prepare_preview_only: true
+#   snow_prepare_allow_create: false
+#
+# Preview, Limit windows_wave_1:
+#   snow_prepare_preview_only: true
+#
+# Create, after preview looks right. Limit windows_wave_1:
+#   snow_prepare_preview_only: false
+#   snow_prepare_allow_create: true
+#   patch_change_short_description: "Windows patching windows_wave_1"
+#   patch_change_description: "Affected CIs come from the CMDB inventory."
+#
+# Resume CI association for a change that already exists. This does not
+# create another change. Limit remains the same wave:
+#   snow_prepare_preview_only: false
+#   snow_prepare_existing_change_number: CHG0001234
+
+- name: Prepare the ServiceNow change for the AAP Limit wave
+  hosts: windows_hosts
+  connection: local
+  gather_facts: false
+  vars:
+    patch_change_short_description: ""
+    patch_change_description: ""
+    snow_prepare_existing_change_number: ""
+    snow_prepare_allow_create: false
+    snow_prepare_preview_only: true
+    snow_prepare_supported_waves:
+      - windows_wave_1
+      - windows_wave_2
+      - windows_wave_3
+      - windows_wave_4
+      - windows_wave_5
+      - windows_wave_6
+      - windows_wave_7
+      - windows_wave_8
+      - windows_wave_9
+      - windows_wave_10
+      - windows_wave_11
+      - windows_wave_12
+      - windows_wave_13
+      - windows_wave_14
+      - windows_wave_15
+      - windows_wave_16
+      - windows_wave_17
+      - windows_wave_18
+      - windows_wave_19
+      - windows_wave_20
+  tasks:
+    - name: Prepare one change for the hosts selected by the AAP Limit
+      ansible.builtin.include_tasks: tasks/prepare_patch_change.yml
+      run_once: true

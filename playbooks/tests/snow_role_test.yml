@@ -1,0 +1,314 @@
+---
+# AAP job template smoke test for the servicenow_patching_change role.
+#
+# Playbook: playbooks/tests/snow_role_test.yml
+# Inventory: localhost must be reachable. The play uses the local connection
+#            and does not target Windows, Linux, or database hosts.
+# Credential: custom credential that injects SN_HOST, SN_USERNAME, SN_PASSWORD.
+#
+# Extra variables, all optional:
+#   snow_test_read_number: CHG0000001
+#   snow_test_enable_create: false
+#   snow_test_enable_work_note: false
+#   snow_test_work_note_number: ""
+#   snow_test_enable_close: false
+#   snow_test_close_number: ""
+#   snow_test_close_code: successful
+#   snow_test_close_notes: ""
+#   snow_test_aap_job_id: ""
+#   snow_test_enable_add_cis: false
+#   snow_test_add_cis_number: ""
+#   snow_test_ci_sys_ids: []
+#   snow_test_enable_attach_reports: false
+#   snow_test_attach_number: ""
+#   snow_test_report_files: []
+#   snow_test_enable_sample_files: false
+#
+# Create, work notes, close, CI association, report attachment, and sample
+# file creation stay disabled unless the matching flag is true.
+# Attachment testing uses snow_test_attach_number, an existing change.
+# It does not create or close a change. Sample files are written on this
+# job's controller only when snow_test_enable_sample_files is true.
+# Close uses only snow_test_close_number. A change created earlier in this
+# play is not closed. A new normal change usually cannot move straight to Closed.
+
+- name: Exercise the shared ServiceNow change role
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    snow_test_read_number: ""
+    snow_test_enable_create: false
+    snow_test_enable_work_note: false
+    snow_test_work_note_number: ""
+    snow_test_enable_close: false
+    snow_test_close_number: ""
+    snow_test_close_code: ""
+    snow_test_close_notes: ""
+    snow_test_created_number: ""
+    snow_test_aap_job_id: ""
+    snow_test_enable_add_cis: false
+    snow_test_add_cis_number: ""
+    snow_test_ci_sys_ids: []
+    snow_test_enable_attach_reports: false
+    snow_test_attach_number: ""
+    snow_test_report_files: []
+    snow_test_enable_sample_files: false
+    snow_test_sample_dir: /tmp/aap-snow-role-test
+    snow_test_sample_files:
+      - /tmp/aap-snow-role-test/report.json
+      - /tmp/aap-snow-role-test/report.csv
+      - /tmp/aap-snow-role-test/report.md
+    snow_test_short_description: "AAP servicenow_patching_change role connectivity test"
+    snow_test_description: >-
+      Test change created by common/tests/snow_role_test.yml.
+      It is a normal change and is not authorization to patch.
+    snow_test_work_note: "Work note from the servicenow_patching_change role test playbook."
+
+  tasks:
+    - name: Require at least one test action
+      ansible.builtin.assert:
+        that:
+          - >-
+            (snow_test_read_number | default('') | string | length > 0)
+            or (snow_test_enable_create | bool)
+            or (snow_test_enable_work_note | bool)
+            or (snow_test_enable_close | bool)
+            or (snow_test_enable_add_cis | bool)
+            or (snow_test_enable_attach_reports | bool)
+            or (snow_test_enable_sample_files | bool)
+        fail_msg: >-
+          Nothing to do. Set snow_test_read_number, or set one of
+          snow_test_enable_create, snow_test_enable_work_note,
+          snow_test_enable_close, snow_test_enable_add_cis,
+          snow_test_enable_attach_reports, or snow_test_enable_sample_files
+          to true. State-changing flags default to false.
+        quiet: true
+
+    - name: Read an existing change request
+      when: snow_test_read_number | default('') | string | length > 0
+      ansible.builtin.include_role:
+        name: servicenow_patching_change
+      vars:
+        snow_operation: read
+        snow_change_number: "{{ snow_test_read_number }}"
+
+    - name: Show the read result
+      when: snow_test_read_number | default('') | string | length > 0
+      ansible.builtin.debug:
+        var: snow_result
+
+    - name: Create a normal test change request
+      when: snow_test_enable_create | bool
+      ansible.builtin.include_role:
+        name: servicenow_patching_change
+      vars:
+        snow_operation: create
+        snow_allow_create: true
+        snow_short_description: "{{ snow_test_short_description }}"
+        snow_description: "{{ snow_test_description }}"
+
+    - name: Remember the created change number
+      when: snow_test_enable_create | bool
+      ansible.builtin.set_fact:
+        snow_test_created_number: "{{ snow_result.number }}"
+
+    - name: Show the create result
+      when: snow_test_enable_create | bool
+      ansible.builtin.debug:
+        var: snow_result
+
+    - name: Read the change request that was just created
+      when: snow_test_enable_create | bool
+      ansible.builtin.include_role:
+        name: servicenow_patching_change
+      vars:
+        snow_operation: read
+        snow_change_number: "{{ snow_test_created_number }}"
+
+    - name: Show the follow-up read result
+      when: snow_test_enable_create | bool
+      ansible.builtin.debug:
+        var: snow_result
+
+    - name: Require a change number before adding a work note
+      when: snow_test_enable_work_note | bool
+      ansible.builtin.assert:
+        that:
+          - >-
+            (snow_test_work_note_number | default('') | string | length > 0)
+            or (snow_test_created_number | default('') | string | length > 0)
+        fail_msg: >-
+          Set snow_test_work_note_number, or enable snow_test_enable_create
+          in the same run, before adding a work note.
+        quiet: true
+
+    - name: Add a test work note
+      when: snow_test_enable_work_note | bool
+      ansible.builtin.include_role:
+        name: servicenow_patching_change
+      vars:
+        snow_operation: update
+        snow_change_number: >-
+          {{
+            snow_test_work_note_number
+            if snow_test_work_note_number | default('') | length > 0
+            else snow_test_created_number
+          }}
+        snow_work_notes: "{{ snow_test_work_note }}"
+        snow_aap_job_id: "{{ snow_test_aap_job_id }}"
+
+    - name: Show the work-note result
+      when: snow_test_enable_work_note | bool
+      ansible.builtin.debug:
+        var: snow_result
+
+    - name: Require an explicitly identified change before close
+      when: snow_test_enable_close | bool
+      ansible.builtin.assert:
+        that:
+          - snow_test_close_number | default('') | string | length > 0
+          - snow_test_close_code | default('') | string | length > 0
+          - snow_test_close_notes | default('') | string | length > 0
+        fail_msg: >-
+          Close uses snow_test_close_number, snow_test_close_code, and
+          snow_test_close_notes. This playbook does not close the change
+          it just created. Move that change through the client's normal
+          change lifecycle before attempting to close it.
+        quiet: true
+
+    - name: Close an explicitly identified test change request
+      when: snow_test_enable_close | bool
+      ansible.builtin.include_role:
+        name: servicenow_patching_change
+      vars:
+        snow_operation: close
+        snow_allow_close: true
+        snow_change_number: "{{ snow_test_close_number }}"
+        snow_close_code: "{{ snow_test_close_code }}"
+        snow_close_notes: "{{ snow_test_close_notes }}"
+
+    - name: Show the close result
+      when: snow_test_enable_close | bool
+      ansible.builtin.debug:
+        var: snow_result
+
+    - name: Require a change and CI sys_ids before linking configuration items
+      when: snow_test_enable_add_cis | bool
+      ansible.builtin.assert:
+        that:
+          - >-
+            (snow_test_add_cis_number | default('') | string | length > 0)
+            or (snow_test_created_number | default('') | string | length > 0)
+          - snow_test_ci_sys_ids is not string
+          - snow_test_ci_sys_ids is sequence
+          - snow_test_ci_sys_ids | length > 0
+        fail_msg: >-
+          Set snow_test_ci_sys_ids and either snow_test_add_cis_number or
+          snow_test_enable_create before linking configuration items.
+          This does not create CI records.
+        quiet: true
+
+    - name: Link existing configuration items to a change request
+      when: snow_test_enable_add_cis | bool
+      ansible.builtin.include_role:
+        name: servicenow_patching_change
+      vars:
+        snow_operation: add_cis
+        snow_change_number: >-
+          {{
+            snow_test_add_cis_number
+            if snow_test_add_cis_number | default('') | length > 0
+            else snow_test_created_number
+          }}
+        snow_ci_sys_ids: "{{ snow_test_ci_sys_ids }}"
+
+    - name: Show the affected-CI result
+      when: snow_test_enable_add_cis | bool
+      ansible.builtin.debug:
+        var: snow_result
+
+    - name: Create the sample report directory
+      when: snow_test_enable_sample_files | bool
+      ansible.builtin.file:
+        path: "{{ snow_test_sample_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Write sample JSON, CSV, and Markdown reports
+      when: snow_test_enable_sample_files | bool
+      ansible.builtin.copy:
+        dest: "{{ snow_test_sample_dir }}/{{ snow_test_sample_report.name }}"
+        mode: "0600"
+        content: "{{ snow_test_sample_report.content }}"
+      loop:
+        - name: report.json
+          content: |
+            {"source":"snow_role_test","format":"json"}
+        - name: report.csv
+          content: |
+            hostname,result
+            sample-host,not-a-patch
+        - name: report.md
+          content: |
+            # Sample patch report
+
+            This file is test content from snow_role_test.yml.
+      loop_control:
+        loop_var: snow_test_sample_report
+        label: "{{ snow_test_sample_report.name }}"
+
+    - name: Select the report paths for this attachment test
+      when: snow_test_enable_attach_reports | bool
+      ansible.builtin.set_fact:
+        snow_test_attach_paths: >-
+          {{
+            snow_test_report_files
+            if snow_test_report_files | length > 0
+            else (snow_test_sample_files if snow_test_enable_sample_files | bool else [])
+          }}
+
+    - name: Require an existing change and report paths before attaching files
+      when: snow_test_enable_attach_reports | bool
+      ansible.builtin.assert:
+        that:
+          - snow_test_attach_number | default('') | string | length > 0
+          - snow_test_attach_paths | length > 0
+        fail_msg: >-
+          Attachment testing requires snow_test_attach_number for an existing
+          change. It does not create or close one. Set snow_test_report_files
+          or snow_test_enable_sample_files=true. Sample files are written in
+          this job under {{ snow_test_sample_dir }}.
+        quiet: true
+
+    - name: Attach report files to an existing change request
+      when: snow_test_enable_attach_reports | bool
+      ansible.builtin.include_role:
+        name: servicenow_patching_change
+      vars:
+        snow_operation: attach_reports
+        snow_change_number: "{{ snow_test_attach_number }}"
+        snow_report_files: "{{ snow_test_attach_paths }}"
+
+    - name: Show the attachment result
+      when: snow_test_enable_attach_reports | bool
+      ansible.builtin.debug:
+        var: snow_result
+
+    - name: Confirm the reports were stored on the existing change
+      when: snow_test_enable_attach_reports | bool
+      ansible.builtin.assert:
+        that:
+          - snow_result.success | bool
+          - snow_result.operation == 'attach_reports'
+          - snow_result.number == snow_test_attach_number
+          - snow_result.attachments | length == snow_test_attached_names | length
+          - snow_result.attachments | map(attribute='file_name') | list | sort == snow_test_attached_names | sort
+          - snow_result.attachments | map(attribute='sys_id') | select('match', '^[0-9a-fA-F]{32}$') | list | length == snow_test_attached_names | length
+        fail_msg: >-
+          The attachment result did not confirm every requested file on
+          {{ snow_test_attach_number }}.
+        quiet: true
+      vars:
+        snow_test_attached_names: "{{ snow_test_attach_paths | map('basename') | list }}"

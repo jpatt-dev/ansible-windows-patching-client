@@ -1,0 +1,104 @@
+---
+- name: Record a follow-up host that cannot take an incident
+  when: snow_followup_candidate.action != 'create'
+  ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_store_result.yml"
+  vars:
+    snow_followup_result_row:
+      hostname: "{{ snow_followup_candidate.hostname }}"
+      ci_sys_id: "{{ snow_followup_candidate.ci_sys_id }}"
+      change_ticket_id: "{{ snow_followup_candidate.change_ticket_id }}"
+      reason_code: "{{ snow_followup_candidate.reason_code }}"
+      correlation_id: "{{ snow_followup_candidate.correlation_id }}"
+      incident_number: ""
+      reused: false
+      success: false
+      message: "{{ snow_followup_candidate.reject_reason }}"
+
+- name: Create or reuse the follow-up incident
+  when: snow_followup_candidate.action == 'create'
+  block:
+    - name: Open the incident through the shared incident role
+      ansible.builtin.include_role:
+        name: servicenow_incident
+      vars:
+        snow_incident_operation: create
+        snow_incident_allow_create: true
+        snow_incident_caller: "{{ snow_followup_caller }}"
+        snow_incident_assignment_group: "{{ snow_followup_assignment_group }}"
+        snow_incident_priority: "{{ snow_followup_priority }}"
+        snow_incident_hostname: "{{ snow_followup_candidate.hostname }}"
+        snow_incident_change_number: "{{ snow_followup_candidate.change_ticket_id }}"
+        snow_incident_aap_job_id: "{{ snow_followup_candidate.aap_job_id }}"
+        snow_incident_ci_sys_id: "{{ snow_followup_candidate.ci_sys_id }}"
+        snow_incident_correlation_id: "{{ snow_followup_candidate.correlation_id }}"
+        snow_incident_failure: "{{ snow_followup_candidate.reason }}"
+        snow_incident_short_description: >-
+          Windows patch follow-up for {{ snow_followup_candidate.hostname }}
+          ({{ snow_followup_candidate.reason_code }})
+        snow_incident_description: |-
+          Status: {{ snow_followup_candidate.result }}
+          Reason code: {{ snow_followup_candidate.reason_code }}
+          CI: {{ snow_followup_candidate.ci_sys_id }}
+          Follow-up: {{ snow_followup_candidate.reason }}
+        snow_incident_fields: {}
+
+    - name: Keep this host's incident result before the next host
+      ansible.builtin.set_fact:
+        snow_followup_result_row: "{{ snow_followup_kept }}"
+      vars:
+        snow_followup_on_host: "{{ snow_incident_result
+          if snow_incident_result is defined and snow_incident_result is mapping
+          and (snow_incident_result.hostname | default('')) == snow_followup_candidate.hostname
+          and (snow_incident_result.operation | default('')) == 'create'
+          else {} }}"
+        snow_followup_on_controller: "{{
+          hostvars['localhost']['snow_incident_result']
+          if 'localhost' in hostvars
+          and hostvars['localhost']['snow_incident_result'] is defined
+          and hostvars['localhost']['snow_incident_result'] is mapping
+          and (hostvars['localhost']['snow_incident_result'].hostname | default('')) == snow_followup_candidate.hostname
+          and (hostvars['localhost']['snow_incident_result'].operation | default('')) == 'create'
+          else {} }}"
+        snow_followup_kept_result: "{{ snow_followup_on_host
+          if (snow_followup_on_host | length) > 0
+          else snow_followup_on_controller }}"
+        snow_followup_kept:
+          hostname: "{{ snow_followup_candidate.hostname }}"
+          ci_sys_id: "{{ snow_followup_candidate.ci_sys_id }}"
+          change_ticket_id: "{{ snow_followup_candidate.change_ticket_id }}"
+          reason_code: "{{ snow_followup_candidate.reason_code }}"
+          correlation_id: "{{ snow_followup_candidate.correlation_id }}"
+          incident_number: "{{ snow_followup_kept_result.number | default('') }}"
+          reused: "{{ snow_followup_kept_result.reused | default(false) | bool }}"
+          success: "{{ snow_followup_kept_result.success | default(false) | bool }}"
+          message: >-
+            {{
+              snow_followup_kept_result.message
+              | default('ServiceNow did not publish snow_incident_result for this host.')
+            }}
+
+    - name: Require a successful incident result for this host
+      ansible.builtin.assert:
+        that:
+          - snow_followup_result_row.success | bool
+        fail_msg: "{{ snow_followup_result_row.message }}"
+        quiet: true
+
+    - name: Store this host's incident result
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_store_result.yml"
+
+  rescue:
+    - name: Record this host's incident failure and continue
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_store_result.yml"
+      vars:
+        snow_followup_result_row:
+          hostname: "{{ snow_followup_candidate.hostname }}"
+          ci_sys_id: "{{ snow_followup_candidate.ci_sys_id }}"
+          change_ticket_id: "{{ snow_followup_candidate.change_ticket_id }}"
+          reason_code: "{{ snow_followup_candidate.reason_code }}"
+          correlation_id: "{{ snow_followup_candidate.correlation_id }}"
+          incident_number: ""
+          reused: false
+          success: false
+          message: >-
+            {{ ansible_failed_result.msg | default('ServiceNow incident creation failed') }}

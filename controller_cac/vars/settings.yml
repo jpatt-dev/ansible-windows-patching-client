@@ -41,6 +41,12 @@ controller_cac_protected_variables:
   - snow_enabled
   - snow_shared_role
   - snow_attach_report
+  - snow_patching_update_cr_enabled
+  - snow_patching_attach_reports_enabled
+  - snow_patching_create_incidents_enabled
+  - snow_incident_caller
+  - snow_incident_assignment_group
+  - snow_incident_priority
   - patch_require_maintenance_window
   - approved_patch_targets
   - patch_allow_unapproved_target

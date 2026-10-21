@@ -11,6 +11,10 @@ exclude_paths:
   - reports/output/
 
 kinds:
+  # Task files under a playbook directory are not playbooks. This entry must
+  # stay ahead of the playbook glob so the first match wins.
+  - tasks: "playbooks/**/tasks/*.yml"
+  - tasks: "tests/**/tasks/*.yml"
   - playbook: "playbooks/**/*.yml"
   - tasks: "roles/**/tasks/*.yml"
   - vars: "inventories/**/group_vars/*.yml"

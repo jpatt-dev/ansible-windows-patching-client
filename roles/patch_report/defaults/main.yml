@@ -12,7 +12,8 @@ change_ticket_id: ""
 patch_location: ""
 # Optional inventory/group_vars. LAB / IST / UAT / PROD. Reporting only.
 patch_environment: ""
-# Optional ServiceNow CMDB CI sys_id. Inventory-owned. Reporting join key.
+# Report field snow_ci_sys_id is filled from the inventory variable sys_id.
+# This default is not the CMDB source.
 snow_ci_sys_id: ""
 # Cross-platform envelope identity. Do not survey.
 patch_report_source: windows_full_patch

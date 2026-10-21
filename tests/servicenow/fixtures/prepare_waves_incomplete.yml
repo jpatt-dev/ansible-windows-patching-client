@@ -1,0 +1,16 @@
+---
+# windows_wave_1 contains orphan, which is not in windows_hosts.
+all:
+  children:
+    windows_hosts:
+      hosts:
+        w1a:
+          sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        w1b:
+          sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    windows_wave_1:
+      hosts:
+        w1a:
+        w1b:
+        orphan:
+          sys_id: "11111111111111111111111111111111"

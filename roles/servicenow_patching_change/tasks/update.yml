@@ -1,0 +1,144 @@
+---
+- name: Resolve the AAP job id without requiring it
+  ansible.builtin.set_fact:
+    snow_resolved_aap_job_id: >-
+      {{
+        (
+          [
+            snow_aap_job_id | default(''),
+            tower_job_id | default(''),
+            awx_job_id | default('')
+          ]
+          | map('string')
+          | map('trim')
+          | select('ne', '')
+          | list
+          | first
+          | default('', true)
+        )
+      }}
+
+- name: Build the update work note
+  ansible.builtin.set_fact:
+    snow_update_work_notes: >-
+      {{
+        [snow_work_notes | default('') | trim, snow_job_line]
+        | reject('equalto', '')
+        | list
+        | join(snow_newline)
+      }}
+  vars:
+    snow_newline: "\n"
+    snow_job_line: >-
+      {{
+        ('AAP job ' ~ snow_resolved_aap_job_id)
+        if snow_resolved_aap_job_id | length > 0
+        else ''
+      }}
+
+- name: Confirm the change request exists before update
+  block:
+    # args[module] does not see the collection env_fallback for SN_USERNAME.
+    - name: Query ServiceNow by change number before update  # noqa: args[module]
+      servicenow.itsm.change_request_info:
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        number: "{{ snow_change_number }}"
+      register: snow_change_lookup
+      no_log: true
+  rescue:
+    - name: Report the ServiceNow lookup failure
+      ansible.builtin.fail:
+        msg: >-
+          Could not read change request {{ snow_change_number }} before update.
+          {{ ansible_failed_result.msg | default('The collection did not return an error message.') }}
+
+- name: Fail when the change request does not exist
+  when: snow_change_lookup.records | default([]) | length == 0
+  ansible.builtin.fail:
+    msg: "ServiceNow has no change request numbered {{ snow_change_number }}."
+
+- name: Fail when the change number matches more than one record
+  when: snow_change_lookup.records | default([]) | length > 1
+  ansible.builtin.fail:
+    msg: >-
+      ServiceNow returned {{ snow_change_lookup.records | length }} records
+      for {{ snow_change_number }}.
+
+- name: Update the change request
+  block:
+    - name: Send the requested field updates to ServiceNow
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        number: "{{ snow_change_number }}"
+        short_description: >-
+          {{
+            snow_short_description
+            if snow_short_description | default('') | length > 0
+            else snow_selected_direct_fields.short_description | default(omit, true)
+          }}
+        description: >-
+          {{
+            snow_description
+            if snow_description | default('') | length > 0
+            else snow_selected_direct_fields.description | default(omit, true)
+          }}
+        requested_by: "{{ snow_selected_direct_fields.requested_by | default(omit, true) }}"
+        assignment_group: "{{ snow_selected_direct_fields.assignment_group | default(omit, true) }}"
+        assignment_group_id: "{{ snow_selected_direct_fields.assignment_group_id | default(omit, true) }}"
+        category: "{{ snow_selected_direct_fields.category | default(omit, true) }}"
+        priority: "{{ snow_selected_direct_fields.priority | default(omit, true) }}"
+        risk: "{{ snow_selected_direct_fields.risk | default(omit, true) }}"
+        impact: "{{ snow_selected_direct_fields.impact | default(omit, true) }}"
+        urgency: "{{ snow_selected_direct_fields.urgency | default(omit, true) }}"
+        on_hold: "{{ (snow_selected_direct_fields.on_hold | bool) if ('on_hold' in snow_selected_direct_fields) else omit }}"
+        hold_reason: "{{ snow_selected_direct_fields.hold_reason | default(omit, true) }}"
+        other: "{{ snow_task_other | default(omit, true) }}"
+      vars:
+        snow_task_other: >-
+          {{
+            snow_selected_other_fields | default({})
+            | combine(
+                {'work_notes': snow_update_work_notes}
+                if snow_update_work_notes | default('') | length > 0
+                else {}
+              )
+          }}
+      register: snow_change_api
+      no_log: true
+  rescue:
+    - name: Report the ServiceNow update failure
+      ansible.builtin.fail:
+        msg: >-
+          ServiceNow did not update change request {{ snow_change_number }}.
+          {{ ansible_failed_result.msg | default('The collection did not return an error message.') }}
+
+- name: Require identity fields on the updated change
+  ansible.builtin.assert:
+    that:
+      - snow_change_api.record is mapping
+      - snow_change_api.record.number | default('') | length > 0
+      - snow_change_api.record.sys_id | default('') | length > 0
+    fail_msg: ServiceNow did not return a change number and sys_id.
+    quiet: true
+
+- name: Publish the update result
+  ansible.builtin.set_fact:
+    snow_result:
+      operation: update
+      success: true
+      number: "{{ snow_change_api.record.number }}"
+      sys_id: "{{ snow_change_api.record.sys_id }}"
+      state: "{{ snow_change_api.record.state | default('') }}"
+      approval: "{{ snow_change_api.record.approval | default('') }}"
+      message: "{{ snow_update_result_message }}"
+  vars:
+    snow_update_result_message: >-
+      {{
+        'Updated change request ' ~ snow_change_api.record.number ~ '.'
+        if snow_change_api.changed | bool
+        else 'Change request ' ~ snow_change_api.record.number ~ ' already matched the requested field values.'
+      }}

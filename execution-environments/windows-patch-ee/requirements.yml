@@ -2,13 +2,17 @@
 # Collections for windows-patch-ee (declared only — do not vendor into the repo).
 # Aligns with repository root requirements.yml.
 #
-# servicenow.itsm is NOT included. ServiceNow REST is not implemented in
-# this repository. Client forks may add servicenow.itsm after pinning a
-# Hub-supported version and publishing the shared ServiceNow role.
+# servicenow.itsm is required by roles/servicenow_patching_change and the
+# ServiceNow test playbooks. Full Patch loads it only when an administrator
+# enables the post-report change update or report attachment. Adding the pin
+# does not change the image that is already published. Rebuild the EE before
+# enabling those operations on a job template that uses windows-patch-ee.
 
 collections:
   - name: ansible.windows
     version: ">=2.3.0"
+  - name: servicenow.itsm
+    version: ">=2.6.3"
   # community.general.mail for optional SMTP report delivery.
   # Compatible with AAP 2.7 / ansible-core 2.16. Rebuild this EE after changing this.
   - name: community.general

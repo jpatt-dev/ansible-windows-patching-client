@@ -1,0 +1,35 @@
+---
+all:
+  children:
+    windows_hosts:
+      hosts:
+        w1a:
+          sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        w1b:
+          sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        w20a:
+          sys_id: cccccccccccccccccccccccccccccccc
+        only_parent:
+          sys_id: dddddddddddddddddddddddddddddddd
+        wave0_host:
+          sys_id: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+        wave21_host:
+          sys_id: ffffffffffffffffffffffffffffffff
+        canary_host:
+          sys_id: "0123456789abcdef0123456789abcdef"
+    windows_wave_1:
+      hosts:
+        w1a:
+        w1b:
+    windows_wave_20:
+      hosts:
+        w20a:
+    windows_wave_0:
+      hosts:
+        wave0_host:
+    windows_wave_21:
+      hosts:
+        wave21_host:
+    windows_canary:
+      hosts:
+        canary_host:

@@ -1,0 +1,50 @@
+---
+- name: Retrieve the incident
+  block:
+    # args[module] does not see the collection env_fallback for SN_USERNAME.
+    - name: Query ServiceNow by incident number  # noqa: args[module]
+      servicenow.itsm.incident_info:
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        number: "{{ snow_incident_number }}"
+      register: snow_incident_api
+      no_log: true
+  rescue:
+    - name: Report the ServiceNow read failure
+      ansible.builtin.fail:
+        msg: >-
+          Could not read incident {{ snow_incident_number }}.
+          {{ ansible_failed_result.msg | default('The collection did not return an error message.') }}
+
+- name: Fail when the incident does not exist
+  when: snow_incident_api.records | default([]) | length == 0
+  ansible.builtin.fail:
+    msg: "ServiceNow has no incident numbered {{ snow_incident_number }}."
+
+- name: Fail when the incident number matches more than one record
+  when: snow_incident_api.records | default([]) | length > 1
+  ansible.builtin.fail:
+    msg: >-
+      ServiceNow returned {{ snow_incident_api.records | length }} records
+      for {{ snow_incident_number }}.
+
+- name: Require identity fields on the retrieved incident
+  ansible.builtin.assert:
+    that:
+      - snow_incident_api.records[0].number | default('') | length > 0
+      - snow_incident_api.records[0].sys_id | default('') | length > 0
+    fail_msg: ServiceNow did not return an incident number and sys_id.
+    quiet: true
+
+- name: Publish the incident read result
+  ansible.builtin.set_fact:
+    snow_incident_result:
+      operation: read
+      success: true
+      number: "{{ snow_incident_api.records[0].number }}"
+      sys_id: "{{ snow_incident_api.records[0].sys_id }}"
+      state: "{{ snow_incident_api.records[0].state | default('') }}"
+      short_description: "{{ snow_incident_api.records[0].short_description | default('') }}"
+      correlation_id: "{{ snow_incident_api.records[0].correlation_id | default('') }}"
+      message: "Retrieved incident {{ snow_incident_api.records[0].number }}."

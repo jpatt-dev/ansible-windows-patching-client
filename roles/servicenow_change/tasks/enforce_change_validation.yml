@@ -19,8 +19,21 @@
         if ((snow_change_sys_id | default('') | trim | length) > 0)
         else (snow_change_id | default('') | trim)
       }}
-    snow_ci_sys_id_effective: "{{ snow_ci_sys_id | default('') | trim }}"
+    snow_ci_sys_id_effective: >-
+      {{
+        (snow_ci_sys_id | default('') | string | trim)
+        if ((snow_ci_sys_id | default('') | string | trim | length) > 0)
+        else (sys_id | default('') | string | trim)
+      }}
     snow_shared_role_effective: "{{ snow_shared_role | default('') | trim }}"
+  changed_when: false
+  tags:
+    - always
+    - servicenow
+
+- name: Use inventory sys_id when the host has no separate CI variable
+  ansible.builtin.set_fact:
+    snow_ci_sys_id: "{{ snow_ci_sys_id_effective }}"
   changed_when: false
   tags:
     - always

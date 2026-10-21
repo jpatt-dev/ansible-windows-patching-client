@@ -1,0 +1,132 @@
+---
+# Limit selection for Change Request preparation. No ServiceNow calls.
+# Pass cases stay in preview. Resume is checked from the task file conditions.
+
+- name: Prove CR preparation takes its wave from the AAP Limit
+  hosts: windows_hosts
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../../roles/patch_common/defaults/main.yml
+  vars:
+    snow_prepare_supported_waves: "{{ approved_patch_targets }}"
+    snow_prepare_expect: pass
+    snow_prepare_expect_error: ""
+    snow_prepare_expect_hosts:
+      - w1a
+      - w1b
+    snow_prepare_expect_sys_ids:
+      - aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      - bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    patch_change_short_description: ""
+    patch_change_description: ""
+    snow_prepare_existing_change_number: ""
+    snow_prepare_allow_create: true
+    snow_prepare_preview_only: true
+  tasks:
+    - name: Load preparation sources
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      loop:
+        - "{{ playbook_dir }}/../../playbooks/servicenow/prepare_patch_change.yml"
+        - "{{ playbook_dir }}/../../playbooks/servicenow/tasks/prepare_patch_change.yml"
+      register: _prepare_sources
+      run_once: true
+
+    - name: Read preparation structure
+      ansible.builtin.set_fact:
+        _prepare_play: "{{ (_prepare_sources.results[0].content | b64decode | from_yaml)[0] }}"
+        _prepare_tasks: "{{ _prepare_sources.results[1].content | b64decode | from_yaml }}"
+        _prepare_task_text: "{{ _prepare_sources.results[1].content | b64decode }}"
+      run_once: true
+
+    - name: Require one Limit-driven preparation path
+      ansible.builtin.assert:
+        that:
+          - _prepare_play.hosts == 'windows_hosts'
+          - _prepare_play.connection == 'local'
+          - not (_prepare_play.gather_facts | bool)
+          - _prepare_play.vars.snow_prepare_preview_only | bool
+          - not (_prepare_play.vars.snow_prepare_allow_create | bool)
+          - "'patch_wave_name' not in _prepare_play.vars"
+          - _prepare_play.tasks | length == 1
+          - _prepare_play.tasks[0].run_once | bool
+          - _prepare_tasks | rejectattr('run_once', 'defined') | list | length == 0
+          - _prepare_tasks | selectattr('run_once') | list | length == (_prepare_tasks | length)
+          - "(_prepare_task_text | regex_findall('snow_operation: create') | length) == 1"
+          - "(_prepare_task_text | regex_findall('snow_operation: read') | length) == 1"
+          - "(_prepare_task_text | regex_findall('snow_operation: add_cis') | length) == 1"
+          - _prepare_task_text is not search('groups\[patch_wave_name\]')
+          - _prepare_task_text is not search('patch_wave_name \|')
+          - "'ansible_limit' in _prepare_task_text"
+          - "'ansible_play_hosts_all' in _prepare_task_text"
+        fail_msg: Preparation must target windows_hosts once from the AAP Limit.
+      run_once: true
+
+    - name: Remember the ServiceNow decision tasks
+      ansible.builtin.set_fact:
+        _prepare_preview: "{{ _prepare_tasks | selectattr('name', 'equalto', 'Stop after preview without calling ServiceNow') | list | first }}"
+        _prepare_read: "{{ _prepare_tasks | selectattr('name', 'equalto', 'Read an existing change instead of creating one') | list | first }}"
+        _prepare_create: "{{ _prepare_tasks | selectattr('name', 'equalto', 'Create the change request') | list | first }}"
+        _prepare_link: "{{ _prepare_tasks | selectattr('name', 'equalto', 'Associate the wave configuration items') | list | first }}"
+      run_once: true
+
+    - name: Preview skips ServiceNow and resume does not create
+      ansible.builtin.assert:
+        that:
+          - _prepare_preview.when == 'snow_prepare_preview_only | bool'
+          - _prepare_read.run_once | bool
+          - _prepare_create.run_once | bool
+          - _prepare_link.run_once | bool
+          - _prepare_read.when[0] == 'not (snow_prepare_preview_only | bool)'
+          - _prepare_read.when[1] == "snow_prepare_existing_change_number | default('') | string | length > 0"
+          - _prepare_create.when[0] == 'not (snow_prepare_preview_only | bool)'
+          - _prepare_create.when[1] == "snow_prepare_existing_change_number | default('') | string | length == 0"
+          - _prepare_link.when == 'not (snow_prepare_preview_only | bool)'
+          - _prepare_create.block[0].vars.snow_operation == 'create'
+          - _prepare_read.block[0].vars.snow_operation == 'read'
+          - _prepare_link.block[0].vars.snow_ci_sys_ids is search('snow_prepare_ci_map')
+        fail_msg: Preview, create, and resume must stay mutually exclusive and run once.
+      run_once: true
+
+    - name: Run preparation for this Limit
+      run_once: true
+      block:
+        - name: Include preparation tasks
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/prepare_patch_change.yml"
+      rescue:
+        - name: Record the preparation failure
+          ansible.builtin.set_fact:
+            snow_prepare_failed: true
+            snow_prepare_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Check a rejected Limit
+      when: snow_prepare_expect == 'fail'
+      ansible.builtin.assert:
+        that:
+          - hostvars['localhost'].snow_prepare_execution_count | int == 1
+          - snow_prepare_failed | bool
+          - snow_prepare_expect_error in snow_prepare_error
+          - snow_result is not defined
+          - not (snow_prepare_created_this_run | default(false) | bool)
+        fail_msg: >-
+          Rejected Limit did not fail closed.
+          error={{ snow_prepare_error | default('') }}
+      run_once: true
+
+    - name: Check an accepted Limit
+      when: snow_prepare_expect == 'pass'
+      ansible.builtin.assert:
+        that:
+          - hostvars['localhost'].snow_prepare_execution_count | int == 1
+          - not (snow_prepare_failed | default(false) | bool)
+          - snow_result is not defined
+          - not (snow_prepare_created_this_run | default(false) | bool)
+          - (snow_prepare_ci_map | map(attribute='hostname') | list) == (snow_prepare_expect_hosts | sort)
+          - (snow_prepare_ci_map | map(attribute='sys_id') | list) == snow_prepare_expect_sys_ids
+          - (snow_prepare_ci_map | length) == (ansible_play_hosts_all | length)
+        fail_msg: >-
+          Accepted Limit did not keep every selected sys_id.
+          selected={{ ansible_play_hosts_all | sort }}
+          map={{ snow_prepare_ci_map | default([]) }}
+      run_once: true

@@ -40,7 +40,7 @@
       os_build: ""
       os_build_pre: not_available
       location: "{{ hostvars[item].patch_location | default('') }}"
-      snow_ci_sys_id: "{{ hostvars[item].snow_ci_sys_id | default('') }}"
+      snow_ci_sys_id: "{{ hostvars[item].sys_id | default('') | string | trim }}"
       patch_environment: "{{ hostvars[item].patch_environment | default('') }}"
       platform: windows
       report_source: windows_full_patch

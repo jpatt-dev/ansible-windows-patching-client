@@ -1,0 +1,297 @@
+---
+# servicenow.itsm 2.6.3 has no task_ci module. api_info and api are the
+# collection's table operations. This links existing CI sys_ids. It does
+# not create configuration items, and it does not delete task_ci rows.
+#
+# A 32-character hexadecimal sys_id is a format check done before this
+# file runs. This file then reads cmdb_ci. A missing CI stops the task
+# before any task_ci write.
+#
+# servicenow.itsm 2.6.3 api_info returns the row list as record, not records.
+# Confirmation reads that key. A reference value may be a sys_id string or
+# a mapping with value. A POST response is not proof the relationship exists.
+
+- name: Normalize the configuration item list
+  ansible.builtin.set_fact:
+    snow_ci_sys_ids_normalized: "{{ snow_ci_sys_ids | map('string') | map('trim') | unique | list }}"
+
+- name: Load the change request for CI association
+  block:
+    # args[module] does not see the collection env_fallback for SN_USERNAME.
+    - name: Query the change request by number or sys_id  # noqa: args[module]
+      servicenow.itsm.change_request_info:
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        number: "{{ snow_change_number | default(omit, true) }}"
+        sys_id: >-
+          {{
+            snow_change_sys_id
+            if snow_change_number | default('') | string | length == 0
+            else omit
+          }}
+      register: snow_change_lookup
+      no_log: true
+  rescue:
+    - name: Report the ServiceNow lookup failure
+      ansible.builtin.fail:
+        msg: >-
+          Could not read the change request before linking configuration items.
+          {{ ansible_failed_result.msg | default('The collection did not return an error message.') }}
+
+- name: Fail when the change request does not exist
+  when: snow_change_lookup.records | default([]) | length == 0
+  ansible.builtin.fail:
+    msg: >-
+      ServiceNow has no change request matching
+      {{ snow_change_number | default(snow_change_sys_id) }}.
+
+- name: Fail when the change identity is not unique
+  when: snow_change_lookup.records | default([]) | length > 1
+  ansible.builtin.fail:
+    msg: >-
+      ServiceNow returned {{ snow_change_lookup.records | length }} records
+      for {{ snow_change_number | default(snow_change_sys_id) }}.
+
+- name: Fail when the change number and sys_id are different records
+  when:
+    - snow_change_number | default('') | string | length > 0
+    - snow_change_sys_id | default('') | string | length > 0
+    - snow_change_lookup.records[0].sys_id != snow_change_sys_id
+  ansible.builtin.fail:
+    msg: >-
+      snow_change_number {{ snow_change_number }} is sys_id
+      {{ snow_change_lookup.records[0].sys_id }}, not {{ snow_change_sys_id }}.
+
+- name: Remember the change identity
+  ansible.builtin.set_fact:
+    snow_change_sys_id_resolved: "{{ snow_change_lookup.records[0].sys_id }}"
+    snow_change_number_resolved: "{{ snow_change_lookup.records[0].number }}"
+
+- name: Confirm each sys_id is a CMDB configuration item
+  block:
+    # args[module] does not see the collection env_fallback for SN_USERNAME.
+    # return_fields skips the module's attachment lookup.
+    - name: Query cmdb_ci by configuration item sys_id  # noqa: args[module]
+      servicenow.itsm.configuration_item_info:
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        sys_id: "{{ snow_ci_sys_id }}"
+        return_fields:
+          - sys_id
+      loop: "{{ snow_ci_sys_ids_normalized }}"
+      loop_control:
+        loop_var: snow_ci_sys_id
+        label: "{{ snow_ci_sys_id }}"
+      register: snow_cmdb_ci_lookups
+      no_log: true
+  rescue:
+    - name: Report the CMDB lookup failure
+      ansible.builtin.fail:
+        msg: >-
+          Could not read cmdb_ci before linking configuration items to
+          {{ snow_change_number_resolved }}.
+          task_ci was not changed. The integration user needs read access
+          to cmdb_ci.
+          {{ ansible_failed_result.msg | default('The collection did not return an error message.') }}
+
+- name: List sys_ids that are not CMDB configuration items
+  ansible.builtin.set_fact:
+    snow_missing_cmdb_ci_sys_ids: "{{ snow_missing_cmdb_ci_text | trim | from_json }}"
+  vars:
+    snow_missing_cmdb_ci_text: |
+      {% set ns = namespace(bad=[]) %}
+      {% for item in snow_cmdb_ci_lookups.results %}
+      {% set row = item.records if (item.records is defined and item.records is not string and item.records is sequence) else (item.record | default([])) %}
+      {% set row = [row] if row is mapping else row %}
+      {% set found = row[0].sys_id | default('') if row | length > 0 else '' %}
+      {% if row | length != 1 or (found | string | lower) != (item.snow_ci_sys_id | string | lower) %}
+      {% set ns.bad = ns.bad + [item.snow_ci_sys_id] %}
+      {% endif %}
+      {% endfor %}
+      {{ ns.bad | to_json }}
+
+- name: Fail when a sys_id is not a configuration item
+  when: snow_missing_cmdb_ci_sys_ids | length > 0
+  ansible.builtin.fail:
+    msg: >-
+      These values are not configuration item sys_ids in cmdb_ci:
+      {{ snow_missing_cmdb_ci_sys_ids | join(', ') }}.
+      A 32-character hexadecimal string is only a format check.
+      task_ci was not posted, and cmdb_ci was not modified.
+
+- name: Look for existing affected-CI relationships
+  block:
+    # args[module] does not see the collection env_fallback for SN_USERNAME.
+    - name: Query task_ci for each configuration item  # noqa: args[module]
+      servicenow.itsm.api_info:
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        resource: task_ci
+        sysparm_query: "task={{ snow_change_sys_id_resolved }}^ci_item={{ snow_ci_sys_id }}"
+        columns:
+          - sys_id
+          - task
+          - ci_item
+        exclude_reference_link: true
+      loop: "{{ snow_ci_sys_ids_normalized }}"
+      loop_control:
+        loop_var: snow_ci_sys_id
+        label: "{{ snow_ci_sys_id }}"
+      register: snow_task_ci_lookups
+      no_log: true
+  rescue:
+    - name: Report the task_ci lookup failure
+      ansible.builtin.fail:
+        msg: >-
+          Could not query affected configuration items for
+          {{ snow_change_number_resolved }}.
+          {{ ansible_failed_result.msg | default('The collection did not return an error message.') }}
+
+- name: Create task_ci rows that are not already present
+  block:
+    - name: Link a configuration item that is not already affected
+      when: (snow_task_ci_row.record | default(snow_task_ci_row.records) | default([])) | length == 0
+      servicenow.itsm.api:
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        resource: task_ci
+        action: post
+        data:
+          task: "{{ snow_change_sys_id_resolved }}"
+          ci_item: "{{ snow_task_ci_row.snow_ci_sys_id }}"
+      loop: "{{ snow_task_ci_lookups.results }}"
+      loop_control:
+        loop_var: snow_task_ci_row
+        label: "{{ snow_task_ci_row.snow_ci_sys_id }}"
+      register: snow_task_ci_creates
+      no_log: true
+  rescue:
+    - name: Report the task_ci create failure
+      ansible.builtin.fail:
+        msg: >-
+          ServiceNow did not link a configuration item to
+          {{ snow_change_number_resolved }}.
+          Existing relationships were left in place. This role does not
+          delete task_ci rows.
+          {{ ansible_failed_result.msg | default('The collection did not return an error message.') }}
+
+- name: Re-read task_ci to confirm each relationship
+  block:
+    # args[module] does not see the collection env_fallback for SN_USERNAME.
+    - name: Query task_ci again for each configuration item  # noqa: args[module]
+      servicenow.itsm.api_info:
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        resource: task_ci
+        sysparm_query: "task={{ snow_change_sys_id_resolved }}^ci_item={{ snow_ci_sys_id }}"
+        columns:
+          - sys_id
+          - task
+          - ci_item
+        exclude_reference_link: true
+      loop: "{{ snow_ci_sys_ids_normalized }}"
+      loop_control:
+        loop_var: snow_ci_sys_id
+        label: "{{ snow_ci_sys_id }}"
+      register: snow_task_ci_confirmations
+      no_log: true
+  rescue:
+    - name: Report the task_ci confirmation failure
+      ansible.builtin.fail:
+        msg: >-
+          Could not re-read affected configuration items for
+          {{ snow_change_number_resolved }}.
+          The create response is not treated as confirmation.
+          Existing relationships were left in place.
+          {{ ansible_failed_result.msg | default('The collection did not return an error message.') }}
+
+- name: Compare the task_ci confirmation read with the requested sys_ids
+  ansible.builtin.set_fact:
+    snow_task_ci_confirmation: "{{ snow_task_ci_confirmation_text | trim | from_json }}"
+  vars:
+    snow_task_ci_confirmation_text: |
+      {% set ns = namespace(bad=[], notes=[], row=[], ci_raw='', task_raw='', ci_value='', task_value='') %}
+      {% for item in snow_task_ci_confirmations.results %}
+      {% if item.record is defined and item.record is mapping %}
+      {% set ns.row = [item.record] %}
+      {% elif item.record is defined and item.record is not string and item.record is sequence %}
+      {% set ns.row = item.record %}
+      {% elif item.records is defined and item.records is not string and item.records is sequence %}
+      {% set ns.row = item.records %}
+      {% else %}
+      {% set ns.row = [] %}
+      {% endif %}
+      {% set ns.ci_raw = ns.row[0].ci_item | default('') if ns.row | length > 0 else '' %}
+      {% set ns.task_raw = ns.row[0].task | default('') if ns.row | length > 0 else '' %}
+      {% set ns.ci_value = (ns.ci_raw.value | default(ns.ci_raw.sys_id | default(''))) if ns.ci_raw is mapping else ns.ci_raw %}
+      {% set ns.task_value = (ns.task_raw.value | default(ns.task_raw.sys_id | default(''))) if ns.task_raw is mapping else ns.task_raw %}
+      {% if ns.row | length != 1
+         or (ns.ci_value | string | lower) != (item.snow_ci_sys_id | string | lower)
+         or (ns.task_value | string | lower) != (snow_change_sys_id_resolved | string | lower) %}
+      {% set ns.bad = ns.bad + [item.snow_ci_sys_id] %}
+      {% endif %}
+      {% set ns.notes = ns.notes + [{
+        'ci_sys_id': item.snow_ci_sys_id,
+        'row_count': ns.row | length,
+        'ci_field': 'mapping' if ns.ci_raw is mapping else 'string',
+        'task_field': 'mapping' if ns.task_raw is mapping else 'string'
+      }] %}
+      {% endfor %}
+      {{ {'bad': ns.bad, 'notes': ns.notes} | to_json }}
+
+- name: Show sanitized task_ci confirmation details
+  when:
+    - snow_task_ci_diagnostics | bool
+    - snow_task_ci_confirmation.bad | length > 0
+  ansible.builtin.debug:
+    msg:
+      change_number: "{{ snow_change_number_resolved }}"
+      change_sys_id: "{{ snow_change_sys_id_resolved }}"
+      api_info_return_key: record
+      checks: "{{ snow_task_ci_confirmation.notes }}"
+
+- name: Fail when a task_ci relationship cannot be confirmed
+  when: snow_task_ci_confirmation.bad | length > 0
+  ansible.builtin.fail:
+    msg: >-
+      ServiceNow did not confirm a task_ci relationship on
+      {{ snow_change_number_resolved }} for
+      {{ snow_task_ci_confirmation.bad | join(', ') }}.
+      The follow-up read uses api_info record, not the POST response.
+      Set snow_task_ci_diagnostics=true to log row counts and whether
+      task and ci_item came back as strings or mappings.
+      This role does not set the change cmdb_ci field, does not create
+      configuration items, and does not delete existing relationships.
+
+- name: Publish the affected-CI result
+  ansible.builtin.set_fact:
+    snow_result:
+      operation: add_cis
+      success: true
+      number: "{{ snow_change_number_resolved }}"
+      sys_id: "{{ snow_change_sys_id_resolved }}"
+      state: "{{ snow_change_lookup.records[0].state | default('') }}"
+      approval: "{{ snow_change_lookup.records[0].approval | default('') }}"
+      linked_ci_sys_ids: "{{ snow_ci_linked }}"
+      existing_ci_sys_ids: "{{ snow_ci_already_linked }}"
+      confirmed_ci_sys_ids: "{{ snow_ci_sys_ids_normalized }}"
+      message: >-
+        Confirmed {{ snow_ci_sys_ids_normalized | length }} affected
+        configuration item relationship(s) on {{ snow_change_number_resolved }}.
+        Linked {{ snow_ci_linked | length }} during this run.
+        {{ snow_ci_already_linked | length }} were already linked.
+  vars:
+    snow_ci_already_linked: >-
+      {{
+        snow_task_ci_lookups.results
+        | selectattr('record', 'defined')
+        | rejectattr('record', 'equalto', [])
+        | map(attribute='snow_ci_sys_id')
+        | list
+      }}
+    snow_ci_linked: "{{ snow_ci_sys_ids_normalized | difference(snow_ci_already_linked) }}"

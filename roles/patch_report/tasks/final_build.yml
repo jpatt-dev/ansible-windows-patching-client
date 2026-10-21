@@ -248,7 +248,7 @@
     _rpt_os_version: "{{ windows_os_version | default('not_available') }}"
     _rpt_location: "{{ patch_location | default('') }}"
     _rpt_aap_job_id: "{{ tower_job_id | default(awx_job_id | default('')) }}"
-    _rpt_snow_ci_sys_id: "{{ snow_ci_sys_id | default('') }}"
+    _rpt_snow_ci_sys_id: "{{ sys_id | default('') | string | trim }}"
     _rpt_patch_environment: "{{ patch_environment | default('') }}"
     _rpt_platform: "{{ patch_report_platform | default('windows') }}"
     _rpt_installed_kbs: "{{ _upstream_apply.updates_installed_kbs if (_upstream_apply is mapping and (_upstream_apply.updates_installed_kbs is defined)) else (updates_installed_kbs if (updates_installed_kbs is defined) else 'not_available') }}"

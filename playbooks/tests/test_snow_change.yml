@@ -1,0 +1,43 @@
+---
+# Read one existing change request. This playbook does not patch Windows
+# hosts and does not create, update, or close a change.
+#
+# AAP job template:
+#   Playbook: playbooks/tests/test_snow_change.yml
+#   Inventory: any inventory that can resolve localhost. Implicit localhost
+#              is enough. Do not set Limit to a Windows patch wave.
+#   Credential: the custom credential that injects SN_HOST, SN_USERNAME,
+#               and SN_PASSWORD. Do not put those values in extra variables.
+#   Extra variables: snow_test_change_number: CHG0000123
+#   Execution environment: one that already includes servicenow.itsm >= 2.6.3.
+#                          The published windows-patch-ee image does not,
+#                          until that image is rebuilt from its requirements.yml.
+
+- name: Read an existing ServiceNow change request
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    snow_test_change_number: ""
+
+  tasks:
+    - name: Require an existing change number
+      ansible.builtin.assert:
+        that:
+          - snow_test_change_number | default('') | string | length > 0
+        fail_msg: >-
+          Set snow_test_change_number to an existing change, for example
+          CHG0000123. This playbook only reads. It does not create or patch.
+        quiet: true
+
+    - name: Read the change request
+      ansible.builtin.include_role:
+        name: servicenow_patching_change
+      vars:
+        snow_operation: read
+        snow_change_number: "{{ snow_test_change_number }}"
+
+    - name: Display the change result
+      ansible.builtin.debug:
+        var: snow_result

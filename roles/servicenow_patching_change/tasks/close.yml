@@ -1,0 +1,95 @@
+---
+# Ask ServiceNow to move this change to Closed. This does not walk
+# New -> Assess -> Authorize -> Scheduled -> Implement -> Review,
+# and it does not approve the change. A rejected transition fails the task.
+
+- name: Confirm the change request exists before close
+  block:
+    # args[module] does not see the collection env_fallback for SN_USERNAME.
+    - name: Query ServiceNow by change number before close  # noqa: args[module]
+      servicenow.itsm.change_request_info:
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        number: "{{ snow_change_number }}"
+      register: snow_change_lookup
+      no_log: true
+  rescue:
+    - name: Report the ServiceNow lookup failure
+      ansible.builtin.fail:
+        msg: >-
+          Could not read change request {{ snow_change_number }} before close.
+          {{ ansible_failed_result.msg | default('The collection did not return an error message.') }}
+
+- name: Fail when the change request does not exist
+  when: snow_change_lookup.records | default([]) | length == 0
+  ansible.builtin.fail:
+    msg: "ServiceNow has no change request numbered {{ snow_change_number }}."
+
+- name: Fail when the change number matches more than one record
+  when: snow_change_lookup.records | default([]) | length > 1
+  ansible.builtin.fail:
+    msg: >-
+      ServiceNow returned {{ snow_change_lookup.records | length }} records
+      for {{ snow_change_number }}.
+
+- name: Close the change request
+  block:
+    - name: Request the Closed state from ServiceNow
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        number: "{{ snow_change_number }}"
+        state: closed
+        close_code: "{{ snow_close_code }}"
+        close_notes: "{{ snow_close_notes }}"
+        requested_by: "{{ snow_selected_direct_fields.requested_by | default(omit, true) }}"
+        assignment_group: "{{ snow_selected_direct_fields.assignment_group | default(omit, true) }}"
+        assignment_group_id: "{{ snow_selected_direct_fields.assignment_group_id | default(omit, true) }}"
+        category: "{{ snow_selected_direct_fields.category | default(omit, true) }}"
+        priority: "{{ snow_selected_direct_fields.priority | default(omit, true) }}"
+        risk: "{{ snow_selected_direct_fields.risk | default(omit, true) }}"
+        impact: "{{ snow_selected_direct_fields.impact | default(omit, true) }}"
+        urgency: "{{ snow_selected_direct_fields.urgency | default(omit, true) }}"
+        short_description: "{{ snow_selected_direct_fields.short_description | default(omit, true) }}"
+        description: "{{ snow_selected_direct_fields.description | default(omit, true) }}"
+        other: "{{ snow_selected_other_fields | default(omit, true) }}"
+      register: snow_change_api
+      no_log: true
+  rescue:
+    - name: Report the rejected close transition
+      ansible.builtin.fail:
+        msg: >-
+          ServiceNow rejected closing {{ snow_change_number }}.
+          The change must already be in a state this instance allows to move
+          to Closed. This role does not approve the change or walk it through
+          intermediate states. Module error:
+          {{ ansible_failed_result.msg | default('The collection did not return an error message.') }}
+
+- name: Require identity fields on the closed change
+  ansible.builtin.assert:
+    that:
+      - snow_change_api.record is mapping
+      - snow_change_api.record.number | default('') | length > 0
+      - snow_change_api.record.sys_id | default('') | length > 0
+    fail_msg: ServiceNow did not return a change number and sys_id.
+    quiet: true
+
+- name: Publish the close result
+  ansible.builtin.set_fact:
+    snow_result:
+      operation: close
+      success: true
+      number: "{{ snow_change_api.record.number }}"
+      sys_id: "{{ snow_change_api.record.sys_id }}"
+      state: "{{ snow_change_api.record.state | default('') }}"
+      approval: "{{ snow_change_api.record.approval | default('') }}"
+      message: "{{ snow_close_result_message }}"
+  vars:
+    snow_close_result_message: >-
+      {{
+        'ServiceNow accepted closure of ' ~ snow_change_api.record.number ~ ' with close code ' ~ snow_close_code ~ '.'
+        if snow_change_api.changed | bool
+        else 'Change request ' ~ snow_change_api.record.number ~ ' was already closed with the requested close details.'
+      }}
