@@ -1,0 +1,198 @@
+---
+# Mandatory change fields and primary CI selection. No ServiceNow calls.
+
+- name: Prove change preparation fields and primary CI
+  hosts: windows_hosts
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../../roles/patch_common/defaults/main.yml
+  vars:
+    snow_prepare_supported_waves: "{{ approved_patch_targets }}"
+    snow_prepare_case: complete
+    snow_prepare_allow_create: true
+    snow_prepare_preview_only: true
+    snow_prepare_case_errors:
+      missing_group: assignment_group
+      missing_category: category
+      missing_backout: backout_plan
+      missing_plan: implementation_plan
+      missing_justification: justification
+      missing_description: description
+      missing_primary: primary_ci
+      outside: primary_ci_not_in_wave
+      invalid_primary: "32 hexadecimal"
+      blocked_model: "blocked:chg_model"
+      conflict_ci: cmdb_ci_conflict
+      bad_limit: AAP Limit
+      duplicate_ci: more than one host
+    snow_prepare_field_sets:
+      complete: &complete_fields
+        assignment_group: Patch Operations
+        category: Software
+        justification: Scheduled patch window.
+        implementation_plan: Apply approved Windows updates.
+        backout_plan: Uninstall the updates from this wave.
+      group_id:
+        assignment_group_id: "0123456789abcdef0123456789abcdef"
+        category: Software
+        justification: Scheduled patch window.
+        implementation_plan: Apply approved Windows updates.
+        backout_plan: Uninstall the updates from this wave.
+      missing_group:
+        assignment_group: "   "
+        category: Software
+        justification: Scheduled patch window.
+        implementation_plan: Apply approved Windows updates.
+        backout_plan: Uninstall the updates from this wave.
+      missing_category:
+        assignment_group: Patch Operations
+        justification: Scheduled patch window.
+        implementation_plan: Apply approved Windows updates.
+        backout_plan: Uninstall the updates from this wave.
+      missing_backout:
+        assignment_group: Patch Operations
+        category: Software
+        justification: Scheduled patch window.
+        implementation_plan: Apply approved Windows updates.
+        backout_plan: "   "
+      missing_plan:
+        assignment_group: Patch Operations
+        category: Software
+        justification: Scheduled patch window.
+        backout_plan: Uninstall the updates from this wave.
+      missing_justification:
+        assignment_group: Patch Operations
+        category: Software
+        implementation_plan: Apply approved Windows updates.
+        backout_plan: Uninstall the updates from this wave.
+      blocked_model:
+        assignment_group: Patch Operations
+        category: Software
+        justification: Scheduled patch window.
+        implementation_plan: Apply approved Windows updates.
+        backout_plan: Uninstall the updates from this wave.
+        chg_model: Normal
+      conflict_ci:
+        assignment_group: Patch Operations
+        category: Software
+        justification: Scheduled patch window.
+        implementation_plan: Apply approved Windows updates.
+        backout_plan: Uninstall the updates from this wave.
+        cmdb_ci: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      outside: *complete_fields
+      missing_primary: *complete_fields
+      missing_description: *complete_fields
+      invalid_primary: *complete_fields
+      bad_limit: *complete_fields
+      duplicate_ci: *complete_fields
+      resume: {}
+    snow_prepare_primary_cases:
+      outside: w20a
+      missing_primary: ""
+      invalid_primary: w1bad
+    snow_prepare_descriptions:
+      missing_description: "   "
+      resume: ""
+  tasks:
+    - name: Apply the field case
+      ansible.builtin.set_fact:
+        patch_change_fields: "{{ snow_prepare_field_sets[snow_prepare_case] }}"
+        patch_change_primary_ci_host: >-
+          {{
+            snow_prepare_primary_cases[snow_prepare_case]
+            if snow_prepare_case in snow_prepare_primary_cases
+            else 'w1a'
+          }}
+        patch_change_description: >-
+          {{
+            snow_prepare_descriptions[snow_prepare_case]
+            if snow_prepare_case in snow_prepare_descriptions
+            else 'Patch the selected wave.'
+          }}
+        patch_change_short_description: "{{ '' if snow_prepare_case == 'resume' else 'Windows patch wave' }}"
+        snow_prepare_existing_change_number: "{{ 'CHG0009999' if snow_prepare_case == 'resume' else '' }}"
+      run_once: true
+
+    - name: Run preparation for this field case
+      run_once: true
+      block:
+        - name: Include preparation tasks
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/prepare_patch_change.yml"
+      rescue:
+        - name: Record the preparation failure
+          ansible.builtin.set_fact:
+            snow_prepare_failed: true
+            snow_prepare_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Check a complete preview
+      when: snow_prepare_case in ['complete', 'group_id']
+      ansible.builtin.assert:
+        that:
+          - not (snow_prepare_failed | default(false) | bool)
+          - snow_result is not defined
+          - not (snow_prepare_created_this_run | default(false) | bool)
+          - snow_prepare_input_check.missing | length == 0
+          - snow_prepare_input_check.primary_sys_id == (hostvars[patch_change_primary_ci_host | trim]['sys_id'] | trim)
+          - snow_prepare_change_fields.cmdb_ci == snow_prepare_input_check.primary_sys_id
+          - snow_prepare_change_fields.cmdb_ci in (snow_prepare_ci_map | map(attribute='sys_id') | list)
+          - (snow_prepare_ci_map | length) == (ansible_play_hosts_all | length)
+          - (snow_prepare_ci_map | length) > 1
+          - "'category' in snow_prepare_change_fields"
+          - "'justification' in snow_prepare_change_fields"
+          - "'implementation_plan' in snow_prepare_change_fields"
+          - "'backout_plan' in snow_prepare_change_fields"
+          - "'chg_model' not in snow_prepare_change_fields"
+          - snow_prepare_case != 'group_id' or 'assignment_group_id' in snow_prepare_change_fields
+          - snow_prepare_case != 'group_id' or 'assignment_group' not in snow_prepare_change_fields
+          - snow_prepare_case == 'group_id' or 'assignment_group' in snow_prepare_change_fields
+          - hostvars['localhost'].snow_prepare_execution_count | int == 1
+        fail_msg: Complete field preview did not resolve the primary CI or keep every affected CI.
+      run_once: true
+
+    - name: Check a preview that reports missing creation fields
+      when:
+        - snow_prepare_preview_only | bool
+        - snow_prepare_case not in ['complete', 'group_id', 'resume', 'bad_limit', 'invalid_primary', 'duplicate_ci']
+      ansible.builtin.assert:
+        that:
+          - not (snow_prepare_failed | default(false) | bool)
+          - snow_result is not defined
+          - not (snow_prepare_created_this_run | default(false) | bool)
+          - snow_prepare_case_errors[snow_prepare_case] in snow_prepare_input_check.missing
+          - hostvars['localhost'].snow_prepare_execution_count | int == 1
+        fail_msg: >-
+          Preview did not report {{ snow_prepare_case }} without calling ServiceNow.
+          missing={{ (snow_prepare_input_check | default({})).missing | default([]) }}
+      run_once: true
+
+    - name: Check a rejected field case
+      when:
+        - snow_prepare_case not in ['complete', 'group_id', 'resume']
+        - not (snow_prepare_preview_only | bool) or snow_prepare_case in ['bad_limit', 'invalid_primary', 'duplicate_ci']
+      ansible.builtin.assert:
+        that:
+          - snow_prepare_failed | bool
+          - snow_prepare_case_errors[snow_prepare_case] in snow_prepare_error
+          - snow_result is not defined
+          - not (snow_prepare_created_this_run | default(false) | bool)
+          - hostvars['localhost'].snow_prepare_execution_count | int == 1
+        fail_msg: >-
+          Field case {{ snow_prepare_case }} did not fail closed.
+          error={{ snow_prepare_error | default('') }}
+      run_once: true
+
+    - name: Check resume without creation fields
+      when: snow_prepare_case == 'resume'
+      ansible.builtin.assert:
+        that:
+          - not (snow_prepare_failed | default(false) | bool)
+          - snow_prepare_input_check is not defined
+          - snow_prepare_change_fields is not defined
+          - snow_result is not defined
+          - not (snow_prepare_created_this_run | default(false) | bool)
+          - (snow_prepare_ci_map | length) == (ansible_play_hosts_all | length)
+          - (snow_prepare_ci_map | length) > 1
+          - hostvars['localhost'].snow_prepare_execution_count | int == 1
+        fail_msg: Resume required creation fields or called ServiceNow.
+      run_once: true

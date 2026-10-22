@@ -1,0 +1,13 @@
+---
+all:
+  children:
+    windows_hosts:
+      hosts:
+        w1a:
+          sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        w1dup:
+          sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    windows_wave_1:
+      hosts:
+        w1a:
+        w1dup:

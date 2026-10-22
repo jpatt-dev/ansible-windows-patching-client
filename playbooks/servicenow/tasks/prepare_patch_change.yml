@@ -81,6 +81,124 @@
       } | to_json }}
   run_once: true
 
+- name: Check change inputs
+  when: snow_prepare_existing_change_number | default('') | string | trim | length == 0
+  ansible.builtin.set_fact:
+    snow_prepare_input_check: "{{ snow_prepare_input_check_text | trim | from_json }}"
+  vars:
+    snow_prepare_input_check_text: |
+      {% set ns = namespace(missing=[], primary_sys_id='') %}
+      {% set fields = patch_change_fields | default({}, true) %}
+      {% set primary_host = patch_change_primary_ci_host | default('') | string | trim %}
+      {% if primary_host in ansible_play_hosts_all %}
+      {% set ns.primary_sys_id = hostvars[primary_host]['sys_id'] | default('', true) | string | trim %}
+      {% endif %}
+      {% if fields is not mapping %}
+      {% set ns.missing = ns.missing + ['patch_change_fields'] %}
+      {% else %}
+      {% set group = fields.assignment_group | default('') | string | trim %}
+      {% set group_id = fields.assignment_group_id | default('') | string | trim %}
+      {% if (group | length == 0) and (group_id | length == 0) %}
+      {% set ns.missing = ns.missing + ['assignment_group'] %}
+      {% elif (group | length > 0) and (group_id | length > 0) %}
+      {% set ns.missing = ns.missing + ['assignment_group_conflict'] %}
+      {% endif %}
+      {% if (fields.category | default('') | string | trim) | length == 0 %}
+      {% set ns.missing = ns.missing + ['category'] %}
+      {% endif %}
+      {% if (fields.justification | default('') | string | trim) | length == 0 %}
+      {% set ns.missing = ns.missing + ['justification'] %}
+      {% endif %}
+      {% if (fields.implementation_plan | default('') | string | trim) | length == 0 %}
+      {% set ns.missing = ns.missing + ['implementation_plan'] %}
+      {% endif %}
+      {% if (fields.backout_plan | default('') | string | trim) | length == 0 %}
+      {% set ns.missing = ns.missing + ['backout_plan'] %}
+      {% endif %}
+      {% set blocked = [
+        'approval', 'approval_history', 'approval_set', 'upon_approval', 'upon_reject',
+        'state', 'type', 'chg_model', 'template', 'std_change_producer_version',
+        'number', 'sys_id', 'close_code', 'close_notes', 'work_notes'
+      ] %}
+      {% for key in fields %}
+      {% if key in blocked %}
+      {% set ns.missing = ns.missing + ['blocked:' ~ key] %}
+      {% endif %}
+      {% endfor %}
+      {% set supplied_ci = fields.cmdb_ci | default('') | string | trim %}
+      {% if 'cmdb_ci' in fields and (supplied_ci | lower) != (ns.primary_sys_id | lower) %}
+      {% set ns.missing = ns.missing + ['cmdb_ci_conflict'] %}
+      {% endif %}
+      {% set supplied_description = fields.description | default('') | string | trim %}
+      {% if 'description' in fields and supplied_description != (patch_change_description | default('') | string | trim) %}
+      {% set ns.missing = ns.missing + ['description_conflict'] %}
+      {% endif %}
+      {% endif %}
+      {% if (patch_change_description | default('') | string | trim) | length == 0 %}
+      {% set ns.missing = ns.missing + ['description'] %}
+      {% endif %}
+      {% if (patch_change_short_description | default('') | string | trim) | length == 0 %}
+      {% set ns.missing = ns.missing + ['short_description'] %}
+      {% endif %}
+      {% if primary_host | length == 0 %}
+      {% set ns.missing = ns.missing + ['primary_ci'] %}
+      {% elif primary_host not in ansible_play_hosts_all %}
+      {% set ns.missing = ns.missing + ['primary_ci_not_in_wave'] %}
+      {% elif not (ns.primary_sys_id is match('^[0-9a-fA-F]{32}$')) %}
+      {% set ns.missing = ns.missing + ['primary_ci_sys_id'] %}
+      {% endif %}
+      {{ {'missing': ns.missing, 'primary_sys_id': ns.primary_sys_id} | to_json }}
+  run_once: true
+
+- name: Build the change field payload
+  when:
+    - snow_prepare_existing_change_number | default('') | string | trim | length == 0
+    - snow_prepare_input_check.missing | length == 0
+  ansible.builtin.set_fact:
+    snow_prepare_change_fields: "{{ snow_prepare_change_fields_text | trim | from_json }}"
+  vars:
+    snow_prepare_change_fields_text: |
+      {% set ns = namespace(rows=[]) %}
+      {% for item in patch_change_fields | dict2items %}
+      {% if item.key not in ['cmdb_ci', 'description', 'short_description'] %}
+      {% set value = item.value | string | trim if item.value is string else item.value %}
+      {% set ns.rows = ns.rows + [{'key': item.key, 'value': value}] %}
+      {% endif %}
+      {% endfor %}
+      {% set ns.rows = ns.rows + [{'key': 'cmdb_ci', 'value': snow_prepare_input_check.primary_sys_id}] %}
+      {{ ns.rows | items2dict | to_json }}
+  run_once: true
+
+- name: Show the selected hosts and change inputs
+  ansible.builtin.debug:
+    msg:
+      limit: "{{ ansible_limit | string | trim }}"
+      host_count: "{{ ansible_play_hosts_all | length }}"
+      affected_ci_count: "{{ snow_prepare_ci_map | length }}"
+      primary_ci_host: "{{ patch_change_primary_ci_host | default('') | string | trim }}"
+      primary_ci_sys_id: "{{ (snow_prepare_input_check | default({})).primary_sys_id | default('') }}"
+      missing_inputs: "{{ (snow_prepare_input_check | default({})).missing | default([]) }}"
+      fields_complete: "{{ ((snow_prepare_input_check | default({})).missing | default([]) | length) == 0 }}"
+      preview_only: "{{ snow_prepare_preview_only | bool }}"
+      resume: "{{ (snow_prepare_existing_change_number | default('') | string | trim | length) > 0 }}"
+  run_once: true
+
+- name: Reject incomplete change inputs
+  when:
+    - not (snow_prepare_preview_only | bool)
+    - snow_prepare_existing_change_number | default('') | string | trim | length == 0
+    - snow_prepare_input_check.missing | length > 0
+  ansible.builtin.fail:
+    msg: >-
+      Cannot prepare the change. Missing or invalid inputs:
+      {{ snow_prepare_input_check.missing | join(', ') }}.
+      No change was created.
+      Primary CI host: {{ patch_change_primary_ci_host | default('') | string | trim }}.
+      Do not set chg_model, type, state, or approval in patch_change_fields.
+      Create sends type normal. The installed collection copies type into
+      chg_model. Confirm that mapping on the client ServiceNow instance.
+  run_once: true
+
 - name: Reject hosts without a usable CI sys_id
   when: >-
     snow_prepare_ci_problems.missing | length > 0
@@ -94,15 +212,6 @@
       {{ snow_prepare_ci_problems.invalid | join(', ') }}.
       CI sys_ids used by more than one host:
       {{ snow_prepare_ci_problems.duplicates | join(', ') }}.
-  run_once: true
-
-- name: Show the selected hosts and CI mapping
-  ansible.builtin.debug:
-    msg:
-      limit: "{{ ansible_limit | string | trim }}"
-      host_count: "{{ ansible_play_hosts_all | length }}"
-      ci_map: "{{ snow_prepare_ci_map }}"
-      preview_only: "{{ snow_prepare_preview_only | bool }}"
   run_once: true
 
 - name: Stop after preview without calling ServiceNow
@@ -161,8 +270,9 @@
       vars:
         snow_operation: create
         snow_allow_create: true
-        snow_short_description: "{{ patch_change_short_description }}"
-        snow_description: "{{ patch_change_description }}"
+        snow_short_description: "{{ patch_change_short_description | trim }}"
+        snow_description: "{{ patch_change_description | trim }}"
+        snow_change_fields: "{{ snow_prepare_change_fields }}"
 
     - name: Keep the new change identity before any later operation
       ansible.builtin.set_fact:

@@ -18,8 +18,15 @@
     snow_prepare_expect_sys_ids:
       - aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       - bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-    patch_change_short_description: ""
-    patch_change_description: ""
+    patch_change_short_description: Windows patch wave
+    patch_change_description: Patch the selected wave.
+    patch_change_primary_ci_host: w1a
+    patch_change_fields:
+      assignment_group: Patch Operations
+      category: Software
+      justification: Scheduled patch window.
+      implementation_plan: Apply approved Windows updates.
+      backout_plan: Uninstall the updates from this wave.
     snow_prepare_existing_change_number: ""
     snow_prepare_allow_create: true
     snow_prepare_preview_only: true
@@ -84,8 +91,15 @@
           - _prepare_create.when[1] == "snow_prepare_existing_change_number | default('') | string | length == 0"
           - _prepare_link.when == 'not (snow_prepare_preview_only | bool)'
           - _prepare_create.block[0].vars.snow_operation == 'create'
+          - _prepare_create.block[0].vars.snow_change_fields is search('snow_prepare_change_fields')
           - _prepare_read.block[0].vars.snow_operation == 'read'
           - _prepare_link.block[0].vars.snow_ci_sys_ids is search('snow_prepare_ci_map')
+          - >-
+            (_prepare_tasks | selectattr('name', 'equalto', 'Check change inputs') | list | first).when
+            is search('length == 0')
+          - >-
+            (_prepare_tasks | selectattr('name', 'equalto', 'Reject incomplete change inputs') | list | first).when[0]
+            == 'not (snow_prepare_preview_only | bool)'
         fail_msg: Preview, create, and resume must stay mutually exclusive and run once.
       run_once: true
 
@@ -125,6 +139,11 @@
           - (snow_prepare_ci_map | map(attribute='hostname') | list) == (snow_prepare_expect_hosts | sort)
           - (snow_prepare_ci_map | map(attribute='sys_id') | list) == snow_prepare_expect_sys_ids
           - (snow_prepare_ci_map | length) == (ansible_play_hosts_all | length)
+          - snow_prepare_input_check.missing | length == 0
+          - snow_prepare_input_check.primary_sys_id == (hostvars[patch_change_primary_ci_host | trim]['sys_id'] | trim)
+          - snow_prepare_change_fields.cmdb_ci == snow_prepare_input_check.primary_sys_id
+          - snow_prepare_change_fields.cmdb_ci in (snow_prepare_ci_map | map(attribute='sys_id') | list)
+          - "'chg_model' not in snow_prepare_change_fields"
         fail_msg: >-
           Accepted Limit did not keep every selected sys_id.
           selected={{ ansible_play_hosts_all | sort }}

@@ -92,7 +92,13 @@ Change Request preparation uses that same Limit field.
 `connection: local` and reads `ansible_limit`. It does not read
 `patch_wave_name`. The hosts selected for the play must be the complete
 membership of `windows_wave_1` through `windows_wave_20`. Preview stays the
-default and does not call ServiceNow.
+default and does not call ServiceNow. Creation also requires
+`patch_change_short_description`, `patch_change_description`,
+`patch_change_primary_ci_host` from that wave, and `patch_change_fields`
+(`assignment_group` or `assignment_group_id`, `category`, `justification`,
+`implementation_plan`, `backout_plan`). The primary `cmdb_ci` comes from that
+host's inventory `sys_id`. Resume with an existing change number does not
+require those creation fields and does not open a second change.
 
 An approved Limit that intersects **zero** hosts never runs play tasks
 (including fail-closed asserts). Empty waves must be rejected by inventory or

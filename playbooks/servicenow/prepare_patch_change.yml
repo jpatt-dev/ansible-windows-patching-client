@@ -13,17 +13,35 @@
 #   snow_prepare_preview_only: true
 #   snow_prepare_allow_create: false
 #
-# Preview, Limit windows_wave_1:
+# Preview, Limit windows_wave_1. Preview prints field completeness and the
+# primary CI. It does not print implementation, backout, or justification text,
+# and it does not call ServiceNow.
 #   snow_prepare_preview_only: true
+#   patch_change_short_description: "Windows patching windows_wave_1"
+#   patch_change_description: "What is changing, in operator words."
+#   patch_change_primary_ci_host: "<one hostname from this wave>"
+#   patch_change_fields:
+#     assignment_group: "<ServiceNow group name, or use assignment_group_id>"
+#     category: "<client category>"
+#     justification: "<why this change is needed>"
+#     implementation_plan: "<how the wave will be patched>"
+#     backout_plan: "<how the wave will be backed out>"
 #
 # Create, after preview looks right. Limit windows_wave_1:
 #   snow_prepare_preview_only: false
 #   snow_prepare_allow_create: true
-#   patch_change_short_description: "Windows patching windows_wave_1"
-#   patch_change_description: "Affected CIs come from the CMDB inventory."
+#   plus the same short description, description, primary host, and fields.
+#
+# Do not put cmdb_ci, chg_model, type, state, or approval in
+# patch_change_fields. The primary cmdb_ci is the inventory sys_id of
+# patch_change_primary_ci_host. Create sends type normal. The installed
+# servicenow.itsm collection copies type into chg_model, and this playbook
+# still rejects an explicit model. Confirm that normal maps to the model
+# required by the client instance before AAP testing.
 #
 # Resume CI association for a change that already exists. This does not
-# create another change. Limit remains the same wave:
+# create another change and does not require the creation fields above.
+# Limit remains the same wave:
 #   snow_prepare_preview_only: false
 #   snow_prepare_existing_change_number: CHG0001234
 
@@ -34,6 +52,8 @@
   vars:
     patch_change_short_description: ""
     patch_change_description: ""
+    patch_change_primary_ci_host: ""
+    patch_change_fields: {}
     snow_prepare_existing_change_number: ""
     snow_prepare_allow_create: false
     snow_prepare_preview_only: true
