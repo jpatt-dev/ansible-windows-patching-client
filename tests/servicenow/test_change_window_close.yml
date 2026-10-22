@@ -1,0 +1,115 @@
+---
+# Change-window and parent-close decisions. No ServiceNow calls.
+
+- name: Hold remediation when the change window is not confirmed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_change_window_end: ""
+    snow_change_window_safety_margin_minutes: "30"
+  tasks:
+    - name: Evaluate a missing window end
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/snow_change_window_evaluate.yml"
+
+    - name: Confirm a missing window end blocks remediation
+      ansible.builtin.assert:
+        that:
+          - not (snow_change_window_configured | bool)
+          - snow_change_window_blocks_remediation | bool
+          - "'not confirmed' in snow_change_window_evaluation_error"
+          - snow_result is not defined
+          - not (snow_parent_change_closed | default(false) | bool)
+        fail_msg: A missing change-window end did not block remediation.
+
+- name: Allow remediation when the window end is still outside the margin
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_change_window_end: "2099-01-01T00:00:00Z"
+    snow_change_window_safety_margin_minutes: "30"
+  tasks:
+    - name: Evaluate a future window end
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/snow_change_window_evaluate.yml"
+
+    - name: Confirm the future window does not block remediation
+      ansible.builtin.assert:
+        that:
+          - snow_change_window_configured | bool
+          - not (snow_change_window_blocks_remediation | bool)
+          - snow_result is not defined
+        fail_msg: A future change window blocked remediation.
+
+- name: Hold remediation inside the safety margin
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_change_window_end: "2000-01-01T00:00:00Z"
+    snow_change_window_safety_margin_minutes: "15"
+  tasks:
+    - name: Evaluate an expired window end
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/snow_change_window_evaluate.yml"
+
+    - name: Confirm an expired window blocks remediation
+      ansible.builtin.assert:
+        that:
+          - snow_change_window_configured | bool
+          - snow_change_window_blocks_remediation | bool
+          - "'safety margin' in snow_change_window_evaluation_error"
+          - snow_result is not defined
+        fail_msg: An expired change window was allowed to start remediation.
+
+- name: Record parent closure as unconfirmed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG0010001
+    snow_change_close_enabled: true
+    snow_change_window_end: "2099-01-01T00:00:00Z"
+    snow_change_window_safety_margin_minutes: "30"
+    patch_workflow_report:
+      hosts:
+        - hostname: vm01
+          result: failed
+          reason: Install failed
+          reason_code: PATCH_INSTALL_FAILED
+          exempt: false
+    patch_report_files:
+      - /tmp/patch-report.json
+  tasks:
+    - name: Remember the report before closure
+      ansible.builtin.set_fact:
+        close_report_before: "{{ patch_workflow_report }}"
+        close_files_before: "{{ patch_report_files }}"
+
+    - name: Run parent closure preparation
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/snow_close_parent_change.yml"
+
+    - name: Read the closure task source
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../playbooks/windows/tasks/snow_close_parent_change.yml"
+      register: close_task_file
+
+    - name: Confirm the parent change was not reported closed
+      ansible.builtin.assert:
+        that:
+          - snow_patching_close_failed | bool
+          - not (snow_parent_change_closed | bool)
+          - not (snow_parent_change_close_request.confirmed_closed | bool)
+          - snow_parent_change_close_request.open_ctasks_allowed == 'unknown'
+          - not (snow_parent_change_close_request.api_implemented | bool)
+          - "'was not closed' in snow_patching_close_error"
+          - "'No close request was sent' in snow_patching_close_error"
+          - snow_result is not defined
+          - patch_workflow_report == close_report_before
+          - patch_report_files == close_files_before
+          - "close_task_text is not search('snow_operation: close')"
+          - "close_task_text is not search('tasks/close.yml')"
+        fail_msg: >-
+          Parent closure was reported or the patch report changed.
+          error={{ snow_patching_close_error | default('') }}
+      vars:
+        close_task_text: "{{ close_task_file.content | b64decode }}"

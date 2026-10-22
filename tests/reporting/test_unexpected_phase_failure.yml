@@ -1,0 +1,202 @@
+---
+# Unexpected precheck or final-health failures stay on that host.
+# The other hosts continue and the report still includes every host.
+
+- name: Seed three patch hosts
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add the wave
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        groups: unexpected_failure_wave
+        ansible_connection: local
+      loop:
+        - win-ok-1
+        - win-bad-2
+        - win-ok-3
+
+- name: Survive an unexpected precheck failure on the second host
+  hosts: unexpected_failure_wave
+  connection: local
+  gather_facts: false
+  serial: 1
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    failure_host: win-bad-2
+  tasks:
+    - name: Run precheck, failing only the second host
+      block:
+        - name: Complete precheck for an eligible host
+          ansible.builtin.debug:
+            msg: precheck complete
+          when: inventory_hostname != failure_host
+
+        - name: Reproduce a malformed health payload
+          ansible.builtin.fail:
+            msg: "Expecting value: line 1 column 1 (char 0) malformed JSON"
+          when: inventory_hostname == failure_host
+      rescue:
+        - name: Record the precheck failure
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_unexpected_failure.yml"
+          vars:
+            patch_unexpected_phase: precheck
+
+    - name: Mark only the failed host ineligible
+      ansible.builtin.set_fact:
+        patch_host_eligible: "{{ not (patch_lifecycle_failed | default(false) | bool) }}"
+        windows_connectivity_ok: true
+        precheck_status: "{{ 'failed' if (patch_lifecycle_failed | default(false) | bool) else 'passed' }}"
+        pending_reboot: false
+        windows_critical_services_ok: true
+        windows_disk_low: false
+        windows_update_search:
+          found_update_count: 0
+
+    - name: Build the per-host report
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+
+- name: Aggregate the precheck failure wave
+  hosts: unexpected_failure_wave
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+  tasks:
+    - name: Aggregate the wave
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+
+    - name: Assert the second host failed and the others were reported
+      ansible.builtin.assert:
+        that:
+          - (patch_workflow_report.hosts | length) == 3
+          - (patch_workflow_report.status_counts.failed | default(0) | int) == 1
+          - hostvars['win-bad-2'].patch_lifecycle_failed | bool
+          - "'malformed JSON' in hostvars['win-bad-2'].patch_lifecycle_failed_message"
+          - hostvars['win-bad-2'].patch_final_result.result == 'failed'
+          - hostvars['win-bad-2'].patch_final_result.reason_code == 'PRECHECK_FAILED'
+          - not (hostvars['win-ok-1'].patch_lifecycle_failed | default(false) | bool)
+          - not (hostvars['win-ok-3'].patch_lifecycle_failed | default(false) | bool)
+          - hostvars['win-ok-1'].patch_final_result.result != 'failed'
+          - hostvars['win-ok-3'].patch_final_result.result != 'failed'
+        fail_msg: >-
+          Unexpected precheck failure did not stay on win-bad-2.
+          results={{ patch_workflow_report.hosts | map(attribute='result') | list }}
+      run_once: true
+
+- name: Seed a final-health failure wave
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add the health wave
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        groups: unexpected_health_wave
+        ansible_connection: local
+      loop:
+        - win-h-1
+        - win-h-2
+        - win-h-3
+
+- name: Survive an unexpected final health failure on the second host
+  hosts: unexpected_health_wave
+  connection: local
+  gather_facts: false
+  serial: 1
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    failure_host: win-h-2
+  tasks:
+    - name: Run final health collection, failing only the second host
+      block:
+        - name: Collect health for an eligible host
+          ansible.builtin.debug:
+            msg: health complete
+          when: inventory_hostname != failure_host
+
+        - name: Reproduce a malformed final health payload
+          ansible.builtin.fail:
+            msg: "Expecting value: line 1 column 1 (char 0) malformed JSON"
+          when: inventory_hostname == failure_host
+      rescue:
+        - name: Record the final health failure
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_unexpected_failure.yml"
+          vars:
+            patch_unexpected_phase: final health collection
+
+    - name: Keep successful hosts eligible
+      ansible.builtin.set_fact:
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        precheck_status: passed
+        pending_reboot: false
+        windows_critical_services_ok: true
+        windows_disk_low: false
+        windows_update_search:
+          found_update_count: 0
+
+    - name: Build the per-host report after health collection
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+
+- name: Aggregate the final health failure wave
+  hosts: unexpected_health_wave
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+  tasks:
+    - name: Aggregate the health wave
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+
+    - name: Assert the health failure stayed on the second host
+      ansible.builtin.assert:
+        that:
+          - (patch_workflow_report.hosts | length) == 3
+          - (patch_workflow_report.status_counts.failed | default(0) | int) == 1
+          - hostvars['win-h-2'].patch_final_result.result == 'failed'
+          - hostvars['win-h-2'].patch_final_result.reason_code == 'HEALTH_COLLECTION_FAILED'
+          - "'final health collection failed' in hostvars['win-h-2'].patch_lifecycle_failed_message"
+          - hostvars['win-h-1'].patch_final_result.result != 'failed'
+          - hostvars['win-h-3'].patch_final_result.result != 'failed'
+        fail_msg: Unexpected final health failure stopped reporting for the wave.
+      run_once: true
+
+- name: Confirm full patch rescues unexpected precheck and health failures
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Read the production playbook
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../playbooks/windows/full_patch.yml"
+      register: full_patch_file
+
+    - name: Assert both phases keep a failed host in the play
+      ansible.builtin.assert:
+        that:
+          - "'record_unexpected_failure.yml' in full_patch_text"
+          - "'patch_unexpected_phase: precheck' in full_patch_text"
+          - "'patch_unexpected_phase: final health collection' in full_patch_text"
+          - "'patch_unexpected_phase: pending reboot refresh' in full_patch_text"
+          - "'patch_unexpected_phase: final report construction' in full_patch_text"
+          - "'tasks/fallback_final_result.yml' in full_patch_text"
+          - "'(patch_workflow_report.status_counts.failed | default(0) | int) == 0' in full_patch_text"
+        fail_msg: full_patch.yml no longer rescues unexpected precheck or health failures.
+      vars:
+        full_patch_text: "{{ full_patch_file.content | b64decode }}"

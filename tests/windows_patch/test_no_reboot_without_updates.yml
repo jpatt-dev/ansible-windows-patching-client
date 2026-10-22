@@ -1,0 +1,275 @@
+---
+# No reboot or installation unless discovery confirms applicable updates.
+# Does not call Windows modules or ServiceNow.
+
+- name: Evaluate update-count reboot gates
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    update_cases:
+      - name: zero_always
+        search_ok: true
+        updates_found: 0
+        updates_installed: 0
+        post_required: false
+        present: false
+        justified: false
+      - name: zero_if_required
+        search_ok: true
+        updates_found: 0
+        updates_installed: 0
+        post_required: false
+        present: false
+        justified: false
+      - name: zero_pending
+        search_ok: true
+        updates_found: 0
+        updates_installed: 0
+        post_required: false
+        present: false
+        justified: false
+      - name: updates_installed
+        search_ok: true
+        updates_found: 3
+        updates_installed: 3
+        post_required: false
+        present: true
+        justified: true
+      - name: updates_available_not_installed
+        search_ok: true
+        updates_found: 3
+        updates_installed: 0
+        post_required: false
+        present: true
+        justified: false
+      - name: install_requested_reboot
+        search_ok: true
+        updates_found: 2
+        updates_installed: 0
+        post_required: true
+        present: true
+        justified: true
+      - name: failed_discovery
+        search_ok: false
+        updates_found: not_available
+        updates_installed: 0
+        post_required: false
+        present: false
+        justified: false
+      - name: unknown_count
+        search_ok: true
+        updates_found: not_available
+        updates_installed: 0
+        post_required: false
+        present: false
+        justified: false
+  tasks:
+    - name: Apply one discovery result
+      ansible.builtin.include_tasks: tasks/update_gate_case.yml
+      vars:
+        update_case: "{{ item }}"
+      loop: "{{ update_cases }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+- name: Evaluate reboot permission after a confirmed update count
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    reboot_cases:
+      - name: updates_always_authorized
+        applicable: true
+        install_authorized: true
+        exception: false
+        reboot_enabled: true
+        phase_enabled: true
+        inventory_allowed: true
+        mode: always
+        pending: false
+        should_run: true
+      - name: install_unauthorized_reboot_authorized
+        applicable: true
+        install_authorized: false
+        exception: false
+        reboot_enabled: true
+        phase_enabled: true
+        inventory_allowed: true
+        mode: always
+        pending: true
+        should_run: false
+      - name: install_authorized_reboot_unauthorized
+        applicable: true
+        install_authorized: true
+        exception: false
+        reboot_enabled: true
+        phase_enabled: false
+        inventory_allowed: true
+        mode: always
+        pending: true
+        should_run: false
+      - name: updates_if_required_not_pending
+        applicable: true
+        exception: false
+        reboot_enabled: true
+        phase_enabled: true
+        inventory_allowed: true
+        mode: if_required
+        pending: false
+        should_run: false
+      - name: updates_if_required_pending
+        applicable: true
+        exception: false
+        reboot_enabled: true
+        phase_enabled: true
+        inventory_allowed: true
+        mode: if_required
+        pending: true
+        should_run: true
+      - name: reboot_exemption
+        applicable: true
+        exception: true
+        reboot_enabled: true
+        phase_enabled: true
+        inventory_allowed: true
+        mode: always
+        pending: true
+        should_run: false
+      - name: zero_always_pending
+        applicable: false
+        exception: false
+        reboot_enabled: true
+        phase_enabled: true
+        inventory_allowed: true
+        mode: always
+        pending: true
+        should_run: false
+      - name: failed_count
+        applicable: false
+        exception: false
+        reboot_enabled: true
+        phase_enabled: true
+        inventory_allowed: true
+        mode: always
+        pending: false
+        should_run: false
+  tasks:
+    - name: Derive windows_reboot_should_run from the reboot gate
+      ansible.builtin.include_tasks: tasks/reboot_gate_case.yml
+      vars:
+        reboot_case: "{{ item }}"
+      loop: "{{ reboot_cases }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+- name: Confirm the production lifecycle order and fail-closed discovery
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Read the production lifecycle files
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      loop:
+        - "{{ playbook_dir }}/../../playbooks/windows/full_patch.yml"
+        - "{{ playbook_dir }}/../../roles/windows_patch/tasks/reboot.yml"
+        - "{{ playbook_dir }}/../../roles/windows_patch/tasks/apply.yml"
+        - "{{ playbook_dir }}/../../roles/windows_patch/tasks/discovery.yml"
+      register: lifecycle_files
+
+    - name: Assert discovery precedes reboot and zero updates cannot reboot
+      ansible.builtin.assert:
+        that:
+          - full_patch.find('Run Windows discovery') < full_patch.find('Run Windows pre-patch reboot')
+          - full_patch.find('Run Windows pre-patch reboot') < full_patch.find('Run Windows apply')
+          - full_patch.find('Run Windows apply') < full_patch.find('Run Windows post-patch reboot')
+          - "'patch_apply_enabled | default(false) | bool' in full_patch"
+          - "'windows_post_patch_reboot_justified | bool' in full_patch"
+          - "'patch_apply_enabled | default(false) | bool' in reboot_text"
+          - "'when: windows_reboot_should_run | bool' in reboot_text"
+          - "'windows_applicable_updates_present | default(false) | bool' in reboot_text"
+          - "'not (patching_exception_active | default(false) | bool)' in reboot_text"
+          - reboot_text is search("windows_reboot_mode_effective == 'always'")
+          - "'no_applicable_updates' in reboot_text"
+          - "'reboot: false' in apply_text"
+          - "'windows_apply_failed | default(false) | bool' in apply_text"
+          - "'not (windows_update_search_ok | default(false) | bool)' in discovery_text"
+        fail_msg: Lifecycle no longer discovers updates before reboot or fail-closed.
+      vars:
+        full_patch: "{{ lifecycle_files.results[0].content | b64decode }}"
+        reboot_text: "{{ lifecycle_files.results[1].content | b64decode }}"
+        apply_text: "{{ lifecycle_files.results[2].content | b64decode }}"
+        discovery_text: "{{ lifecycle_files.results[3].content | b64decode }}"
+
+- name: Seed zero-update reporting hosts
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add a fully patched host with a pending reboot
+      ansible.builtin.add_host:
+        name: win-zero-pending
+        groups: zero_update_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        precheck_status: passed
+        pending_reboot: true
+        windows_critical_services_ok: true
+        windows_disk_low: false
+        windows_update_search_ok: true
+        updates_found: 0
+        windows_update_search:
+          found_update_count: 0
+          failed: false
+          skipped: false
+        expected_result: degraded
+        expected_reason_code: PENDING_REBOOT
+
+    - name: Add a fully patched host with no pending reboot
+      ansible.builtin.add_host:
+        name: win-zero-clear
+        groups: zero_update_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        precheck_status: passed
+        pending_reboot: false
+        windows_critical_services_ok: true
+        windows_disk_low: false
+        windows_update_search_ok: true
+        updates_found: 0
+        windows_update_search:
+          found_update_count: 0
+          failed: false
+          skipped: false
+        expected_result: already_compliant
+        expected_reason_code: NO_APPLICABLE_UPDATES
+
+- name: Report zero-update hosts without a reboot
+  hosts: zero_update_hosts
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+  tasks:
+    - name: Build the final report
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+
+    - name: Assert the pending condition is reported and no reboot was performed
+      ansible.builtin.assert:
+        that:
+          - patch_final_result.result == expected_result
+          - patch_final_result.reason_code == expected_reason_code
+          - not (patch_final_result.patched | bool)
+          - (patch_final_result.pre_patch_reboot_performed | string) != 'true'
+          - (patch_final_result.post_patch_reboot_performed | string) != 'true'
+        fail_msg: >-
+          {{ inventory_hostname }} result={{ patch_final_result.result }}
+          reason_code={{ patch_final_result.reason_code }}
+          pre={{ patch_final_result.pre_patch_reboot_performed }}
+          post={{ patch_final_result.post_patch_reboot_performed }}

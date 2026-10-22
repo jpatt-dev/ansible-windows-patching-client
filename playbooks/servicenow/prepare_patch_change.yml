@@ -44,6 +44,14 @@
 # Limit remains the same wave:
 #   snow_prepare_preview_only: false
 #   snow_prepare_existing_change_number: CHG0001234
+#
+# Standard Change template instantiation is a separate path. It is off.
+# snow_prepare_standard_change and snow_standard_change_template_id are
+# administrator settings, not survey inputs. An existing change number still
+# wins: this play reads that change and does not instantiate a template.
+# Turning the switch on does not call the normal change create operation.
+# Until the ServiceNow team supplies the template API, the task fails before
+# any ServiceNow call. See docs/operations.md.
 
 - name: Prepare the ServiceNow change for the AAP Limit wave
   hosts: windows_hosts
@@ -57,6 +65,8 @@
     snow_prepare_existing_change_number: ""
     snow_prepare_allow_create: false
     snow_prepare_preview_only: true
+    snow_prepare_standard_change: false
+    snow_standard_change_template_id: ""
     snow_prepare_supported_waves:
       - windows_wave_1
       - windows_wave_2

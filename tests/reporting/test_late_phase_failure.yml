@@ -1,0 +1,176 @@
+---
+# Pending-reboot refresh and final report construction stay on the failed host.
+# Later hosts continue and the aggregate still includes every host.
+
+- name: Seed a pending-reboot refresh wave
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add the refresh wave
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        groups: pending_refresh_wave
+        ansible_connection: local
+      loop:
+        - win-r-1
+        - win-r-2
+        - win-r-3
+
+- name: Survive an unexpected pending reboot refresh failure
+  hosts: pending_refresh_wave
+  connection: local
+  gather_facts: false
+  serial: 1
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    failure_host: win-r-2
+  tasks:
+    - name: Refresh pending reboot, failing only the second host
+      block:
+        - name: Refresh an eligible host
+          ansible.builtin.debug:
+            msg: pending reboot refresh complete
+          when: inventory_hostname != failure_host
+
+        - name: Reproduce a pending reboot probe failure
+          ansible.builtin.fail:
+            msg: "registry probe failed: unexpected token"
+          when: inventory_hostname == failure_host
+      rescue:
+        - name: Record the pending reboot refresh failure
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_unexpected_failure.yml"
+          vars:
+            patch_unexpected_phase: pending reboot refresh
+
+    - name: Keep the host facts needed for the final report
+      ansible.builtin.set_fact:
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        precheck_status: passed
+        pending_reboot: false
+        windows_critical_services_ok: true
+        windows_disk_low: false
+        windows_update_search:
+          found_update_count: 0
+
+    - name: Build the per-host report after the refresh
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+
+- name: Aggregate the pending reboot refresh wave
+  hosts: pending_refresh_wave
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+  tasks:
+    - name: Aggregate the refresh wave
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+
+    - name: Assert the refresh failure stayed on the second host
+      ansible.builtin.assert:
+        that:
+          - (patch_workflow_report.hosts | length) == 3
+          - (patch_workflow_report.status_counts.failed | default(0) | int) == 1
+          - hostvars['win-r-2'].patch_lifecycle_failed | bool
+          - "'registry probe failed' in hostvars['win-r-2'].patch_lifecycle_failed_message"
+          - hostvars['win-r-2'].patch_final_result.result == 'failed'
+          - hostvars['win-r-2'].patch_final_result.reason_code != 'PATCH_INSTALL_FAILED'
+          - "'registry probe failed' in hostvars['win-r-2'].patch_final_result.reason"
+          - hostvars['win-r-1'].patch_final_result.result != 'failed'
+          - hostvars['win-r-3'].patch_final_result.result != 'failed'
+        fail_msg: Pending reboot refresh failure did not stay on win-r-2.
+      run_once: true
+
+- name: Seed a final report construction wave
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add the report wave
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        groups: final_build_wave
+        ansible_connection: local
+      loop:
+        - win-f-1
+        - win-f-2
+        - win-f-3
+
+- name: Survive an unexpected final report construction failure
+  hosts: final_build_wave
+  connection: local
+  gather_facts: false
+  serial: 1
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    failure_host: win-f-2
+  tasks:
+    - name: Give every host the facts a successful report expects
+      ansible.builtin.set_fact:
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        precheck_status: passed
+        pending_reboot: false
+        windows_critical_services_ok: true
+        windows_disk_low: false
+        windows_update_search:
+          found_update_count: 0
+
+    - name: Build the report, failing only the second host before a result exists
+      block:
+        - name: Build the report for an eligible host
+          when: inventory_hostname != failure_host
+          ansible.builtin.include_role:
+            name: patch_report
+            tasks_from: final_build.yml
+
+        - name: Reproduce a final report construction failure
+          ansible.builtin.fail:
+            msg: "template error while building patch_final_result"
+          when: inventory_hostname == failure_host
+      rescue:
+        - name: Record the final report construction failure
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_unexpected_failure.yml"
+          vars:
+            patch_unexpected_phase: final report construction
+
+        - name: Publish the fallback result
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/fallback_final_result.yml"
+
+- name: Aggregate the final report construction wave
+  hosts: final_build_wave
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+  tasks:
+    - name: Aggregate the report wave
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+
+    - name: Assert the fallback keeps the failed host in the report
+      ansible.builtin.assert:
+        that:
+          - (patch_workflow_report.hosts | length) == 3
+          - (patch_workflow_report.status_counts.failed | default(0) | int) >= 1
+          - hostvars['win-f-2'].patch_lifecycle_failed | bool
+          - "'template error while building patch_final_result' in hostvars['win-f-2'].patch_lifecycle_failed_message"
+          - hostvars['win-f-2'].patch_final_result.result == 'failed'
+          - hostvars['win-f-2'].patch_final_result.reason_code == 'UNKNOWN_RESULT'
+          - "'template error' in hostvars['win-f-2'].patch_final_result.reason"
+          - hostvars['win-f-1'].patch_final_result.result != 'failed'
+          - hostvars['win-f-3'].patch_final_result.result != 'failed'
+        fail_msg: Final report construction failure omitted win-f-2 or stopped the wave.
+      run_once: true

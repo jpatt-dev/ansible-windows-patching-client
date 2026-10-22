@@ -1,0 +1,37 @@
+---
+# Future Standard Change instantiation. This file does not call ServiceNow.
+# Replace the final fail task with the verified template operation. Do not
+# route that operation through snow_operation create. The normal change
+# module sends type normal and is a different API.
+
+- name: Reject standard change creation without a template identifier
+  when: snow_standard_change_template_id | default('') | string | trim | length == 0
+  ansible.builtin.fail:
+    msg: >-
+      snow_prepare_standard_change is true but
+      snow_standard_change_template_id is empty. No ServiceNow request
+      was sent. The normal change create operation was not used.
+      Set the identifier of the approved Standard Change template, or
+      set snow_prepare_standard_change=false. An existing
+      change_ticket_id does not use this task.
+
+- name: Record the standard change request without calling ServiceNow
+  ansible.builtin.set_fact:
+    snow_standard_change_request:
+      template_id: "{{ snow_standard_change_template_id | string | trim }}"
+      short_description: "{{ patch_change_short_description | default('') | string | trim }}"
+      description: "{{ patch_change_description | default('') | string | trim }}"
+      change_fields: "{{ snow_prepare_change_fields | default({}) }}"
+      primary_ci_host: "{{ patch_change_primary_ci_host | default('') | string | trim }}"
+      affected_ci_sys_ids: "{{ snow_prepare_ci_map | default([]) | map(attribute='sys_id') | list }}"
+      api_implemented: false
+  changed_when: false
+
+- name: Stop before an unverified standard change API
+  ansible.builtin.fail:
+    msg: >-
+      Standard change template
+      {{ snow_standard_change_template_id | string | trim }}
+      is selected, but this repository has no verified Standard Change
+      instantiation API. The normal change create operation was not used.
+      No ServiceNow request was sent.

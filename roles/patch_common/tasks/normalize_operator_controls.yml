@@ -44,6 +44,34 @@
   tags:
     - always
 
+- name: Reject remediation gates that do not match operator authorization
+  ansible.builtin.assert:
+    that:
+      - (patch_apply_enabled | bool) == (operator_authorize_patch_install | bool)
+      - (pre_patch_reboot_enabled | bool) == (operator_allow_pre_patch_reboot | bool)
+      - (post_patch_reboot_enabled | bool) == (operator_allow_post_patch_reboot | bool)
+      - >-
+        (reboot_enabled | bool)
+        == ((operator_allow_pre_patch_reboot | bool) or (operator_allow_post_patch_reboot | bool))
+      - >-
+        windows_patch_mode
+        == ('direct_win_updates' if (operator_authorize_patch_install | bool) else 'check_only')
+    fail_msg: >-
+      Internal remediation gates do not match operator authorization.
+      patch_apply_enabled={{ patch_apply_enabled | default('') }},
+      pre_patch_reboot_enabled={{ pre_patch_reboot_enabled | default('') }},
+      post_patch_reboot_enabled={{ post_patch_reboot_enabled | default('') }},
+      reboot_enabled={{ reboot_enabled | default('') }},
+      windows_patch_mode={{ windows_patch_mode | default('') }}.
+      Operator install={{ operator_authorize_patch_install | default(false) }},
+      pre-reboot={{ operator_allow_pre_patch_reboot | default(false) }},
+      post-reboot={{ operator_allow_post_patch_reboot | default(false) }}.
+      Do not supply the internal gate variables. Extra variables cannot
+      enable installation or reboot ahead of the operator controls.
+    quiet: true
+  tags:
+    - always
+
 - name: Report normalized operator controls
   ansible.builtin.debug:
     msg:

@@ -1,0 +1,86 @@
+---
+# Run every authorization case, including extra-var bypasses, in one playbook.
+# Rejected cases must exit non-zero with EXPECTED_AUTHORIZATION_REJECTION.
+# A rescued assertion is not a passing test.
+
+- name: Run authorization gate cases
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    authorization_cases:
+      - case: authorized_off
+        expect: pass
+        extra_args: []
+      - case: authorized_install
+        expect: pass
+        extra_args: []
+      - case: authorized_post
+        expect: pass
+        extra_args: []
+      - case: bypass_install
+        expect: reject
+        extra_args:
+          - -e
+          - patch_apply_enabled=true
+      - case: bypass_pre_reboot
+        expect: reject
+        extra_args:
+          - -e
+          - pre_patch_reboot_enabled=true
+      - case: bypass_post_reboot
+        expect: reject
+        extra_args:
+          - -e
+          - post_patch_reboot_enabled=true
+      - case: bypass_reboot
+        expect: reject
+        extra_args:
+          - -e
+          - reboot_enabled=true
+      - case: bypass_mode
+        expect: reject
+        extra_args:
+          - -e
+          - windows_patch_mode=direct_win_updates
+  tasks:
+    - name: Execute each authorization case with its extra variables
+      ansible.builtin.command:
+        argv: "{{ _authorization_argv }}"
+      vars:
+        _authorization_argv: >-
+          {{
+            [
+              'ansible-playbook',
+              playbook_dir ~ '/test_authorization_gate_case.yml',
+              '-e',
+              'gate_case=' ~ item.case
+            ] + item.extra_args
+          }}
+      environment:
+        ANSIBLE_ROLES_PATH: "{{ playbook_dir }}/../../roles"
+      loop: "{{ authorization_cases }}"
+      loop_control:
+        label: "{{ item.case }}"
+      register: authorization_runs
+      changed_when: false
+      failed_when: false
+
+    - name: Assert each case passed or failed as required
+      ansible.builtin.assert:
+        that:
+          - >-
+            (item.item.expect == 'pass' and item.rc == 0)
+            or (
+              item.item.expect == 'reject'
+              and item.rc != 0
+              and ('EXPECTED_AUTHORIZATION_REJECTION' in ((item.stdout | default('')) ~ (item.stderr | default(''))))
+            )
+        fail_msg: >-
+          Authorization case {{ item.item.case }} expected {{ item.item.expect }}
+          but rc={{ item.rc }}.
+          stdout={{ item.stdout | default('') }}
+          stderr={{ item.stderr | default('') }}
+      loop: "{{ authorization_runs.results }}"
+      loop_control:
+        label: "{{ item.item.case }}"

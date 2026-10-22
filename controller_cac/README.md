@@ -63,6 +63,9 @@ Do not copy question lists into `vars/`. Load those files at dispatch.
 | `snow_patching_update_cr_enabled` | `false` | `false` until credential and EE are ready | not set |
 | `snow_patching_attach_reports_enabled` | `false` | `false` until credential and EE are ready | not set |
 | `snow_patching_create_incidents_enabled` | `false` | `false` until caller, group, priority, credential, and EE are ready | not set |
+| `snow_patching_create_ctasks_enabled` | `false` | `false` until the Change Task API, assignment group, credential, and EE are ready | not set |
+| `snow_change_window_gate_enabled` | `false` | `false` until the validated change supplies its window end | not set |
+| `snow_change_close_enabled` | `false` | `false` until Standard Change closure with open Change Tasks is confirmed | not set |
 | `patch_require_maintenance_window` | `false` | `true` | `false` |
 
 UAT/PROD remediating hosts **fail closed** while `snow_shared_role` is empty.
@@ -116,7 +119,10 @@ See `tests/controller_cac/test_empty_wave_detection.yml`.
 - Administrators: may change PROD extra-vars (`snow_shared_role`, SMTP,
   `snow_enabled`, `snow_patching_update_cr_enabled`,
   `snow_patching_attach_reports_enabled`,
-  `snow_patching_create_incidents_enabled`) after change control. Leave
+  `snow_patching_create_incidents_enabled`,
+  `snow_patching_create_ctasks_enabled`,
+  `snow_change_window_gate_enabled`,
+  `snow_change_close_enabled`) after change control. Leave
   those switches false until the Windows Full Patch Job Template has the
   existing ServiceNow credential and an Execution Environment that contains
   `servicenow.itsm`. Incident creation also needs `snow_incident_caller`

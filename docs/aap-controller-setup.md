@@ -50,7 +50,8 @@ groups do not affect provider or gates.
 
 Inventory/group_vars may set `windows_pre_patch_reboot_mode` and
 `windows_post_patch_reboot_mode` (`if_required` default, or `always`).
-Do not put these on surveys.
+`always` does not reboot when discovery confirms zero applicable updates,
+or when the update count is failed or unknown. Do not put these on surveys.
 
 Optional inventory/group_vars `patch_location` is a generic location label for
 the final report (for example `Lexington Datacenter` or `Azure-East-US`). If

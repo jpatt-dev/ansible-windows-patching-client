@@ -1,0 +1,57 @@
+---
+# One authorization case. The runner supplies gate_case and any conflicting
+# extra variable. A rejected case fails with EXPECTED_AUTHORIZATION_REJECTION
+# after the rejection message is verified.
+
+- name: Check one remediation gate case
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    gate_case: authorized_off
+    operator_authorize_patch_install: "{{ gate_case == 'authorized_install' }}"
+    operator_allow_pre_patch_reboot: false
+    operator_allow_post_patch_reboot: "{{ gate_case == 'authorized_post' }}"
+  tasks:
+    - name: Apply operator controls
+      block:
+        - name: Include patch orchestration
+          ansible.builtin.include_role:
+            name: patch_common
+          vars:
+            patch_require_explicit_limit: false
+            patch_enforce_scoped_target: false
+      rescue:
+        - name: Record the gate rejection
+          ansible.builtin.set_fact:
+            gate_rejected: true
+            gate_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Confirm a matching authorization
+      when: gate_case in ['authorized_off', 'authorized_install', 'authorized_post']
+      ansible.builtin.assert:
+        that:
+          - not (gate_rejected | default(false) | bool)
+          - (patch_apply_enabled | bool) == (operator_authorize_patch_install | bool)
+          - (pre_patch_reboot_enabled | bool) == (operator_allow_pre_patch_reboot | bool)
+          - (post_patch_reboot_enabled | bool) == (operator_allow_post_patch_reboot | bool)
+          - (reboot_enabled | bool) == ((operator_allow_pre_patch_reboot | bool) or (operator_allow_post_patch_reboot | bool))
+          - >-
+            windows_patch_mode
+            == ('direct_win_updates' if (operator_authorize_patch_install | bool) else 'check_only')
+        fail_msg: Authorized operator input did not produce matching internal gates.
+
+    - name: Confirm a conflicting internal gate is rejected
+      when: gate_case is match('^bypass_')
+      ansible.builtin.assert:
+        that:
+          - gate_rejected | bool
+          - "'do not match operator authorization' in gate_error"
+        fail_msg: >-
+          Conflicting internal gate was not rejected.
+          error={{ gate_error | default('') }}
+
+    - name: Mark the expected authorization rejection
+      when: gate_case is match('^bypass_')
+      ansible.builtin.fail:
+        msg: EXPECTED_AUTHORIZATION_REJECTION

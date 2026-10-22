@@ -1,0 +1,57 @@
+---
+# One ServiceNow validation case. The runner supplies the extra variables.
+# A rejected case fails with EXPECTED_VALIDATION_REJECTION after the message
+# is verified.
+
+- name: Reject one pre-supplied ServiceNow validation result
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    validation_case: preset_ok
+    snow_phase: validate
+    snow_require_change_validation: true
+    snow_shared_role: patch_cycle_exception
+    change_ticket_id: CHG001234
+    operator_authorize_patch_install: true
+    patching_exception_active: false
+    patch_lifecycle_failed: false
+  tasks:
+    - name: Run CR validation
+      block:
+        - name: Include the change adapter
+          ansible.builtin.include_role:
+            name: servicenow_change
+
+        - name: Fail if validation was bypassed
+          ansible.builtin.fail:
+            msg: Pre-supplied ServiceNow validation was accepted.
+      rescue:
+        - name: Record the validation rejection
+          ansible.builtin.set_fact:
+            validation_rejected: true
+            validation_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Confirm the pre-set result did not authorize remediation
+      when: validation_case == 'preset_ok'
+      ansible.builtin.assert:
+        that:
+          - validation_rejected | bool
+          - "'cannot be supplied before ServiceNow' in validation_error"
+        fail_msg: >-
+          snow_change_validation_ok=true was not rejected before the shared role.
+          error={{ validation_error | default('') }}
+
+    - name: Confirm the validation gate cannot be forced off
+      when: validation_case == 'force_not_required'
+      ansible.builtin.assert:
+        that:
+          - validation_rejected | bool
+          - "'snow_change_validation_required' in validation_error"
+        fail_msg: >-
+          snow_change_validation_required=false bypassed CR validation.
+          error={{ validation_error | default('') }}
+
+    - name: Mark the expected validation rejection
+      ansible.builtin.fail:
+        msg: EXPECTED_VALIDATION_REJECTION

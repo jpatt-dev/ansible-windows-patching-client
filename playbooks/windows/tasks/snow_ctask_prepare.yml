@@ -1,0 +1,141 @@
+---
+# Build Change Task requests from the final report. Does not call ServiceNow.
+# Selects result failed or degraded. Skips success, already_compliant, exempt,
+# and any other result. Failed and degraded hosts share a batch. Order is
+# hostname only. At most five hosts per request. A second pass in the same
+# execution keeps the same correlation ids and does not append another copy.
+# There is no cmdb_ci field: one CI column cannot represent the batch.
+
+- name: Resolve the AAP job id for change task requests
+  ansible.builtin.set_fact:
+    snow_ctask_aap_job_id: >-
+      {{
+        tower_job_id | default(awx_job_id)
+        | default(patch_workflow_report.aap_job_id | default(''))
+        | string
+        | trim
+      }}
+    snow_ctask_parent_change: "{{ change_ticket_id | default('') | string | trim }}"
+    snow_ctask_group_name: "{{ snow_ctask_assignment_group | default('') | string | trim }}"
+  changed_when: false
+
+- name: Reject change task keys that cannot be queried safely
+  ansible.builtin.assert:
+    that:
+      - snow_ctask_parent_change is not search('\\^|\\r|\\n')
+      - snow_ctask_aap_job_id is not search('\\^|\\r|\\n')
+    fail_msg: >-
+      The parent change number and AAP job id cannot contain ^ or a line
+      break. No change task was created.
+    quiet: true
+
+- name: Select affected hosts and build change task batches
+  ansible.builtin.set_fact:
+    snow_ctask_request_rows: "{{ snow_ctask_request_rows_json | trim | from_json }}"
+  vars:
+    snow_ctask_request_rows_json: |
+      {% set selected = namespace(hosts=[]) %}
+      {% for host in patch_workflow_report.hosts | default([]) %}
+      {% set status = host.result | default('') | string %}
+      {% set exempt = (host.exempt | default(false) | bool) or (status == 'exempt') %}
+      {% if status in ['failed', 'degraded'] and not exempt %}
+      {% set kb = namespace(items=[]) %}
+      {% for raw in [host.updates_failed_kbs | default('not_available'), host.updates_installed_kbs | default('not_available')] %}
+      {% if raw is not string and raw is sequence %}
+      {% for article in raw %}
+      {% if article | string | trim not in ['', 'not_available'] %}
+      {% set kb.items = kb.items + [article | string | trim] %}
+      {% endif %}
+      {% endfor %}
+      {% elif raw | string | trim not in ['', 'not_available', 'None'] %}
+      {% set kb.items = kb.items + [raw | string | trim] %}
+      {% endif %}
+      {% endfor %}
+      {% set selected.hosts = selected.hosts + [{
+        'hostname': host.hostname | default(host.inventory_hostname | default(host.host | default(''))) | string,
+        'status': status,
+        'reason': host.reason | default('') | string,
+        'reason_code': host.reason_code | default('') | string,
+        'kb_articles': kb.items
+      }] %}
+      {% endif %}
+      {% endfor %}
+      {% set ordered = selected.hosts | sort(attribute='hostname') %}
+      {% set built = namespace(rows=[]) %}
+      {% for batch in ordered | batch(5) %}
+      {% set row = namespace(hosts=[]) %}
+      {% for host in batch %}
+      {% set row.hosts = row.hosts + [host] %}
+      {% endfor %}
+      {% set batch_number = loop.index %}
+      {% set correlation = 'aap-patch-ctask:' ~ snow_ctask_parent_change ~ ':' ~ snow_ctask_aap_job_id ~ ':' ~ (batch_number | string) %}
+      {% set detail = namespace(lines=[
+        'Parent change: ' ~ snow_ctask_parent_change,
+        'AAP job: ' ~ snow_ctask_aap_job_id,
+        'Assignment group: ' ~ snow_ctask_group_name,
+        'Affected hosts:'
+      ]) %}
+      {% for host in row.hosts %}
+      {% set kb_text = host.kb_articles | join(', ') if (host.kb_articles | length > 0) else 'not_available' %}
+      {% set detail.lines = detail.lines + ['- ' ~ host.hostname ~ ': ' ~ host.status ~ ': ' ~ host.reason ~ ' (' ~ host.reason_code ~ ') KB: ' ~ kb_text] %}
+      {% endfor %}
+      {% set built.rows = built.rows + [{
+        'batch_number': batch_number,
+        'parent_change_number': snow_ctask_parent_change,
+        'assignment_group': snow_ctask_group_name,
+        'aap_job_id': snow_ctask_aap_job_id,
+        'correlation_id': correlation,
+        'hosts': row.hosts,
+        'summary': 'Patch follow-up for ' ~ (row.hosts | length | string) ~ ' affected VM(s)',
+        'details': detail.lines | join('\n')
+      }] %}
+      {% endfor %}
+      {{ built.rows | to_json }}
+  changed_when: false
+
+- name: Keep change task requests already prepared in this execution
+  ansible.builtin.set_fact:
+    snow_ctask_new_requests: >-
+      {{
+        snow_ctask_request_rows
+        | rejectattr('correlation_id', 'in', snow_ctask_seen_correlation_ids | default([]))
+        | list
+      }}
+  changed_when: false
+
+- name: Append change task requests that this execution has not prepared
+  ansible.builtin.set_fact:
+    snow_ctask_requests: "{{ (snow_ctask_requests | default([])) + snow_ctask_new_requests }}"
+    snow_ctask_seen_correlation_ids: >-
+      {{
+        (snow_ctask_seen_correlation_ids | default([]))
+        + (snow_ctask_new_requests | map(attribute='correlation_id') | list)
+      }}
+  changed_when: false
+
+- name: Require each change task batch to stay within five hosts
+  ansible.builtin.assert:
+    that:
+      - item.hosts | length > 0
+      - item.hosts | length <= 5
+      - "'cmdb_ci' not in item"
+      - item.correlation_id | length > 0
+      - item.parent_change_number == snow_ctask_parent_change
+      - item.aap_job_id == snow_ctask_aap_job_id
+      - item.hosts | map(attribute='status') | difference(['failed', 'degraded']) | length == 0
+    fail_msg: >-
+      Change task batch {{ item.batch_number | default('') }} is empty,
+      larger than five hosts, or missing its parent change and job id.
+    quiet: true
+  loop: "{{ snow_ctask_requests }}"
+  loop_control:
+    label: "{{ item.correlation_id | default('change-task') }}"
+
+- name: Require unique change task correlation ids
+  ansible.builtin.assert:
+    that:
+      - >-
+        snow_ctask_requests | map(attribute='correlation_id') | unique | list
+        | length == (snow_ctask_requests | length)
+    fail_msg: Duplicate change task correlation ids were prepared.
+    quiet: true

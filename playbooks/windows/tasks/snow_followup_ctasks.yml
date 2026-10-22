@@ -1,0 +1,80 @@
+---
+# Runs from Full Patch play 2 after the report files exist.
+# Disabled unless snow_patching_create_ctasks_enabled is true.
+# The batch file prepares requests. This file does not call ServiceNow.
+# Replace the unverified-API task once the Change Task contract is known.
+# Parent-change closure is a separate task and does not run from here.
+
+- name: Skip change tasks when creation is disabled
+  when: not (snow_patching_create_ctasks_enabled | default(false) | bool)
+  ansible.builtin.debug:
+    msg: >-
+      Change task creation is disabled
+      (snow_patching_create_ctasks_enabled=false).
+  changed_when: false
+
+- name: Prepare change tasks for affected hosts
+  when: snow_patching_create_ctasks_enabled | default(false) | bool
+  block:
+    - name: Build change task batches from the final report
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir | default(playbook_dir ~ '/tasks') }}/snow_ctask_prepare.yml"
+
+    - name: Record that no affected hosts need a change task
+      when: snow_ctask_requests | default([]) | length == 0
+      ansible.builtin.set_fact:
+        snow_patching_ctask_failed: false
+        snow_patching_ctask_error: ""
+      changed_when: false
+
+    - name: Require the parent change and assignment group
+      when: snow_ctask_requests | default([]) | length > 0
+      ansible.builtin.assert:
+        that:
+          - change_ticket_id | default('') | string | trim | length > 0
+          - snow_ctask_assignment_group | default('') | string | trim | length > 0
+        fail_msg: >-
+          snow_patching_create_ctasks_enabled found affected hosts, but
+          change_ticket_id or snow_ctask_assignment_group is empty.
+          No change task was created. The patch report was not changed.
+        quiet: true
+
+    - name: Stop before an unverified change task API
+      when: snow_ctask_requests | default([]) | length > 0
+      ansible.builtin.fail:
+        msg: >-
+          Prepared {{ snow_ctask_requests | length }} change task request(s)
+          for {{ change_ticket_id | default('') }} with at most five affected
+          hosts each. The ServiceNow Change Task API is not implemented.
+          No change task was created. The patch report was not changed.
+
+    - name: Publish the change task preparation result
+      ansible.builtin.set_stats:
+        data:
+          snow_patching_ctask_failed: false
+          snow_ctask_request_count: "{{ snow_ctask_requests | default([]) | length }}"
+        per_host: false
+
+  rescue:
+    - name: Record the change task integration failure
+      ansible.builtin.set_fact:
+        snow_patching_ctask_failed: true
+        snow_patching_ctask_error: >-
+          {{ ansible_failed_result.msg | default('Change task creation failed') }}
+        snow_ctask_requests: "{{ snow_ctask_requests | default([]) }}"
+      changed_when: false
+
+    - name: Publish the change task integration failure
+      ansible.builtin.set_stats:
+        data:
+          snow_patching_ctask_failed: true
+          snow_patching_ctask_error: "{{ snow_patching_ctask_error }}"
+          snow_ctask_request_count: "{{ snow_ctask_requests | default([]) | length }}"
+        per_host: false
+
+    - name: Report the change task integration failure
+      ansible.builtin.debug:
+        msg: >-
+          Change task creation failed
+          ({{ snow_patching_ctask_error }}).
+          patch_workflow_report and the report files were left in place.
+      changed_when: false

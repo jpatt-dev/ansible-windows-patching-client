@@ -1,0 +1,62 @@
+---
+# Interpret the approved change-window end. Does not call ServiceNow and does
+# not guess the ServiceNow column. snow_change_window_end must already be the
+# UTC timestamp from the validated change. The safety margin is minutes before
+# that end. Facts are stored on localhost so every host in the wave can read them.
+
+- name: Record a change window that is not ready to evaluate
+  when: >-
+    (snow_change_window_end | default('') | string | trim) is not match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$')
+    or (snow_change_window_safety_margin_minutes | default('') | string) is not match('^[0-9]+$')
+  ansible.builtin.set_fact:
+    snow_change_window_configured: false
+    snow_change_window_blocks_remediation: true
+    snow_change_window_evaluation_error: >-
+      snow_change_window_end must be the approved ServiceNow window end in
+      UTC YYYY-MM-DDTHH:MM:SSZ, and snow_change_window_safety_margin_minutes
+      must be a whole number of minutes. The ServiceNow field for that end
+      time is not confirmed. No ServiceNow request was sent.
+  delegate_to: localhost
+  delegate_facts: true
+  changed_when: false
+
+- name: Compare the clock with the window end minus the safety margin
+  when:
+    - snow_change_window_end | default('') | string | trim is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$')
+    - snow_change_window_safety_margin_minutes | default('') | string is match('^[0-9]+$')
+  ansible.builtin.set_fact:
+    snow_change_window_configured: true
+    snow_change_window_end_epoch: >-
+      {{ (snow_change_window_end | trim | to_datetime('%Y-%m-%dT%H:%M:%SZ')).timestamp() | int }}
+    snow_change_window_now_epoch: "{{ now(utc=true).timestamp() | int }}"
+    snow_change_window_margin_seconds: "{{ (snow_change_window_safety_margin_minutes | int) * 60 }}"
+  delegate_to: localhost
+  delegate_facts: true
+  changed_when: false
+
+- name: Record whether completion work still fits inside the safety margin
+  when: hostvars['localhost']['snow_change_window_configured'] | default(false) | bool
+  ansible.builtin.set_fact:
+    snow_change_window_blocks_remediation: >-
+      {{
+        (hostvars['localhost']['snow_change_window_now_epoch'] | int)
+        >= (
+          (hostvars['localhost']['snow_change_window_end_epoch'] | int)
+          - (hostvars['localhost']['snow_change_window_margin_seconds'] | int)
+        )
+      }}
+    snow_change_window_evaluation_error: >-
+      {{
+        'The approved change window cannot cover the remaining completion work inside the safety margin.'
+        if (
+          (hostvars['localhost']['snow_change_window_now_epoch'] | int)
+          >= (
+            (hostvars['localhost']['snow_change_window_end_epoch'] | int)
+            - (hostvars['localhost']['snow_change_window_margin_seconds'] | int)
+          )
+        )
+        else ''
+      }}
+  delegate_to: localhost
+  delegate_facts: true
+  changed_when: false

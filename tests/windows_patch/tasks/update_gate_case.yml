@@ -1,0 +1,20 @@
+---
+- name: Confirm this discovery result
+  ansible.builtin.include_role:
+    name: windows_patch
+    tasks_from: confirm_applicable_updates.yml
+  vars:
+    windows_update_search_ok: "{{ update_case.search_ok }}"
+    updates_found: "{{ update_case.updates_found }}"
+    updates_installed: "{{ update_case.updates_installed }}"
+    post_patch_reboot_required: "{{ update_case.post_required }}"
+
+- name: Assert this discovery result does not reboot without a confirmed count
+  ansible.builtin.assert:
+    that:
+      - (windows_applicable_updates_present | bool) == (update_case.present | bool)
+      - (windows_post_patch_reboot_justified | bool) == (update_case.justified | bool)
+    fail_msg: >-
+      {{ update_case.name }} present={{ windows_applicable_updates_present }}
+      justified={{ windows_post_patch_reboot_justified }},
+      expected {{ update_case.present }}/{{ update_case.justified }}

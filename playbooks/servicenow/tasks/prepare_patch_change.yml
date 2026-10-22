@@ -258,10 +258,19 @@
     quiet: true
   run_once: true
 
+- name: Instantiate the standard change template when that path is selected
+  when:
+    - not (snow_prepare_preview_only | bool)
+    - snow_prepare_existing_change_number | default('') | string | length == 0
+    - snow_prepare_standard_change | default(false) | bool
+  ansible.builtin.include_tasks: create_standard_change.yml
+  run_once: true
+
 - name: Create the change request
   when:
     - not (snow_prepare_preview_only | bool)
     - snow_prepare_existing_change_number | default('') | string | length == 0
+    - not (snow_prepare_standard_change | default(false) | bool)
   run_once: true
   block:
     - name: Open one normal change

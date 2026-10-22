@@ -8,8 +8,8 @@ complete lifecycle in one AAP Job Template.
 ```
 Precheck
 → eligibility
-→ Pre-Reboot
 → Discovery
+→ Pre-Reboot
 → Apply
 → Post-Reboot
 → Postcheck
@@ -22,20 +22,27 @@ Precheck
    job on blocked/failed status; those hosts are marked ineligible.
 2. **Eligibility** — `passed` and `warning` continue. `blocked`, `failed`,
    missing, and unknown skip remediation and remain available for reporting.
-3. **Pre-Reboot** — Reboots when this phase's inventory reboot mode and every
+3. **Discovery** — Search-only update discovery against WSUS. Never installs.
+   A failed search or an unknown count stops remediation before any reboot.
+4. **Pre-Reboot** — Runs only after discovery confirms one or more applicable
+   updates. It then reboots when this phase's inventory reboot mode and every
    reboot control pass. `if_required` (default) reboots only when Windows reports
    pending reboot. `always` reboots when those safety gates pass even if pending
-   reboot is false.
-4. **Discovery** — Search-only update discovery against WSUS. Never installs.
-5. **Apply** — Installs only when `operator_authorize_patch_install` is true and
+   reboot is false. Zero applicable updates skip this reboot, including `always`,
+   and an already pending reboot is left in place and reported.
+5. **Apply** — Runs only when discovery confirmed applicable updates. Installs
+   only when `operator_authorize_patch_install` is true and
    in-job readiness gates pass. `win_updates` always uses `reboot: false`. The
    install task uses ansible-core `timeout` (`windows_apply_timeout`, default
    7200 seconds) on Linux AAP controllers (ansible-core 2.16 TaskExecutor,
    SIGALRM). There is no automatic Apply retry and no async/poll. If the
    module does not return `installed_update_count`, the report keeps
    `not_available` rather than `0`.
-6. **Post-Reboot** — Same reboot rules as the pre-patch phase (`if_required` or
-   `always`), with its own operator flag.
+6. **Post-Reboot** — Runs only when this operation installed updates or the
+   install requested a reboot. It then uses the same reboot rules as the
+   pre-patch phase (`if_required` or `always`), with its own operator flag.
+   An installation failure still stops the remaining lifecycle after the
+   failure is recorded.
 7. **Postcheck** — Read-only validation after apply/reboot.
 8. **Per-host final report / ITSM update** — Builds `patch_final_result` from
    preserved phase history and current host facts. `patched` is true only when
@@ -72,7 +79,7 @@ Inventories and credentials remain external references.
 | Inventory | Hosts, groups, reboot policy, exceptions, optional `patch_location`, CMDB `sys_id` / `patch_environment`, WinRM |
 | Limit | Patch wave / launch population (`patch_wave_name`) |
 | Survey | Per-run authorization, maintenance window, change display number |
-| Job Template extra-vars / RBAC | `snow_require_change_validation`, `snow_enabled`, `snow_shared_role`, `snow_patching_update_cr_enabled`, `snow_patching_attach_reports_enabled`, `snow_patching_create_incidents_enabled`, `snow_incident_caller`, `snow_incident_assignment_group`, `snow_incident_priority`, `patch_require_maintenance_window` |
+| Job Template extra-vars / RBAC | `snow_require_change_validation`, `snow_enabled`, `snow_shared_role`, `snow_patching_update_cr_enabled`, `snow_patching_attach_reports_enabled`, `snow_patching_create_incidents_enabled`, `snow_patching_create_ctasks_enabled`, `snow_ctask_assignment_group`, `snow_change_window_gate_enabled`, `snow_change_window_end`, `snow_change_window_safety_margin_minutes`, `snow_change_close_enabled`, `snow_prepare_standard_change`, `snow_standard_change_template_id`, `snow_incident_caller`, `snow_incident_assignment_group`, `snow_incident_priority`, `patch_require_maintenance_window` |
 | Credential | Windows and external-service secrets |
 
 ## Targeting
@@ -99,6 +106,28 @@ default and does not call ServiceNow. Creation also requires
 `implementation_plan`, `backout_plan`). The primary `cmdb_ci` comes from that
 host's inventory `sys_id`. Resume with an existing change number does not
 require those creation fields and does not open a second change.
+
+Standard Change creation from an approved template is off
+(`snow_prepare_standard_change: false`). It is not a survey field and it does
+not use the normal change create operation. `change_ticket_id` on Full Patch,
+and `snow_prepare_existing_change_number` on preparation, still refer to a
+change that already exists. Turning the switch on with an empty
+`snow_standard_change_template_id` fails before any ServiceNow call. A
+template id alone also stops before a call: the instantiation API is not in
+this repository. Per-host change validation is unchanged.
+
+The ServiceNow team still needs to provide, before template creation can be
+activated:
+
+- The approved template identifier and whether it is a sys_id or a name
+- The API operation that instantiates that template (it is not the normal
+  change create used today)
+- Which fields the template already fills, and which this job must still send
+- How affected CIs are associated on the new Standard Change
+- The change state and approval result immediately after instantiation
+- Confirmation that the response includes the change number and sys_id
+
+Until those are confirmed, leave `snow_prepare_standard_change` false.
 
 An approved Limit that intersects **zero** hosts never runs play tasks
 (including fail-closed asserts). Empty waves must be rejected by inventory or
@@ -144,12 +173,13 @@ authorize reboot.
 
 ## Reboots
 
-A reboot runs only when all of the following are true:
+A reboot runs only when patch installation is authorized, discovery confirmed at
+least one applicable update, and all of the following are true:
 
-- This phase's inventory reboot mode is `always`, or Windows reports a pending
-  reboot (`if_required`, default)
 - The operator authorized that phase (`operator_allow_pre_patch_reboot` or
   `operator_allow_post_patch_reboot`)
+- This phase's inventory reboot mode is `always`, or Windows reports a pending
+  reboot (`if_required`, default)
 - Inventory `patching_reboot_allowed` is true
 - The host is not under a patch-cycle exception
 - When `patch_require_maintenance_window` is true, the maintenance window is
@@ -322,6 +352,57 @@ Optional SMTP still runs. When creation is enabled, any recorded incident
 failure fails the AAP job. Review incidents in ServiceNow by the correlation
 id or the incident number in the job's `snow_patching_incident_results`
 artifact. `patch_workflow_report` is not rewritten.
+
+Change Tasks for affected VMs are off
+(`snow_patching_create_ctasks_enabled: false`). That switch and
+`snow_ctask_assignment_group` are administrator extra-vars, not survey
+fields. After the JSON, CSV, and Markdown reports are written, an enabled
+job selects `patch_workflow_report` hosts whose `result` is `failed` or
+`degraded`, excluding `success`, `already_compliant`, `exempt`, and hosts
+with `exempt: true`. Failed and degraded hosts are sorted by hostname only
+and grouped at most five per request. They are not grouped by status, reason,
+environment, location, or application. Each request records the parent
+`change_ticket_id`, the assignment group, hostname, status, reason, KB
+articles from `updates_failed_kbs` and `updates_installed_kbs` when those
+report fields have them, and the AAP job id. The correlation id is
+`aap-patch-ctask:<change number>:<AAP job id>:<batch>`. Repeating that
+preparation in the same execution does not add a second copy. No Change Task
+API call is implemented, and one `cmdb_ci` value is not used for the batch.
+A failure leaves the report files in place, still allows optional SMTP, and
+fails the AAP job.
+
+Parent Standard Change closure is off (`snow_change_close_enabled: false`).
+The intended order is patch, finalize the report, prepare Change Tasks,
+attach or reference that report, then close the parent before the approved
+window ends. Report files are written before Change Tasks because the tasks
+read the report. The existing report attachment stays in its current step.
+Closure is the last ServiceNow step and does not call the normal change
+close operation. `snow_change_window_end` is the UTC end time from the
+validated change. `snow_change_window_safety_margin_minutes` is how many
+minutes before that end the remaining completion work must still fit. Both
+are administrator settings. `snow_change_window_gate_enabled` defaults to
+false. When it is true and the end time is missing, or the clock is inside
+the safety margin, remediation does not start. The patch report is not
+rewritten by that gate. `snow_parent_change_closed` stays false unless a
+future confirmed ServiceNow response says the change is closed. A closure
+failure leaves the report in place and fails the AAP job.
+
+The ServiceNow team still needs to provide, before Change Task creation or
+parent closure can be activated:
+
+- The Change Task API and its required fields
+- The parent-change field that links each task to the Standard Change
+- How up to five configuration items are associated (not one `cmdb_ci`)
+- The idempotency field that can store `aap-patch-ctask:...`
+- The assignment group name or sys_id for `snow_ctask_assignment_group`
+- The task state to open, with no automatic closure of the task
+- The validated-change field that holds the approved window end
+- Whether a Standard Change can be closed while Change Tasks remain open
+- The close code, state, and API for that Standard Change closure
+
+Do not enable `snow_patching_create_ctasks_enabled`,
+`snow_change_window_gate_enabled`, or `snow_change_close_enabled` until those
+answers exist. Offline tests do not create or close ServiceNow records.
 
 Safe test: leave the switch false, or run
 `tests/servicenow/test_followup_incidents.yml`. That test does not write to

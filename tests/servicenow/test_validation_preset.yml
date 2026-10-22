@@ -1,0 +1,56 @@
+---
+# Run both validation extra-var rejections in one playbook.
+# Each child must exit non-zero with EXPECTED_VALIDATION_REJECTION.
+
+- name: Run ServiceNow validation preset cases
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    validation_cases:
+      - case: preset_ok
+        extra_args:
+          - -e
+          - validation_case=preset_ok
+          - -e
+          - snow_change_validation_ok=true
+      - case: force_not_required
+        extra_args:
+          - -e
+          - validation_case=force_not_required
+          - -e
+          - snow_change_validation_required=false
+  tasks:
+    - name: Execute each validation case with its extra variables
+      ansible.builtin.command:
+        argv: "{{ _validation_argv }}"
+      vars:
+        _validation_argv: >-
+          {{
+            [
+              'ansible-playbook',
+              playbook_dir ~ '/test_validation_preset_case.yml'
+            ] + item.extra_args
+          }}
+      environment:
+        ANSIBLE_ROLES_PATH: "{{ playbook_dir }}/../../roles"
+      loop: "{{ validation_cases }}"
+      loop_control:
+        label: "{{ item.case }}"
+      register: validation_runs
+      changed_when: false
+      failed_when: false
+
+    - name: Assert each validation case failed with the expected marker
+      ansible.builtin.assert:
+        that:
+          - item.rc != 0
+          - "'EXPECTED_VALIDATION_REJECTION' in ((item.stdout | default('')) ~ (item.stderr | default('')))"
+        fail_msg: >-
+          Validation case {{ item.item.case }} did not fail closed.
+          rc={{ item.rc }}
+          stdout={{ item.stdout | default('') }}
+          stderr={{ item.stderr | default('') }}
+      loop: "{{ validation_runs.results }}"
+      loop_control:
+        label: "{{ item.item.case }}"

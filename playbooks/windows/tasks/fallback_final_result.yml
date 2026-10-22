@@ -1,0 +1,55 @@
+---
+# Minimal patch_final_result when final_build does not finish.
+# Uses the same fields as the aggregate missing-host result, with result failed.
+
+- name: Publish a failed final result when report construction did not
+  when: patch_final_result is not defined
+  ansible.builtin.set_fact:
+    patch_final_result:
+      schema_version: "3"
+      hostname: "{{ inventory_hostname }}"
+      host: "{{ inventory_hostname }}"
+      inventory_hostname: "{{ inventory_hostname }}"
+      fqdn: ""
+      os_release: ""
+      os_version: not_available
+      os_build: ""
+      os_build_pre: not_available
+      location: "{{ patch_location | default('') }}"
+      snow_ci_sys_id: "{{ sys_id | default('') | string | trim }}"
+      patch_environment: "{{ patch_environment | default('') }}"
+      platform: windows
+      report_source: windows_full_patch
+      git_revision: not_available
+      result: failed
+      reason: "{{ patch_lifecycle_failed_message | default('final report construction failed') }}"
+      reason_code: UNKNOWN_RESULT
+      final_status: failed
+      patched: false
+      exempt: false
+      patching_exception_reference: ""
+      patching_exception_source: inventory
+      patching_exception_kind: none
+      patching_exception_status: none
+      patching_exception_expires_at: ""
+      patching_exception_patch_source: inventory
+      patching_exception_patch_reference: ""
+      patching_exception_patch_expires_at: ""
+      patching_reboot_exception_active: false
+      patching_reboot_exception_reference: ""
+      patching_reboot_exception_source: inventory
+      patching_reboot_exception_expires_at: ""
+      updates_installed: not_available
+      updates_remaining: not_available
+      updates_failed: not_available
+      updates_installed_kbs: not_available
+      updates_failed_kbs: not_available
+      patch_attempted: not_available
+      pre_patch_reboot_performed: not_available
+      post_patch_reboot_performed: not_available
+      pending_reboot: not_available
+      change_ticket_id: "{{ change_ticket_id | default('') }}"
+      patch_wave: "{{ patch_wave_name | default('unspecified') }}"
+      patch_wave_name: "{{ patch_wave_name | default('unspecified') }}"
+      manual_followup_required: true
+  changed_when: false

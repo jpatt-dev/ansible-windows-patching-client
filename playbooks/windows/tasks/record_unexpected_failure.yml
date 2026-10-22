@@ -1,0 +1,19 @@
+---
+# Used from full_patch rescues. Keeps the host in the play for reporting.
+
+- name: Record unexpected phase failure without ending the host
+  ansible.builtin.set_fact:
+    patch_lifecycle_failed: true
+    patch_lifecycle_failed_message: >-
+      {{ patch_unexpected_phase | default('phase') }} failed:
+      {{ ansible_failed_result.msg | default('unexpected Windows patch phase failure') }}
+  changed_when: false
+
+- name: Report unexpected phase failure for later host reporting
+  ansible.builtin.debug:
+    msg: >-
+      {{ patch_lifecycle_failed_message }}
+      on {{ inventory_hostname }}.
+      Remaining work for this phase was not run.
+      Final reporting will continue.
+  changed_when: false

@@ -1,0 +1,200 @@
+---
+# Reporting reason codes for closed windows and non-install failures.
+# Result status stays failed or blocked so CTask selection is unchanged.
+
+- name: Seed classification hosts
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add an authorized host blocked by an expired maintenance window
+      ansible.builtin.add_host:
+        name: win-window-blocked
+        groups: reason_code_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        patch_apply_enabled: true
+        operator_authorize_patch_install: true
+        windows_connectivity_ok: true
+        precheck_status: passed
+        pending_reboot: false
+        maintenance_window_status: outside
+        windows_critical_services_ok: true
+        windows_disk_low: false
+        windows_update_search:
+          found_update_count: 2
+        expected_result: blocked
+        expected_reason_code: WINDOW_CLOSED
+
+    - name: Add an authorized host failed by maintenance-window enforcement
+      ansible.builtin.add_host:
+        name: win-window-failed
+        groups: reason_code_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        patch_apply_enabled: true
+        operator_authorize_patch_install: true
+        patch_lifecycle_failed: true
+        patch_lifecycle_failed_message: >-
+          Maintenance window enforcement failed (status=outside).
+        windows_connectivity_ok: true
+        precheck_status: passed
+        pending_reboot: false
+        maintenance_window_status: outside
+        windows_critical_services_ok: true
+        windows_disk_low: false
+        windows_update_search:
+          found_update_count: 2
+        patch_phase_reboot_pre:
+          win-window-failed:
+            reboot_performed: false
+            reboot_skipped_reason: reboot_not_required
+        expected_result: failed
+        expected_reason_code: WINDOW_CLOSED
+
+    - name: Add an authorized host blocked by the change-window gate
+      ansible.builtin.add_host:
+        name: win-change-window
+        groups: reason_code_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        patch_apply_enabled: true
+        operator_authorize_patch_install: true
+        snow_change_window_blocks_remediation: true
+        windows_connectivity_ok: true
+        precheck_status: passed
+        pending_reboot: false
+        windows_critical_services_ok: true
+        windows_disk_low: false
+        windows_update_search:
+          found_update_count: 2
+        expected_result: blocked
+        expected_reason_code: WINDOW_CLOSED
+
+    - name: Add a host that was not authorized to install
+      ansible.builtin.add_host:
+        name: win-not-authorized
+        groups: reason_code_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        patch_apply_enabled: false
+        operator_authorize_patch_install: false
+        windows_connectivity_ok: true
+        precheck_status: passed
+        pending_reboot: false
+        maintenance_window_status: outside
+        windows_critical_services_ok: true
+        windows_disk_low: false
+        windows_update_search:
+          found_update_count: 2
+        expected_result: blocked
+        expected_reason_code: INSTALL_NOT_AUTHORIZED
+
+    - name: Add a precheck crash
+      ansible.builtin.add_host:
+        name: win-precheck-crash
+        groups: reason_code_hosts
+        ansible_connection: local
+        patch_host_eligible: false
+        patch_lifecycle_failed: true
+        patch_lifecycle_failed_message: "precheck failed: malformed JSON"
+        windows_connectivity_ok: true
+        precheck_status: failed
+        pending_reboot: false
+        windows_update_search:
+          found_update_count: 0
+        expected_result: failed
+        expected_reason_code: PRECHECK_FAILED
+
+    - name: Add a final health collection crash
+      ansible.builtin.add_host:
+        name: win-health-crash
+        groups: reason_code_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        patch_lifecycle_failed: true
+        patch_lifecycle_failed_message: "final health collection failed: malformed JSON"
+        windows_connectivity_ok: true
+        precheck_status: passed
+        pending_reboot: false
+        windows_critical_services_ok: true
+        windows_disk_low: false
+        windows_update_search:
+          found_update_count: 0
+        expected_result: failed
+        expected_reason_code: HEALTH_COLLECTION_FAILED
+
+    - name: Add an unsupported OS lifecycle failure
+      ansible.builtin.add_host:
+        name: win-unsupported-os
+        groups: reason_code_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        patch_lifecycle_failed: true
+        patch_lifecycle_failed_message: No supported patch policy for this OS
+        windows_os_policy_supported: false
+        windows_connectivity_ok: true
+        precheck_status: passed
+        pending_reboot: false
+        windows_critical_services_ok: true
+        windows_disk_low: false
+        windows_update_search:
+          found_update_count: 1
+        expected_result: failed
+        expected_reason_code: UNSUPPORTED_OS
+
+    - name: Add a real installation failure
+      ansible.builtin.add_host:
+        name: win-install-still-failed
+        groups: reason_code_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        patch_apply_enabled: true
+        operator_authorize_patch_install: true
+        windows_connectivity_ok: true
+        precheck_status: passed
+        pending_reboot: false
+        windows_critical_services_ok: true
+        windows_disk_low: false
+        windows_update_search:
+          found_update_count: 3
+        patch_phase_apply:
+          win-install-still-failed:
+            patch_attempted: true
+            updates_installed: 0
+            updates_failed: 3
+            patch_status: failed
+        expected_result: failed
+        expected_reason_code: PATCH_INSTALL_FAILED
+
+- name: Classify the reason-code hosts
+  hosts: reason_code_hosts
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+  tasks:
+    - name: Build the per-host report
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+
+    - name: Assert result status and reason code
+      ansible.builtin.assert:
+        that:
+          - patch_final_result.result == expected_result
+          - patch_final_result.reason_code == expected_reason_code
+        fail_msg: >-
+          {{ inventory_hostname }} classified as
+          result={{ patch_final_result.result }}
+          reason_code={{ patch_final_result.reason_code }}
+          reason={{ patch_final_result.reason | default('') }},
+          expected {{ expected_result }}/{{ expected_reason_code }}
+
+    - name: Assert a closed window is named in the report
+      when: expected_reason_code == 'WINDOW_CLOSED'
+      ansible.builtin.assert:
+        that:
+          - "'Maintenance window is closed' in patch_final_result.reason"
+        fail_msg: Closed window was not identified in the final report.

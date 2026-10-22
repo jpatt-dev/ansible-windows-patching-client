@@ -1,0 +1,261 @@
+---
+# Change task batches come from the final report and do not call ServiceNow.
+
+- name: Check failed-host change task batches
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG0010001
+    snow_ctask_assignment_group: Windows Patch Follow-up
+    tower_job_id: "4242"
+    snow_patching_tasks_dir: "{{ playbook_dir }}/../../playbooks/windows/tasks"
+    ctask_decoys:
+      - hostname: keep-success
+        result: success
+        reason: Updates installed
+        reason_code: SUCCESS
+        exempt: false
+      - hostname: keep-exempt
+        result: exempt
+        reason: Exempt from patching
+        reason_code: EXEMPT
+        exempt: true
+      - hostname: keep-compliant
+        result: already_compliant
+        reason: No applicable updates
+        reason_code: ALREADY_COMPLIANT
+        exempt: false
+      - hostname: keep-failed-exempt
+        result: failed
+        reason: Exempted host
+        reason_code: PATCH_INSTALL_FAILED
+        exempt: true
+    ctask_cases:
+      - name: zero
+        count: 0
+        batches: 0
+        sizes: []
+      - name: one
+        count: 1
+        batches: 1
+        sizes: [1]
+      - name: five
+        count: 5
+        batches: 1
+        sizes: [5]
+      - name: six
+        count: 6
+        batches: 2
+        sizes: [5, 1]
+      - name: twelve
+        count: 12
+        batches: 3
+        sizes: [5, 5, 2]
+      - name: twentyfive
+        count: 25
+        batches: 5
+        sizes: [5, 5, 5, 5, 5]
+  tasks:
+    - name: Prepare one batch case
+      ansible.builtin.include_tasks: tasks/ctask_batch_case.yml
+      loop: "{{ ctask_cases }}"
+      loop_control:
+        loop_var: ctask_case
+        label: "{{ ctask_case.name }}"
+
+    - name: Reset preparation for the order and retry checks
+      ansible.builtin.set_fact:
+        snow_ctask_requests: []
+        snow_ctask_seen_correlation_ids: []
+        patch_workflow_report:
+          hosts:
+            - hostname: vm03
+              result: failed
+              reason: Third
+              reason_code: PATCH_INSTALL_FAILED
+              exempt: false
+            - hostname: vm01
+              result: failed
+              reason: First
+              reason_code: PATCH_INSTALL_FAILED
+              exempt: false
+            - hostname: vm02
+              result: degraded
+              reason: Second
+              reason_code: POSTCHECK_UNHEALTHY
+              exempt: false
+              updates_failed_kbs:
+                - KB5001234
+              updates_installed_kbs: not_available
+            - hostname: vm-ok
+              result: success
+              reason: Patched
+              reason_code: SUCCESS
+              exempt: false
+
+    - name: Prepare the ordered batches once
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_ctask_prepare.yml"
+
+    - name: Remember the first preparation
+      ansible.builtin.set_fact:
+        ctask_first_ids: "{{ snow_ctask_requests | map(attribute='correlation_id') | list }}"
+        ctask_first_names: "{{ snow_ctask_requests[0].hosts | map(attribute='hostname') | list }}"
+
+    - name: Prepare the same execution again
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_ctask_prepare.yml"
+
+    - name: Confirm order is stable and the retry adds nothing
+      ansible.builtin.assert:
+        that:
+          - snow_ctask_requests | length == 1
+          - ctask_first_names == ['vm01', 'vm02', 'vm03']
+          - snow_ctask_requests[0].hosts | map(attribute='status') | list == ['failed', 'degraded', 'failed']
+          - snow_ctask_requests | map(attribute='correlation_id') | list == ctask_first_ids
+          - snow_ctask_seen_correlation_ids | unique | list | length == 1
+          - "'AAP job: 4242' in snow_ctask_requests[0].details"
+          - "'Parent change: CHG0010001' in snow_ctask_requests[0].details"
+          - "'vm01: failed: First' in snow_ctask_requests[0].details"
+          - "'vm02: degraded: Second' in snow_ctask_requests[0].details"
+          - "'KB5001234' in snow_ctask_requests[0].details"
+          - "'vm-ok' not in ctask_first_names"
+        fail_msg: Change task preparation was not deterministic or created a duplicate.
+
+- name: Keep the report when change task submission cannot run
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG0010001
+    snow_ctask_assignment_group: Windows Patch Follow-up
+    tower_job_id: "4242"
+    snow_patching_create_ctasks_enabled: true
+    snow_patching_tasks_dir: "{{ playbook_dir }}/../../playbooks/windows/tasks"
+    patch_workflow_report:
+      hosts:
+        - hostname: vm01
+          result: failed
+          reason: Install failed
+          reason_code: PATCH_INSTALL_FAILED
+          exempt: false
+        - hostname: vm02
+          result: failed
+          reason: Reboot failed
+          reason_code: REBOOT_FAILED
+          exempt: false
+        - hostname: vm03
+          result: failed
+          reason: Health failed
+          reason_code: POSTCHECK_UNHEALTHY
+          exempt: false
+        - hostname: vm04
+          result: already_compliant
+          reason: No applicable updates
+          reason_code: ALREADY_COMPLIANT
+          exempt: false
+      status_counts:
+        failed: 3
+    patch_report_files:
+      - /tmp/patch-report.json
+      - /tmp/patch-report.csv
+      - /tmp/patch-report.md
+  tasks:
+    - name: Start this integration attempt from the current report
+      ansible.builtin.set_fact:
+        snow_ctask_requests: []
+        snow_ctask_seen_correlation_ids: []
+        snow_patching_ctask_failed: false
+        patch_workflow_report:
+          hosts:
+            - hostname: vm01
+              result: failed
+              reason: Install failed
+              reason_code: PATCH_INSTALL_FAILED
+              exempt: false
+            - hostname: vm02
+              result: failed
+              reason: Reboot failed
+              reason_code: REBOOT_FAILED
+              exempt: false
+            - hostname: vm03
+              result: failed
+              reason: Health failed
+              reason_code: POSTCHECK_UNHEALTHY
+              exempt: false
+            - hostname: vm04
+              result: already_compliant
+              reason: No applicable updates
+              reason_code: ALREADY_COMPLIANT
+              exempt: false
+          status_counts:
+            failed: 3
+        patch_report_files:
+          - /tmp/patch-report.json
+          - /tmp/patch-report.csv
+          - /tmp/patch-report.md
+
+    - name: Remember the report before the integration attempt
+      ansible.builtin.set_fact:
+        ctask_report_before: "{{ patch_workflow_report }}"
+        ctask_files_before: "{{ patch_report_files }}"
+
+    - name: Run change task preparation with the API unavailable
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_ctasks.yml"
+
+    - name: Confirm the report survived the integration failure
+      ansible.builtin.assert:
+        that:
+          - snow_patching_ctask_failed | bool
+          - "'No change task was created' in snow_patching_ctask_error"
+          - "'not implemented' in snow_patching_ctask_error"
+          - snow_result is not defined
+          - patch_workflow_report == ctask_report_before
+          - patch_report_files == ctask_files_before
+          - snow_ctask_requests | length == 1
+          - snow_ctask_requests[0].hosts | length == 3
+          - snow_ctask_requests[0].parent_change_number == 'CHG0010001'
+        fail_msg: >-
+          Change task failure changed the report or called ServiceNow.
+          error={{ snow_patching_ctask_error | default('') }}
+
+- name: Leave a job with no failed hosts unchanged
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG0010001
+    snow_ctask_assignment_group: Windows Patch Follow-up
+    tower_job_id: "4242"
+    snow_patching_create_ctasks_enabled: true
+    snow_patching_tasks_dir: "{{ playbook_dir }}/../../playbooks/windows/tasks"
+    patch_workflow_report:
+      hosts:
+        - hostname: vm01
+          result: already_compliant
+          reason: No applicable updates
+          reason_code: ALREADY_COMPLIANT
+          exempt: false
+  tasks:
+    - name: Start this empty failure set from the current report
+      ansible.builtin.set_fact:
+        snow_ctask_requests: []
+        snow_ctask_seen_correlation_ids: []
+        snow_patching_ctask_failed: false
+        patch_workflow_report:
+          hosts:
+            - hostname: vm01
+              result: already_compliant
+              reason: No applicable updates
+              reason_code: ALREADY_COMPLIANT
+              exempt: false
+
+    - name: Run change task preparation with nothing to submit
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_ctasks.yml"
+
+    - name: Confirm an empty failure set does not fail the integration
+      ansible.builtin.assert:
+        that:
+          - not (snow_patching_ctask_failed | bool)
+          - snow_ctask_requests | length == 0
+          - snow_result is not defined
+        fail_msg: Zero failed hosts was treated as a change task failure.

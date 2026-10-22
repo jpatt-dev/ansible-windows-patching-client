@@ -313,6 +313,27 @@
                 'unknown'
                 if (not (_rpt_eligible | bool))
                 else (
+                  'failed'
+                  if (
+                    (windows_os_policy_supported is defined)
+                    and not (windows_os_policy_supported | bool)
+                    and (
+                      patch_apply_enabled
+                      | default(operator_authorize_patch_install | default(false))
+                      | bool
+                    )
+                    and not (_rpt_attempted | bool)
+                    and not (_rpt_apply_failed | bool)
+                  )
+                  else (
+                    'blocked'
+                    if (
+                      (windows_os_policy_supported is defined)
+                      and not (windows_os_policy_supported | bool)
+                      and not (_rpt_attempted | bool)
+                      and not (_rpt_apply_failed | bool)
+                    )
+                    else (
                   'unknown'
                   if ((_rpt_patched | bool) and (not (_ua_postcheck_present | bool)))
                   else (
@@ -364,12 +385,72 @@
                       )
                     )
                   )
+                    )
+                  )
                 )
               )
             )
           )
         )
       }}
+  changed_when: false
+  tags:
+    - report
+
+- name: Note specific failures that are not an installation result
+  ansible.builtin.set_fact:
+    _rpt_window_closed: >-
+      {{
+        (patch_apply_enabled | default(operator_authorize_patch_install | default(false)) | bool)
+        and not (_rpt_attempted | bool)
+        and not (_rpt_apply_failed | bool)
+        and (
+          ('Maintenance window enforcement failed' in (patch_lifecycle_failed_message | default('')))
+          or (hostvars['localhost']['snow_change_window_blocks_remediation'] | default(false) | bool)
+          or (snow_change_window_blocks_remediation | default(false) | bool)
+          or (
+            ((maintenance_window_status | default('')) in ['outside', 'malformed', 'invalid_order'])
+            and not ((patch_lifecycle_failed_message | default('')) is match('^precheck failed:'))
+            and not ((patch_lifecycle_failed_message | default('')) is match('^final health collection failed:'))
+            and not (
+              (patch_lifecycle_failed_message | default(''))
+              is match('^(pending reboot refresh failed:|final report construction failed:)')
+            )
+            and not (
+              (patch_lifecycle_failed | default(false) | bool)
+              and ((precheck_status | default('')) == 'failed')
+            )
+            and (
+              (windows_os_policy_supported is not defined)
+              or (windows_os_policy_supported | bool)
+            )
+          )
+        )
+      }}
+    _rpt_precheck_failed: >-
+      {{
+        (patch_lifecycle_failed_message | default('')) is match('^precheck failed:')
+        or (
+          (_rpt_lifecycle_failed | bool)
+          and ((_rpt_precheck_status | default('')) == 'failed')
+          and not (_rpt_attempted | bool)
+          and not (_rpt_apply_failed | bool)
+        )
+      }}
+    _rpt_health_failed: >-
+      {{ (patch_lifecycle_failed_message | default('')) is match('^final health collection failed:') }}
+    _rpt_unexpected_phase: >-
+      {{
+        (patch_lifecycle_failed_message | default('')) is match('^(pending reboot refresh failed:|final report construction failed:)')
+      }}
+    _rpt_unsupported_os: >-
+      {{
+        (windows_os_policy_supported is defined)
+        and not (windows_os_policy_supported | bool)
+        and not (_rpt_attempted | bool)
+        and not (_rpt_apply_failed | bool)
+      }}
+    _rpt_phase_message: "{{ patch_lifecycle_failed_message | default('') }}"
   changed_when: false
   tags:
     - report
@@ -384,6 +465,35 @@
           'UNREACHABLE'
           if (_rpt_result == 'failed' and (_rpt_unreachable | bool))
           else (
+            'WINDOW_CLOSED'
+            if (
+              (_rpt_window_closed | bool)
+              and (
+                (
+                  (_rpt_result == 'failed')
+                  and not (_rpt_precheck_failed | bool)
+                  and not (_rpt_health_failed | bool)
+                  and not (_rpt_unexpected_phase | bool)
+                )
+                or (
+                  (_rpt_result == 'blocked')
+                  and ((_rpt_precheck_status | default('')) not in ['blocked', 'failed'])
+                )
+              )
+            )
+            else (
+            'PRECHECK_FAILED'
+            if ((_rpt_result == 'failed') and (_rpt_precheck_failed | bool))
+            else (
+            'HEALTH_COLLECTION_FAILED'
+            if ((_rpt_result == 'failed') and (_rpt_health_failed | bool))
+            else (
+            'UNSUPPORTED_OS'
+            if ((_rpt_result == 'failed') and (_rpt_unsupported_os | bool))
+            else (
+            'UNKNOWN_RESULT'
+            if ((_rpt_result == 'failed') and (_rpt_unexpected_phase | bool))
+            else (
             'REBOOT_FAILED'
             if (
               (_rpt_result == 'failed')
@@ -410,8 +520,14 @@
                   and ((_rpt_precheck_status | default('')) in ['blocked', 'failed'])
                 )
                 else (
+                'UNSUPPORTED_OS'
+                if ((_rpt_result == 'blocked') and (_rpt_unsupported_os | bool))
+                else (
                   'INSTALL_NOT_AUTHORIZED'
-                  if (_rpt_result == 'blocked')
+                  if (
+                    (_rpt_result == 'blocked')
+                    and not (_rpt_window_closed | bool)
+                  )
                   else (
                     'POSTCHECK_DEGRADED'
                     if (_rpt_result == 'degraded' and (_rpt_postcheck_unhealthy | bool))
@@ -445,6 +561,12 @@
               )
             )
           )
+            )
+            )
+            )
+            )
+            )
+            )
         )
       }}
     _rpt_reason: >-
@@ -455,6 +577,35 @@
           'Host unreachable'
           if (_rpt_result == 'failed' and (_rpt_unreachable | bool))
           else (
+            'Maintenance window is closed'
+            if (
+              (_rpt_window_closed | bool)
+              and (
+                (
+                  (_rpt_result == 'failed')
+                  and not (_rpt_precheck_failed | bool)
+                  and not (_rpt_health_failed | bool)
+                  and not (_rpt_unexpected_phase | bool)
+                )
+                or (
+                  (_rpt_result == 'blocked')
+                  and ((_rpt_precheck_status | default('')) not in ['blocked', 'failed'])
+                )
+              )
+            )
+            else (
+            (_rpt_phase_message if (_rpt_phase_message | length > 0) else 'Precheck failed')
+            if ((_rpt_result == 'failed') and (_rpt_precheck_failed | bool))
+            else (
+            (_rpt_phase_message if (_rpt_phase_message | length > 0) else 'Final health collection failed')
+            if ((_rpt_result == 'failed') and (_rpt_health_failed | bool))
+            else (
+            'OS has no supported patch policy'
+            if ((_rpt_result == 'failed') and (_rpt_unsupported_os | bool))
+            else (
+            _rpt_phase_message
+            if ((_rpt_result == 'failed') and (_rpt_unexpected_phase | bool))
+            else (
             'Pre-patch reboot failed'
             if (
               (_rpt_result == 'failed')
@@ -481,8 +632,14 @@
                     and ((_rpt_precheck_status | default('')) in ['blocked', 'failed'])
                   )
                   else (
+                    'OS has no supported patch policy'
+                    if ((_rpt_result == 'blocked') and (_rpt_unsupported_os | bool))
+                    else (
                     'Patch installation was not authorized'
-                    if (_rpt_result == 'blocked')
+                    if (
+                      (_rpt_result == 'blocked')
+                      and not (_rpt_window_closed | bool)
+                    )
                     else (
                       'Postcheck detected unhealthy services'
                       if (_rpt_result == 'degraded' and (_rpt_postcheck_unhealthy | bool))
@@ -515,6 +672,12 @@
                   )
                 )
               )
+            )
+            )
+            )
+            )
+            )
+            )
             )
           )
         )

@@ -132,6 +132,10 @@ string. This repository does not integrate with vCenter.
 | `NO_APPLICABLE_UPDATES` | No applicable updates |
 | `PATCH_EXEMPTION` | Approved exemption |
 | `PRECHECK_BLOCKED` | Precheck blocked remediation |
+| `PRECHECK_FAILED` | Precheck failed before remediation |
+| `HEALTH_COLLECTION_FAILED` | Final health collection failed |
+| `UNSUPPORTED_OS` | OS has no supported patch policy. Authorized remediation is `failed`. Check-only execution is `blocked`. |
+| `WINDOW_CLOSED` | Maintenance window is closed |
 | `INSTALL_NOT_AUTHORIZED` | Patch installation was not authorized |
 | `PATCH_INSTALL_FAILED` | Update installation failed |
 | `REBOOT_FAILED` | Pre-patch or post-patch reboot failed |

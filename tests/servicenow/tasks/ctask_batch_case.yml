@@ -1,0 +1,49 @@
+---
+- name: Reset this batch case
+  ansible.builtin.set_fact:
+    snow_ctask_requests: []
+    snow_ctask_seen_correlation_ids: []
+    ctask_failed_hosts: []
+
+- name: Build the failed hosts for this case
+  ansible.builtin.set_fact:
+    ctask_failed_hosts: >-
+      {{
+        ctask_failed_hosts + [{
+          'hostname': 'vm%02d' | format(ctask_n | int),
+          'result': 'failed',
+          'reason': 'Update installation failed',
+          'reason_code': 'PATCH_INSTALL_FAILED',
+          'exempt': false
+        }]
+      }}
+  loop: "{{ range(1, (ctask_case.count | int) + 1) | list }}"
+  loop_control:
+    loop_var: ctask_n
+
+- name: Publish the final report for this case
+  ansible.builtin.set_fact:
+    patch_workflow_report:
+      hosts: "{{ ctask_failed_hosts + ctask_decoys }}"
+
+- name: Prepare change task batches
+  ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_ctask_prepare.yml"
+
+- name: Check this case
+  ansible.builtin.assert:
+    that:
+      - snow_ctask_requests | length == (ctask_case.batches | int)
+      - ctask_batch_sizes == ctask_case.sizes
+      - ctask_case.batches | int == 0 or ctask_batch_sizes | max <= 5
+      - ctask_selected_names | intersect(['keep-success', 'keep-exempt', 'keep-compliant', 'keep-failed-exempt']) | length == 0
+      - snow_result is not defined
+    fail_msg: >-
+      Case {{ ctask_case.name }} produced
+      {{ ctask_batch_sizes | default([]) }}.
+  vars:
+    ctask_batch_sizes: "{{ snow_ctask_requests | map(attribute='hosts') | map('length') | list }}"
+    ctask_selected_names: >-
+      {{
+        snow_ctask_requests | map(attribute='hosts') | flatten
+        | map(attribute='hostname') | list
+      }}

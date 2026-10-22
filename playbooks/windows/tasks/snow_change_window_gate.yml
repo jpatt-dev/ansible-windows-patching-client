@@ -1,0 +1,26 @@
+---
+# Play 1 gate. Off unless snow_change_window_gate_enabled is true.
+# When the window end is missing or the safety margin has been reached,
+# remediation is not started. This file does not install updates or reboot.
+
+- name: Evaluate the approved change window
+  ansible.builtin.include_tasks: snow_change_window_evaluate.yml
+
+- name: Remember the change-window gate result
+  ansible.builtin.set_fact:
+    snow_change_window_gate_failed: >-
+      {{ hostvars['localhost']['snow_change_window_blocks_remediation'] | default(true) | bool }}
+    snow_change_window_gate_error: >-
+      {{ hostvars['localhost']['snow_change_window_evaluation_error'] | default('') }}
+  delegate_to: localhost
+  delegate_facts: true
+  changed_when: false
+
+- name: Report when remediation will not start
+  when: hostvars['localhost']['snow_change_window_blocks_remediation'] | default(true) | bool
+  ansible.builtin.debug:
+    msg: >-
+      {{ hostvars['localhost']['snow_change_window_evaluation_error']
+      | default('Change window gate blocked remediation.') }}
+      No additional patching was started. Existing report data is unchanged.
+  changed_when: false

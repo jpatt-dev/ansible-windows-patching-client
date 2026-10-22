@@ -1,0 +1,36 @@
+---
+# Discovery must confirm a numeric applicable-update count before reboot or install.
+# Zero, failed, and unknown counts do not justify a reboot, including mode=always.
+# A post-patch reboot also requires a successful install or a reboot requested by that install.
+
+- name: Confirm discovery found applicable updates
+  ansible.builtin.set_fact:
+    windows_applicable_updates_present: >-
+      {{
+        (windows_update_search_ok | default(false) | bool)
+        and ((updates_found | default('not_available') | string) is match('^[0-9]+$'))
+        and ((updates_found | int(0)) > 0)
+      }}
+  changed_when: false
+  tags:
+    - discovery
+    - reboot
+    - apply
+
+- name: Confirm whether the patching operation justifies a post-patch reboot
+  ansible.builtin.set_fact:
+    windows_post_patch_reboot_justified: >-
+      {{
+        (windows_applicable_updates_present | default(false) | bool)
+        and (
+          (
+            ((updates_installed | default('not_available') | string) is match('^[0-9]+$'))
+            and ((updates_installed | int(0)) > 0)
+          )
+          or (post_patch_reboot_required | default(false) | bool)
+        )
+      }}
+  changed_when: false
+  tags:
+    - reboot
+    - apply

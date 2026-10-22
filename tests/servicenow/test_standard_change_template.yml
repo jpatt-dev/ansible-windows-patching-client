@@ -1,0 +1,92 @@
+---
+# Standard change template creation stays fail-closed until the API exists.
+
+- name: Reject a missing standard change template
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Request template creation without an identifier
+      block:
+        - name: Include the standard change task
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/create_standard_change.yml"
+          vars:
+            snow_prepare_standard_change: true
+            snow_standard_change_template_id: ""
+      rescue:
+        - name: Record the missing template failure
+          ansible.builtin.set_fact:
+            standard_change_failed: true
+            standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Confirm missing template configuration does not call ServiceNow
+      ansible.builtin.assert:
+        that:
+          - standard_change_failed | bool
+          - "'snow_standard_change_template_id is empty' in standard_change_error"
+          - "'No ServiceNow request' in standard_change_error"
+          - "'was not used' in standard_change_error"
+          - snow_standard_change_request is not defined
+          - snow_result is not defined
+        fail_msg: "Missing template id was not rejected. error={{ standard_change_error | default('') }}"
+
+- name: Stop when a template id exists but the API does not
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_prepare_standard_change: true
+    snow_standard_change_template_id: STD-APPROVED-TEMPLATE
+    patch_change_short_description: Windows patch wave
+    patch_change_description: Apply approved updates
+    patch_change_primary_ci_host: w1a
+    snow_prepare_change_fields:
+      assignment_group: Windows Patching
+      category: Software
+    snow_prepare_ci_map:
+      - hostname: w1a
+        sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      - hostname: w1b
+        sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  tasks:
+    - name: Request template creation with an identifier
+      block:
+        - name: Include the standard change task
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/create_standard_change.yml"
+      rescue:
+        - name: Record the unimplemented API failure
+          ansible.builtin.set_fact:
+            standard_change_failed: true
+            standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Read the preparation decision tasks
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/prepare_patch_change.yml"
+      register: prepare_tasks_file
+
+    - name: Confirm the template path is separate from normal create
+      ansible.builtin.assert:
+        that:
+          - standard_change_failed | bool
+          - "'no verified Standard Change' in standard_change_error"
+          - "'was not used' in standard_change_error"
+          - "'No ServiceNow request' in standard_change_error"
+          - snow_result is not defined
+          - snow_standard_change_request.template_id == 'STD-APPROVED-TEMPLATE'
+          - not (snow_standard_change_request.api_implemented | bool)
+          - "'cmdb_ci' not in snow_standard_change_request"
+          - "'chg_model' not in snow_standard_change_request"
+          - "'endpoint' not in snow_standard_change_request"
+          - snow_standard_change_request.affected_ci_sys_ids | length == 2
+          - snow_standard_change_request.primary_ci_host == 'w1a'
+          - prepare_task_text is search('create_standard_change.yml')
+          - >-
+            (prepare_tasks | selectattr('name', 'equalto', 'Create the change request') | list | first).when
+            is contains('not (snow_prepare_standard_change | default(false) | bool)')
+          - >-
+            (prepare_tasks | selectattr('name', 'equalto', 'Instantiate the standard change template when that path is selected') | list | first).when
+            is contains('snow_prepare_standard_change | default(false) | bool')
+        fail_msg: "Template creation called ServiceNow or reused normal create. error={{ standard_change_error | default('') }}"
+      vars:
+        prepare_task_text: "{{ prepare_tasks_file.content | b64decode }}"
+        prepare_tasks: "{{ prepare_task_text | from_yaml }}"

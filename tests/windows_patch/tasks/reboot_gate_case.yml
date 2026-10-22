@@ -1,0 +1,24 @@
+---
+- name: Derive windows_reboot_should_run for this case
+  ansible.builtin.set_fact:
+    windows_reboot_should_run: >-
+      {{
+        (reboot_case.applicable | bool)
+        and (reboot_case.install_authorized | default(true) | bool)
+        and not (reboot_case.exception | bool)
+        and (reboot_case.reboot_enabled | bool)
+        and (reboot_case.phase_enabled | bool)
+        and (reboot_case.inventory_allowed | bool)
+        and (
+          (reboot_case.mode == 'always')
+          or (reboot_case.pending | bool)
+        )
+      }}
+
+- name: Assert this reboot case
+  ansible.builtin.assert:
+    that:
+      - (windows_reboot_should_run | bool) == (reboot_case.should_run | bool)
+    fail_msg: >-
+      {{ reboot_case.name }} should_run={{ windows_reboot_should_run }},
+      expected {{ reboot_case.should_run }}

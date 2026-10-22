@@ -1,0 +1,83 @@
+---
+# Last ServiceNow step after reports and change-task preparation.
+# Does not call the change close operation. Closing a Standard Change that
+# still has open Change Tasks is not confirmed. snow_parent_change_closed
+# stays false until a future confirmed API returns success.
+
+- name: Skip parent change closure when it is disabled
+  when: not (snow_change_close_enabled | default(false) | bool)
+  ansible.builtin.debug:
+    msg: Parent change closure is disabled (snow_change_close_enabled=false).
+  changed_when: false
+
+- name: Prepare parent change closure without calling ServiceNow
+  when: snow_change_close_enabled | default(false) | bool
+  block:
+    - name: Reject a pre-supplied closed flag
+      ansible.builtin.assert:
+        that:
+          - not (snow_parent_change_closed | default(false) | bool)
+        fail_msg: >-
+          snow_parent_change_closed cannot be supplied before ServiceNow
+          confirms closure. The parent change was not closed.
+        quiet: true
+
+    - name: Evaluate the approved change window before closure
+      ansible.builtin.include_tasks: snow_change_window_evaluate.yml
+
+    - name: Record the closure request
+      ansible.builtin.set_fact:
+        snow_parent_change_close_request:
+          parent_change_number: "{{ change_ticket_id | default('') | string | trim }}"
+          window_end: "{{ snow_change_window_end | default('') | string | trim }}"
+          safety_margin_minutes: "{{ snow_change_window_safety_margin_minutes | default('') | string | trim }}"
+          open_ctasks_allowed: unknown
+          api_implemented: false
+          confirmed_closed: false
+        snow_parent_change_closed: false
+      changed_when: false
+
+    - name: Require the parent change number before closure
+      ansible.builtin.assert:
+        that:
+          - change_ticket_id | default('') | string | trim | length > 0
+        fail_msg: >-
+          snow_change_close_enabled requires change_ticket_id.
+          The parent change was not closed. The patch report was not changed.
+        quiet: true
+
+    - name: Stop before an unverified parent change closure
+      ansible.builtin.fail:
+        msg: >-
+          Parent change {{ change_ticket_id | default('') }} was not closed.
+          {{ hostvars['localhost']['snow_change_window_evaluation_error'] | default('') }}
+          ServiceNow has not confirmed that a Standard Change can be closed
+          while Change Tasks are open, and this repository has no verified
+          close call for that lifecycle. No close request was sent.
+          confirmed_closed=false.
+
+  rescue:
+    - name: Record the parent change closure failure
+      ansible.builtin.set_fact:
+        snow_patching_close_failed: true
+        snow_parent_change_closed: false
+        snow_patching_close_error: >-
+          {{ ansible_failed_result.msg | default('Parent change closure failed') }}
+      changed_when: false
+
+    - name: Publish the parent change closure failure
+      ansible.builtin.set_stats:
+        data:
+          snow_patching_close_failed: true
+          snow_parent_change_closed: false
+          snow_patching_close_error: "{{ snow_patching_close_error }}"
+        per_host: false
+
+    - name: Report the parent change closure failure
+      ansible.builtin.debug:
+        msg: >-
+          Parent change closure failed
+          ({{ snow_patching_close_error }}).
+          The change was not reported as closed.
+          patch_workflow_report and the report files were left in place.
+      changed_when: false

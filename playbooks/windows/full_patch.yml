@@ -19,6 +19,8 @@
   gather_facts: false
   serial: "{{ patch_serial | default(1) }}"
   ignore_unreachable: true
+  vars:
+    snow_change_window_gate_enabled: false
   tags:
     - windows
     - patching
@@ -34,12 +36,19 @@
         - always
 
     - name: Run Windows precheck
-      ansible.builtin.include_role:
-        name: windows_patch
-      vars:
-        patch_phase: precheck
-        windows_precheck_fail_on_blocked: false
-      when: not (patch_lifecycle_failed | default(false) | bool)
+      block:
+        - name: Include Windows precheck
+          ansible.builtin.include_role:
+            name: windows_patch
+          vars:
+            patch_phase: precheck
+            windows_precheck_fail_on_blocked: false
+          when: not (patch_lifecycle_failed | default(false) | bool)
+      rescue:
+        - name: Keep an unexpected precheck failure on this host
+          ansible.builtin.include_tasks: tasks/record_unexpected_failure.yml
+          vars:
+            patch_unexpected_phase: precheck
 
     - name: Preserve precheck phase result
       ansible.builtin.set_fact:
@@ -56,8 +65,15 @@
           }}
       changed_when: false
 
+    - name: Check the approved change window before remediation
+      when: snow_change_window_gate_enabled | default(false) | bool
+      ansible.builtin.include_tasks: tasks/snow_change_window_gate.yml
+      run_once: true
+
     - name: Continue patch lifecycle for eligible hosts
-      when: patch_host_eligible | bool
+      when:
+        - patch_host_eligible | bool
+        - not (hostvars['localhost']['snow_change_window_blocks_remediation'] | default(false) | bool)
       block:
         - name: Validate ServiceNow change for this host before remediation
           ansible.builtin.include_role:
@@ -67,19 +83,6 @@
           tags:
             - always
             - servicenow
-
-        - name: Run Windows pre-patch reboot
-          ansible.builtin.include_role:
-            name: windows_patch
-          vars:
-            patch_phase: reboot
-            reboot_phase: pre
-
-        - name: Preserve pre-patch reboot phase result
-          ansible.builtin.set_fact:
-            patch_phase_reboot_pre: "{{ { inventory_hostname: patch_result } }}"
-          when: (patch_result.phase | default('')) == 'reboot_pre'
-          changed_when: false
 
         - name: Run Windows discovery
           ansible.builtin.include_role:
@@ -93,7 +96,29 @@
           when: (patch_result.phase | default('')) == 'discovery'
           changed_when: false
 
+        - name: Confirm whether discovery found applicable updates
+          ansible.builtin.include_role:
+            name: windows_patch
+            tasks_from: confirm_applicable_updates.yml
+
+        - name: Run Windows pre-patch reboot
+          when:
+            - windows_applicable_updates_present | bool
+            - patch_apply_enabled | default(false) | bool
+          ansible.builtin.include_role:
+            name: windows_patch
+          vars:
+            patch_phase: reboot
+            reboot_phase: pre
+
+        - name: Preserve pre-patch reboot phase result
+          ansible.builtin.set_fact:
+            patch_phase_reboot_pre: "{{ { inventory_hostname: patch_result } }}"
+          when: (patch_result.phase | default('')) == 'reboot_pre'
+          changed_when: false
+
         - name: Run Windows apply
+          when: windows_applicable_updates_present | bool
           ansible.builtin.include_role:
             name: windows_patch
           vars:
@@ -105,7 +130,15 @@
           when: (patch_result.phase | default('')) == 'apply'
           changed_when: false
 
+        - name: Confirm whether this install justifies a post-patch reboot
+          ansible.builtin.include_role:
+            name: windows_patch
+            tasks_from: confirm_applicable_updates.yml
+
         - name: Run Windows post-patch reboot
+          when:
+            - windows_post_patch_reboot_justified | bool
+            - patch_apply_enabled | default(false) | bool
           ansible.builtin.include_role:
             name: windows_patch
           vars:
@@ -148,27 +181,51 @@
           changed_when: false
 
     - name: Collect final host identity and health for reporting
-      ansible.builtin.include_role:
-        name: windows_patch
-        tasks_from: collect_host_health.yml
       when: windows_connectivity_ok | default(false) | bool
       tags:
         - report
+      block:
+        - name: Collect final host health
+          ansible.builtin.include_role:
+            name: windows_patch
+            tasks_from: collect_host_health.yml
+      rescue:
+        - name: Keep an unexpected final health failure on this host
+          ansible.builtin.include_tasks: tasks/record_unexpected_failure.yml
+          vars:
+            patch_unexpected_phase: final health collection
 
     - name: Refresh pending reboot for final reporting when the host is reachable
-      ansible.builtin.include_role:
-        name: windows_patch
-        tasks_from: check_pending_reboot.yml
       when: windows_connectivity_ok | default(false) | bool
       tags:
         - report
+      block:
+        - name: Include pending reboot refresh
+          ansible.builtin.include_role:
+            name: windows_patch
+            tasks_from: check_pending_reboot.yml
+      rescue:
+        - name: Keep an unexpected pending reboot refresh failure on this host
+          ansible.builtin.include_tasks: tasks/record_unexpected_failure.yml
+          vars:
+            patch_unexpected_phase: pending reboot refresh
 
     - name: Build per-host patch_final_result
-      ansible.builtin.include_role:
-        name: patch_report
-        tasks_from: final_build.yml
       tags:
         - report
+      block:
+        - name: Include final report construction
+          ansible.builtin.include_role:
+            name: patch_report
+            tasks_from: final_build.yml
+      rescue:
+        - name: Keep an unexpected final report failure on this host
+          ansible.builtin.include_tasks: tasks/record_unexpected_failure.yml
+          vars:
+            patch_unexpected_phase: final report construction
+
+        - name: Keep the host in the aggregate when report construction fails
+          ansible.builtin.include_tasks: tasks/fallback_final_result.yml
 
 - name: Windows full patch - aggregate reporting
   hosts: windows_hosts
@@ -180,6 +237,8 @@
     snow_patching_update_cr_enabled: false
     snow_patching_attach_reports_enabled: false
     snow_patching_create_incidents_enabled: false
+    snow_patching_create_ctasks_enabled: false
+    snow_change_close_enabled: false
     snow_patching_tasks_dir: "{{ playbook_dir }}/tasks"
   tags:
     - report
@@ -212,6 +271,9 @@
         snow_patching_update_failed: false
         snow_patching_attach_failed: false
         snow_patching_incident_failed: false
+        snow_patching_ctask_failed: false
+        snow_patching_close_failed: false
+        snow_parent_change_closed: false
       run_once: true
       changed_when: false
       tags:
@@ -392,6 +454,22 @@
         - report
         - servicenow
 
+    - name: Prepare change tasks for affected hosts
+      ansible.builtin.include_tasks: tasks/snow_followup_ctasks.yml
+      when: snow_patching_create_ctasks_enabled | bool
+      run_once: true
+      tags:
+        - report
+        - servicenow
+
+    - name: Close the parent change after reporting and change tasks
+      ansible.builtin.include_tasks: tasks/snow_close_parent_change.yml
+      when: snow_change_close_enabled | bool
+      run_once: true
+      tags:
+        - report
+        - servicenow
+
     - name: Email Windows patching report
       ansible.builtin.include_role:
         name: report_email
@@ -409,6 +487,9 @@
           - not (snow_patching_update_failed | default(false) | bool)
           - not (snow_patching_attach_failed | default(false) | bool)
           - not (snow_patching_incident_failed | default(false) | bool)
+          - not (snow_patching_ctask_failed | default(false) | bool)
+          - not (snow_patching_close_failed | default(false) | bool)
+          - not (hostvars['localhost']['snow_change_window_gate_failed'] | default(false) | bool)
         fail_msg: >-
           Full Patch reporting completed, but the job cannot succeed.
           Patch failures={{ patch_workflow_report.status_counts.failed | default(0) }}.
@@ -418,6 +499,11 @@
           ({{ snow_patching_attach_error | default('not run') }}).
           ServiceNow follow-up incidents failed={{ snow_patching_incident_failed | default(false) }}
           ({{ snow_patching_incident_error | default('see snow_patching_incident_results') }}).
+          ServiceNow change tasks failed={{ snow_patching_ctask_failed | default(false) }}
+          ({{ snow_patching_ctask_error | default('not run') }}).
+          ServiceNow parent change closure failed={{ snow_patching_close_failed | default(false) }}
+          ({{ snow_patching_close_error | default('not run') }}).
+          Parent change confirmed closed={{ snow_parent_change_closed | default(false) }}.
           JSON/CSV/Markdown and patch_workflow_report were left unchanged.
           Unreachable hosts, installation failures, postcheck failures,
           remediation lifecycle failures, and an enabled ServiceNow integration

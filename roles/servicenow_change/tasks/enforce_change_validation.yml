@@ -69,6 +69,30 @@
     - always
     - servicenow
 
+- name: Reject a CR validation gate that does not match policy inputs
+  ansible.builtin.assert:
+    that:
+      - >-
+        (snow_change_validation_required | bool)
+        == (
+          (snow_require_change_validation | default(false) | bool)
+          and (not (patching_exception_active | default(false) | bool))
+          and (not (patch_lifecycle_failed | default(false) | bool))
+          and (
+            (operator_authorize_patch_install | default(false) | bool)
+            or (operator_allow_pre_patch_reboot | default(false) | bool)
+            or (operator_allow_post_patch_reboot | default(false) | bool)
+          )
+        )
+    fail_msg: >-
+      snow_change_validation_required={{ snow_change_validation_required | default('') }}
+      does not match the CR policy and operator authorization.
+      Do not supply snow_change_validation_required.
+    quiet: true
+  tags:
+    - always
+    - servicenow
+
 - name: Skip mandatory CR validation when this host is not remediating
   ansible.builtin.set_fact:
     snow_change_validation_ok: true
@@ -117,6 +141,23 @@
     - snow_change_validation_required | default(false) | bool
     - (snow_shared_role_effective | default('') | length) > 0
   changed_when: false
+  tags:
+    - always
+    - servicenow
+
+- name: Reject a pre-supplied CR validation result
+  ansible.builtin.assert:
+    that:
+      - not (snow_change_validation_ok | default(false) | bool)
+    fail_msg: >-
+      snow_change_validation_ok cannot be supplied before ServiceNow
+      validation on {{ inventory_hostname }}. A pre-set true value does
+      not confirm the change. The shared role must set the result
+      during this run.
+    quiet: true
+  when:
+    - snow_change_validation_required | default(false) | bool
+    - (snow_shared_role_effective | default('') | length) > 0
   tags:
     - always
     - servicenow

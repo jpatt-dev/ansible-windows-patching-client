@@ -44,6 +44,15 @@ controller_cac_protected_variables:
   - snow_patching_update_cr_enabled
   - snow_patching_attach_reports_enabled
   - snow_patching_create_incidents_enabled
+  - snow_patching_create_ctasks_enabled
+  - snow_ctask_assignment_group
+  - snow_prepare_standard_change
+  - snow_standard_change_template_id
+  - snow_change_window_gate_enabled
+  - snow_change_window_end
+  - snow_change_window_safety_margin_minutes
+  - snow_change_close_enabled
+  - snow_parent_change_closed
   - snow_incident_caller
   - snow_incident_assignment_group
   - snow_incident_priority
@@ -53,3 +62,11 @@ controller_cac_protected_variables:
   - patch_emergency_acknowledgement
   - patch_enforce_scoped_target
   - patch_require_explicit_limit
+  - patch_apply_enabled
+  - pre_patch_reboot_enabled
+  - post_patch_reboot_enabled
+  - reboot_enabled
+  - windows_patch_mode
+  - snow_change_validation_ok
+  - snow_change_validation_required
+  - snow_change_validation_reason

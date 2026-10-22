@@ -1,15 +1,18 @@
 ---
 # Windows reboot (pre or post patch).
 # reboot_phase: pre | post (default post)
-# Requires: reboot_enabled AND phase-specific flag AND
+# Requires: confirmed applicable updates AND reboot_enabled AND phase-specific flag AND
 # (mode=always OR pending reboot) AND patching_reboot_allowed (inventory)
 # AND not patching_exception_active AND maintenance ack when reboot can occur.
+# A known zero count or an unknown count never reboots, even when mode=always.
+# An already pending reboot is reported and is not cleared by a no-update run.
 # Always re-check pending reboot in this job. ICMP is not proof of WinRM readiness.
 # ansible.windows.win_reboot waits internally (reboot_timeout after post_reboot_delay)
 # until WinRM recovers; a second wait_for_connection is not required. win_ping
 # remains as the explicit post-reboot health check.
 #
 # Skip reason precedence:
+#   no confirmed applicable updates → no_applicable_updates
 #   if_required and not pending → reboot_not_required
 #   else: patch_cycle_exception > reboot_disabled > phase_reboot_disabled >
 #         inventory_reboot_not_allowed
@@ -80,7 +83,9 @@
   ansible.builtin.set_fact:
     windows_reboot_should_run: >-
       {{
-        not (patching_exception_active | default(false) | bool)
+        (windows_applicable_updates_present | default(false) | bool)
+        and (patch_apply_enabled | default(false) | bool)
+        and not (patching_exception_active | default(false) | bool)
         and (reboot_enabled | bool)
         and (reboot_phase_enabled | bool)
         and (patching_reboot_allowed_effective | bool)
@@ -155,6 +160,12 @@
       }}
     reboot_skipped_reason: >-
       {{
+        'no_applicable_updates'
+        if not (windows_applicable_updates_present | default(false) | bool)
+        else (
+        'install_not_authorized'
+        if not (patch_apply_enabled | default(false) | bool)
+        else (
         'reboot_not_required'
         if (
           (windows_reboot_mode_effective == 'if_required')
@@ -176,6 +187,8 @@
               )
             )
           )
+        )
+        )
         )
       }}
     manual_followup_required: >-
@@ -237,7 +250,8 @@
       - "patching_exception_active: {{ patching_exception_active | default(false) }}"
       - "reboot_skipped_reason: {{ reboot_skipped_reason | default('') }}"
       - "manual_followup_required: {{ manual_followup_required | default(false) }}"
-      - "note: reboot requires reboot_enabled AND phase flag AND inventory patching_reboot_allowed AND not patching_exception_active AND (mode=always OR pending_reboot)"
+      - "note: reboot requires confirmed applicable updates"
+      - "note: also requires phase approval, inventory permission, no exemption, and mode=always or pending reboot"
       - "patch_provider_effective: {{ windows_patch_provider_effective | default('unknown') }}"
       - "patch_mode: {{ windows_patch_mode }}"
   tags:

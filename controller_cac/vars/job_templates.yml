@@ -38,6 +38,9 @@ controller_job_templates:
       snow_patching_update_cr_enabled: false
       snow_patching_attach_reports_enabled: false
       snow_patching_create_incidents_enabled: false
+      snow_patching_create_ctasks_enabled: false
+      snow_change_window_gate_enabled: false
+      snow_change_close_enabled: false
       patch_require_maintenance_window: false
 
   - name: Windows Full Patch IST
@@ -72,6 +75,9 @@ controller_job_templates:
       snow_patching_update_cr_enabled: false
       snow_patching_attach_reports_enabled: false
       snow_patching_create_incidents_enabled: false
+      snow_patching_create_ctasks_enabled: false
+      snow_change_window_gate_enabled: false
+      snow_change_close_enabled: false
       patch_require_maintenance_window: false
 
   - name: Windows Full Patch UAT
@@ -106,6 +112,9 @@ controller_job_templates:
       snow_patching_update_cr_enabled: false
       snow_patching_attach_reports_enabled: false
       snow_patching_create_incidents_enabled: false
+      snow_patching_create_ctasks_enabled: false
+      snow_change_window_gate_enabled: false
+      snow_change_close_enabled: false
       patch_require_maintenance_window: true
 
   - name: Windows Full Patch PROD
@@ -140,6 +149,9 @@ controller_job_templates:
       snow_patching_update_cr_enabled: false
       snow_patching_attach_reports_enabled: false
       snow_patching_create_incidents_enabled: false
+      snow_patching_create_ctasks_enabled: false
+      snow_change_window_gate_enabled: false
+      snow_change_close_enabled: false
       patch_require_maintenance_window: true
 
   - name: Windows Precheck LAB
