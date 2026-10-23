@@ -1,6 +1,6 @@
 ---
 # Send one optional SMTP summary for the Full Patch job.
-# Always runs on the Execution Environment (localhost). Never targets Windows hosts.
+# Delivery uses curl on the Execution Environment. Never targets Windows hosts.
 
 - name: Skip SMTP report email when disabled
   ansible.builtin.debug:
@@ -45,6 +45,7 @@
       - (report_email_smtp_port | default(0) | int) >= 1
       - (report_email_smtp_port | default(0) | int) <= 65534
       - report_email_smtp_secure_effective in ['always', 'never', 'starttls']
+      - report_email_smtp_host | trim is not search('[\r\n\s/:@?#]')
       - (report_email_from | default('') | trim | length) > 0
       - report_email_to_effective is sequence
       - report_email_to_effective is not string
@@ -150,8 +151,81 @@
     - report
     - email
 
+- name: Define SMTP wire line endings
+  ansible.builtin.set_fact:
+    report_email_cr: "{{ '%c' | format(13) }}"
+    report_email_lf: "{{ '%c' | format(10) }}"
+    report_email_crlf: "{{ ('%c' | format(13)) ~ ('%c' | format(10)) }}"
+  when: report_email_enabled | default(false) | bool
+  changed_when: false
+  tags:
+    - report
+    - email
+
+- name: Reject SMTP header injection in sender, recipients, and subject
+  ansible.builtin.assert:
+    that:
+      - report_email_cr not in (report_email_from | trim)
+      - report_email_lf not in (report_email_from | trim)
+      - report_email_cr not in report_email_subject
+      - report_email_lf not in report_email_subject
+      - report_email_cr not in (report_email_to_effective | join(' '))
+      - report_email_lf not in (report_email_to_effective | join(' '))
+    fail_msg: >-
+      SMTP sender, recipient, or subject contains a line break.
+      Email was not sent. Patching results were not modified.
+  when: report_email_enabled | default(false) | bool
+  tags:
+    - report
+    - email
+
+- name: Check SMTP credentials for line breaks without logging them
+  ansible.builtin.set_fact:
+    report_email_credentials_safe: >-
+      {{
+        (report_email_cr not in report_email_smtp_username_effective)
+        and (report_email_lf not in report_email_smtp_username_effective)
+        and (report_email_cr not in report_email_smtp_password_effective)
+        and (report_email_lf not in report_email_smtp_password_effective)
+        and (':' not in report_email_smtp_username_effective)
+      }}
+  when: report_email_enabled | default(false) | bool
+  no_log: true
+  changed_when: false
+  tags:
+    - report
+    - email
+
+- name: Reject SMTP credentials that cannot be stored safely
+  ansible.builtin.assert:
+    that:
+      - report_email_credentials_safe | bool
+    fail_msg: >-
+      SMTP credentials contain a line break, or the username contains a colon.
+      Email was not sent. Credential values were not logged.
+  when: report_email_enabled | default(false) | bool
+  tags:
+    - report
+    - email
+
+- name: Reject plaintext SMTP when credentials are configured
+  ansible.builtin.fail:
+    msg: >-
+      report_email_smtp_secure=never does not permit SMTP credentials.
+      Use starttls or always. Email was not sent.
+  when:
+    - report_email_enabled | default(false) | bool
+    - report_email_smtp_secure_effective == 'never'
+    - (report_email_smtp_username_effective | length) > 0
+  tags:
+    - report
+    - email
+
 - name: Send Windows patching report email
   when: report_email_enabled | default(false) | bool
+  tags:
+    - report
+    - email
   block:
     - name: Validate CSV attachment path when CSV attach is enabled
       ansible.builtin.stat:
@@ -161,9 +235,14 @@
       become: false
       when: report_email_attach_csv | default(true) | bool
 
-    - name: Fail closed when the CSV attachment is missing
-      ansible.builtin.fail:
-        msg: >-
+    - name: Clear a stale SMTP failure detail
+      ansible.builtin.set_fact:
+        report_email_failure_detail: ""
+      changed_when: false
+
+    - name: Record a missing CSV attachment without sending mail
+      ansible.builtin.set_fact:
+        report_email_failure_detail: >-
           SMTP CSV attachment is enabled but patch_final_report_csv_path is
           missing or is not a regular file. Email was not sent. Patching
           results were not modified.
@@ -174,25 +253,321 @@
             or not (report_email_csv_stat.stat.exists | default(false) | bool)
             or not (report_email_csv_stat.stat.isreg | default(false) | bool)
           )
+      changed_when: false
 
-    - name: Deliver SMTP report from the Execution Environment
-      community.general.mail:
-        host: "{{ report_email_smtp_host | trim }}"
-        port: "{{ report_email_smtp_port | int }}"
-        secure: "{{ report_email_smtp_secure_effective }}"
-        sender: "{{ report_email_from | trim }}"
-        to: "{{ report_email_to_effective }}"
-        subject: "{{ report_email_subject }}"
-        body: "{{ report_email_body }}"
-        subtype: plain
-        charset: utf-8
-        username: "{{ report_email_smtp_username_effective if (report_email_smtp_username_effective | length > 0) else omit }}"
-        password: "{{ report_email_smtp_password_effective if (report_email_smtp_password_effective | length > 0) else omit }}"
-        attach: "{{ [patch_final_report_csv_path] if (report_email_attach_csv | default(true) | bool) else [] }}"
+    - name: Fail closed when the CSV attachment is missing
+      ansible.builtin.fail:
+        msg: "{{ report_email_failure_detail }}"
+      when: (report_email_failure_detail | default('') | length) > 0
+
+    - name: Read the CSV report for the MIME attachment
+      ansible.builtin.slurp:
+        src: "{{ patch_final_report_csv_path }}"
+      register: report_email_csv_slurp
       delegate_to: localhost
       become: false
       no_log: true
-      register: report_email_send_result
+      when: report_email_attach_csv | default(true) | bool
+
+    - name: Prepare the MIME message fields
+      ansible.builtin.set_fact:
+        report_email_csv_filename: "{{ patch_final_report_csv_path | default('') | basename }}"
+        report_email_body_wire: >-
+          {{
+            (report_email_body | regex_replace('\\n', report_email_crlf))
+            .rstrip(report_email_crlf)
+          }}
+        report_email_csv_b64: >-
+          {{
+            (
+              report_email_csv_slurp.content
+              | regex_findall('.{1,76}')
+              | join(report_email_crlf)
+            )
+            if (report_email_attach_csv | default(true) | bool)
+            else ''
+          }}
+        report_email_mime_boundary: >-
+          {{
+            'aap-smtp-'
+            ~ (report_email_job_id | regex_replace('[^A-Za-z0-9]', ''))
+            ~ '-'
+            ~ (range(100000, 999999) | random)
+          }}
+      changed_when: false
+      no_log: true
+
+    - name: Reject an unsafe CSV attachment filename
+      ansible.builtin.assert:
+        that:
+          - (report_email_csv_filename | length) > 0
+          - report_email_cr not in report_email_csv_filename
+          - report_email_lf not in report_email_csv_filename
+          - "('\"' not in report_email_csv_filename)"
+          - "('/' not in report_email_csv_filename)"
+          - "(\"\\\\\" not in report_email_csv_filename)"
+        fail_msg: >-
+          CSV attachment filename is empty or can break the email header.
+          Email was not sent.
+      when: report_email_attach_csv | default(true) | bool
+
+    - name: Build the MIME header lines
+      ansible.builtin.set_fact:
+        report_email_mime_lines:
+          - "From: {{ report_email_from | trim }}"
+          - "To: {{ report_email_to_effective | join(', ') }}"
+          - "Subject: {{ report_email_subject }}"
+          - "Date: {{ '%a, %d %b %Y %H:%M:%S %z' | strftime }}"
+          - "MIME-Version: 1.0"
+      changed_when: false
+
+    - name: Add a plain-text MIME body
+      ansible.builtin.set_fact:
+        report_email_mime_lines: >-
+          {{
+            report_email_mime_lines + [
+              'Content-Type: text/plain; charset="utf-8"',
+              'Content-Transfer-Encoding: 8bit',
+              '',
+              report_email_body_wire
+            ]
+          }}
+      when: not (report_email_attach_csv | default(true) | bool)
+      changed_when: false
+
+    - name: Add a CSV attachment MIME body
+      ansible.builtin.set_fact:
+        report_email_mime_lines: >-
+          {{
+            report_email_mime_lines + [
+              'Content-Type: multipart/mixed; boundary="'
+              ~ report_email_mime_boundary ~ '"',
+              '',
+              '--' ~ report_email_mime_boundary,
+              'Content-Type: text/plain; charset="utf-8"',
+              'Content-Transfer-Encoding: 8bit',
+              '',
+              report_email_body_wire,
+              '--' ~ report_email_mime_boundary,
+              'Content-Type: text/csv; charset="utf-8"; name="'
+              ~ report_email_csv_filename ~ '"',
+              'Content-Disposition: attachment; filename="'
+              ~ report_email_csv_filename ~ '"',
+              'Content-Transfer-Encoding: base64',
+              '',
+              report_email_csv_b64,
+              '--' ~ report_email_mime_boundary ~ '--'
+            ]
+          }}
+      when: report_email_attach_csv | default(true) | bool
+      changed_when: false
+      no_log: true
+
+    - name: Join the MIME message with CRLF
+      ansible.builtin.set_fact:
+        report_email_mime_message: >-
+          {{
+            (report_email_mime_lines | join(report_email_crlf))
+            ~ report_email_crlf
+          }}
+      changed_when: false
+      no_log: true
+
+    - name: Check curl SMTP and TLS support
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --version
+      register: report_email_curl_version
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+      become: false
+
+    - name: Record whether curl can deliver SMTP
+      ansible.builtin.set_fact:
+        report_email_curl_supports_smtp: >-
+          {{
+            (report_email_curl_version.rc | default(1) | int) == 0
+            and 'smtp' in (report_email_curl_version.stdout | default('') | split)
+            and 'smtps' in (report_email_curl_version.stdout | default('') | split)
+            and (
+              'SSL' in (report_email_curl_version.stdout | default('') | split)
+              or 'TLS' in (report_email_curl_version.stdout | default('') | split)
+            )
+          }}
+      changed_when: false
+
+    - name: Record a curl capability failure
+      ansible.builtin.set_fact:
+        report_email_failure_detail: >-
+          curl is not available or does not support smtp, smtps, and TLS.
+          Install curl in the Execution Environment. Email was not sent.
+      when: not (report_email_curl_supports_smtp | bool)
+      changed_when: false
+
+    - name: Fail when curl cannot deliver SMTP securely
+      ansible.builtin.fail:
+        msg: "{{ report_email_failure_detail }}"
+      when: not (report_email_curl_supports_smtp | bool)
+
+    - name: Create a private directory for the SMTP message
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: report-email-
+      register: report_email_workdir
+      delegate_to: localhost
+      become: false
+
+    - name: Restrict the SMTP working directory
+      ansible.builtin.file:
+        path: "{{ report_email_workdir.path }}"
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+      become: false
+
+    - name: Write the MIME message for curl
+      ansible.builtin.copy:
+        dest: "{{ report_email_workdir.path }}/message.eml"
+        content: "{{ report_email_mime_message }}"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      no_log: true
+
+    - name: Build the curl SMTP user field without logging it
+      ansible.builtin.set_fact:
+        report_email_curl_userinfo: >-
+          {{
+            (
+              report_email_smtp_username_effective
+              ~ ':'
+              ~ report_email_smtp_password_effective
+            ) | to_json
+          }}
+      when: (report_email_smtp_username_effective | length) > 0
+      no_log: true
+      changed_when: false
+
+    - name: Write the curl SMTP configuration
+      ansible.builtin.copy:
+        dest: "{{ report_email_workdir.path }}/curl.cnf"
+        content: "user = {{ report_email_curl_userinfo }}\n"
+        mode: "0600"
+      when: (report_email_smtp_username_effective | length) > 0
+      delegate_to: localhost
+      become: false
+      no_log: true
+
+    - name: Select the curl TLS mode without downgrading
+      ansible.builtin.set_fact:
+        report_email_curl_url: >-
+          {{
+            ('smtps' if (report_email_smtp_secure_effective == 'always') else 'smtp')
+            ~ '://'
+            ~ (report_email_smtp_host | trim)
+            ~ ':'
+            ~ (report_email_smtp_port | int)
+          }}
+        report_email_curl_tls_args: >-
+          {{
+            ['--ssl-reqd']
+            if (report_email_smtp_secure_effective == 'starttls')
+            else []
+          }}
+        report_email_curl_auth_args: >-
+          {{
+            ['--config', report_email_workdir.path ~ '/curl.cnf']
+            if ((report_email_smtp_username_effective | length) > 0)
+            else []
+          }}
+        report_email_message_path: "{{ report_email_workdir.path }}/message.eml"
+        report_email_rcpt_argv: []
+      changed_when: false
+
+    - name: Add one curl recipient argument per address
+      ansible.builtin.set_fact:
+        report_email_rcpt_argv: "{{ report_email_rcpt_argv + ['--mail-rcpt', item] }}"
+      loop: "{{ report_email_to_effective }}"
+      changed_when: false
+
+    - name: Build the curl SMTP argument list
+      ansible.builtin.set_fact:
+        report_email_curl_argv: >-
+          {{
+            [
+              'curl',
+              '--silent',
+              '--show-error',
+              '--fail',
+              '--proto',
+              '=smtp,smtps',
+              '--connect-timeout',
+              '30',
+              '--max-time',
+              '120',
+              '--url',
+              report_email_curl_url,
+              '--mail-from',
+              report_email_from | trim,
+              '--upload-file',
+              report_email_message_path
+            ]
+            + report_email_curl_tls_args
+            + report_email_curl_auth_args
+            + report_email_rcpt_argv
+          }}
+      changed_when: false
+
+    # Curl stops at --max-time 120. This task waits longer so that exit is recorded.
+    - name: Deliver the report with curl
+      ansible.builtin.command:
+        argv: "{{ report_email_curl_argv }}"
+      register: report_email_curl_result
+      delegate_to: localhost
+      become: false
+      timeout: 150
+      no_log: true
+      failed_when: false
+      changed_when: false
+
+    - name: Sanitize curl SMTP stderr without secrets
+      ansible.builtin.set_fact:
+        report_email_curl_stderr_safe: |
+          {% set ns = namespace(text=report_email_curl_result.stderr | default('')) %}
+          {% if (report_email_smtp_password_effective | length) > 0 %}
+          {% set ns.text = ns.text | replace(report_email_smtp_password_effective, '[redacted]') %}
+          {% endif %}
+          {% if (report_email_smtp_username_effective | length) > 0 %}
+          {% set ns.text = ns.text | replace(report_email_smtp_username_effective, '[redacted]') %}
+          {% endif %}
+          {{ ns.text | replace(report_email_cr, ' ') | replace(report_email_lf, ' ') | trim }}
+      when: (report_email_curl_result.rc | default(1) | int) != 0
+      no_log: true
+      changed_when: false
+
+    - name: Record curl SMTP failure diagnostics without secrets
+      ansible.builtin.set_fact:
+        report_email_failure_detail: >-
+          {{
+            'curl SMTP delivery failed with exit code '
+            ~ (report_email_curl_result.rc | default('unknown'))
+            ~ '. '
+            ~ (
+                (report_email_curl_stderr_safe | trim)[:400]
+                if ((report_email_curl_stderr_safe | trim | length) > 0)
+                else 'No curl error text was returned.'
+              )
+            ~ ' Credential values were not logged.'
+          }}
+      when: (report_email_curl_result.rc | default(1) | int) != 0
+      changed_when: false
+
+    - name: Fail closed after curl reports an SMTP delivery error
+      ansible.builtin.fail:
+        msg: "{{ report_email_failure_detail }}"
+      when: (report_email_curl_result.rc | default(1) | int) != 0
 
     - name: Record successful SMTP report email delivery
       ansible.builtin.set_fact:
@@ -204,14 +579,20 @@
       ansible.builtin.set_fact:
         report_email_delivery_status: failed
         report_email_attached_csv: false
+        report_email_failure_detail: >-
+          {{
+            report_email_failure_detail
+            if ((report_email_failure_detail | default('') | length) > 0)
+            else 'curl SMTP delivery failed. Credential values were not logged.'
+          }}
       changed_when: false
 
     - name: Warn that SMTP delivery failed and patching results were preserved
       ansible.builtin.debug:
         msg:
-          - SMTP report email delivery failed.
+          - "{{ report_email_failure_detail }}"
           - Patching results and report files were not modified.
-          - Check Execution Environment connectivity to the configured SMTP host and port.
+          - Check Execution Environment curl support and connectivity to the configured SMTP host and port.
       changed_when: false
 
     - name: Fail the job after SMTP delivery error when fail-on-error is enabled
@@ -219,15 +600,25 @@
         that:
           - not (report_email_fail_on_error | default(false) | bool)
         fail_msg: >-
-          SMTP report email delivery failed (report_email_fail_on_error=true).
+          {{ report_email_failure_detail }}
+          report_email_fail_on_error=true.
           Patching results and report files were not modified.
   always:
+    - name: Remove temporary SMTP files
+      ansible.builtin.file:
+        path: "{{ report_email_workdir.path }}"
+        state: absent
+      when:
+        - report_email_workdir.path is defined
+        - report_email_workdir.path is search('/report-email-')
+        - report_email_workdir.path != (patch_final_report_csv_path | default(''))
+      delegate_to: localhost
+      become: false
+      failed_when: false
+
     - name: Publish SMTP report email delivery status
       ansible.builtin.set_stats:
         data:
           report_email_delivery_status: "{{ report_email_delivery_status | default('skipped') }}"
           report_email_attached_csv: "{{ report_email_attached_csv | default(false) | bool }}"
         per_host: false
-  tags:
-    - report
-    - email
