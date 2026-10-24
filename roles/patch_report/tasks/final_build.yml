@@ -686,6 +686,253 @@
   tags:
     - report
 
+- name: Reconcile reboot recovery with the preserved postcheck
+  ansible.builtin.set_fact:
+    _reboot_recovery_recorded: >-
+      {{
+        (patch_lifecycle_reboot_recovery_failed | default('not_available') | string | lower)
+        == 'true'
+      }}
+    _reboot_recovery_phase: >-
+      {{
+        (patch_lifecycle_failed_phase | default(''))
+        in ['pre_patch_reboot', 'post_patch_reboot']
+      }}
+    _reboot_recovery_postcheck_ok: >-
+      {{
+        (_ua_postcheck_present | bool)
+        and (
+          (_upstream_postcheck.postcheck_status | default(''))
+          in ['ok', 'degraded']
+        )
+      }}
+    _reboot_recovery_winrm_ok: >-
+      {{
+        (windows_winrm_ping is defined)
+        and (windows_winrm_ping is mapping)
+        and not (windows_winrm_ping is skipped)
+        and not (windows_winrm_ping is unreachable)
+        and not (windows_winrm_ping is failed)
+        and ((windows_winrm_ping.ping | default('')) == 'pong')
+        and (windows_connectivity_ok | default(false) | bool)
+      }}
+    _independent_phase_failure: >-
+      {{
+        (patch_lifecycle_failed | default(false) | bool)
+        or (
+          (_ua_apply_present | bool)
+          and ((_upstream_apply.patch_status | default('')) == 'failed')
+        )
+        or (
+          (_ua_discovery_present | bool)
+          and ((_upstream_discovery.patch_status | default('')) == 'failed')
+        )
+      }}
+    _apply_execution_failed: >-
+      {{
+        (
+          (windows_apply_failed | default(false) | string | lower) == 'true'
+        )
+        and (windows_update_install is defined)
+        and (windows_update_install is mapping)
+        and ((windows_update_install.skipped | default(false) | string | lower) != 'true')
+        and not (windows_update_install is skipped)
+        and ((windows_update_install.unreachable | default(false) | string | lower) != 'true')
+        and not (windows_update_install is unreachable)
+        and (
+          (
+            (_ua_apply_present | bool)
+            and ((_upstream_apply.patch_status | default('')) == 'failed')
+            and ((_upstream_apply.patch_attempted | default(false) | string | lower) == 'true')
+          )
+          or (
+            (patch_result is defined)
+            and (patch_result is mapping)
+            and (
+              (patch_result.inventory_hostname | default(patch_result.host | default('')))
+              == inventory_hostname
+            )
+            and ((patch_result.phase | default('')) == 'apply')
+            and ((patch_result.patch_status | default('')) == 'failed')
+            and ((patch_result.patch_attempted | default(false) | string | lower) == 'true')
+          )
+        )
+      }}
+  changed_when: false
+  tags:
+    - report
+
+- name: Decide whether reboot recovery is confirmed or unresolved
+  ansible.builtin.set_fact:
+    _reboot_recovery_confirmed: >-
+      {{
+        (_reboot_recovery_recorded | bool)
+        and (_reboot_recovery_postcheck_ok | bool)
+        and (_reboot_recovery_winrm_ok | bool)
+      }}
+    _reboot_recovery_only_transient: >-
+      {{
+        (_reboot_recovery_recorded | bool)
+        and (_reboot_recovery_postcheck_ok | bool)
+        and (_reboot_recovery_winrm_ok | bool)
+        and (_reboot_recovery_phase | bool)
+        and not (_independent_phase_failure | bool)
+      }}
+    _reboot_recovery_unresolved: >-
+      {{
+        (_reboot_recovery_recorded | bool)
+        and (_reboot_recovery_phase | bool)
+        and not (
+          (_reboot_recovery_recorded | bool)
+          and (_reboot_recovery_postcheck_ok | bool)
+          and (_reboot_recovery_winrm_ok | bool)
+        )
+      }}
+    _reboot_recovery_classification_gap: >-
+      {{
+        (_reboot_recovery_recorded | bool)
+        and (_reboot_recovery_phase | bool)
+        and not (
+          (_reboot_recovery_recorded | bool)
+          and (_reboot_recovery_postcheck_ok | bool)
+          and (_reboot_recovery_winrm_ok | bool)
+        )
+        and (_rpt_result in ['success', 'already_compliant'])
+      }}
+    _pre_reboot_apply_failure: >-
+      {{
+        (_reboot_recovery_recorded | bool)
+        and ((patch_lifecycle_failed_phase | default('')) == 'pre_patch_reboot')
+        and (_apply_execution_failed | bool)
+      }}
+  changed_when: false
+  tags:
+    - report
+
+- name: Identify host technical failures that require follow-up
+  ansible.builtin.set_fact:
+    _host_technical_followup: >-
+      {{
+        not (_rpt_exempt | bool)
+        and (
+          (_rpt_unreachable | bool)
+          or (_reboot_recovery_unresolved | bool)
+          or (_pre_reboot_apply_failure | bool)
+          or (_rpt_apply_failed | bool)
+          or ((patch_lifecycle_failed_phase | default('')) == 'apply')
+          or ((patch_lifecycle_failed_phase | default('')) == 'discovery')
+          or (
+            (_ua_discovery_present | bool)
+            and ((_upstream_discovery.patch_status | default('')) == 'failed')
+          )
+          or (
+            (windows_update_search is defined)
+            and (windows_update_search is mapping)
+            and ((windows_update_search.skipped | default(false) | string | lower) != 'true')
+            and ((windows_update_search.failed | default(false) | string | lower) == 'true')
+          )
+          or (_rpt_precheck_failed | bool)
+          or (_rpt_health_failed | bool)
+          or (
+            (patch_lifecycle_failed_message | default(''))
+            is match('^pending reboot refresh failed:')
+          )
+          or (
+            (_rpt_unsupported_os | bool)
+            and (
+              (
+                patch_apply_enabled
+                | default(operator_authorize_patch_install | default(false))
+                | bool
+              )
+              or ((_rpt_result | default('')) == 'failed')
+            )
+          )
+          or (
+            (
+              (patch_lifecycle_failed_phase | default(''))
+              in ['pre_patch_reboot', 'post_patch_reboot']
+            )
+            and (
+              (patch_lifecycle_reboot_recovery_failed | default('not_available') | string | lower)
+              != 'true'
+            )
+          )
+          or (
+            (_ua_postcheck_present | bool)
+            and ((_upstream_postcheck.postcheck_status | default('')) == 'failed')
+          )
+        )
+      }}
+  changed_when: false
+  tags:
+    - report
+
+- name: Publish reconciled reboot recovery fields
+  ansible.builtin.set_fact:
+    _pub_reboot_recovery_failed: >-
+      {{
+        false
+        if (
+          (_pre_reboot_apply_failure | bool)
+          or (_reboot_recovery_confirmed | bool)
+        )
+        else (
+          true
+          if (_reboot_recovery_unresolved | bool)
+          else (patch_lifecycle_reboot_recovery_failed | default('not_available'))
+        )
+      }}
+    _pub_failed_phase: >-
+      {{
+        'apply'
+        if (_pre_reboot_apply_failure | bool)
+        else (
+          ''
+          if (_reboot_recovery_only_transient | bool)
+          else (patch_lifecycle_failed_phase | default(''))
+        )
+      }}
+    _pub_failure_timestamp_utc: >-
+      {{
+        'not_available'
+        if (
+          (_pre_reboot_apply_failure | bool)
+          or (_reboot_recovery_only_transient | bool)
+        )
+        else (patch_lifecycle_failure_timestamp_utc | default('not_available'))
+      }}
+    _pub_manual_followup: >-
+      {{
+        (manual_followup_required | default(false) | bool)
+        or (_host_technical_followup | bool)
+      }}
+    _pub_result: >-
+      {{
+        'failed'
+        if (_reboot_recovery_classification_gap | bool)
+        else _rpt_result
+      }}
+    _pub_reason_code: >-
+      {{
+        'REBOOT_FAILED'
+        if (_reboot_recovery_classification_gap | bool)
+        else _rpt_reason_code
+      }}
+    _pub_reason: >-
+      {{
+        (
+          'Post-patch reboot failed'
+          if ((patch_lifecycle_failed_phase | default('')) == 'post_patch_reboot')
+          else 'Pre-patch reboot failed'
+        )
+        if (_reboot_recovery_classification_gap | bool)
+        else _rpt_reason
+      }}
+  changed_when: false
+  tags:
+    - report
+
 - name: Build patch_final_result for this host
   ansible.builtin.set_fact:
     patch_final_result:
@@ -711,10 +958,10 @@
       patch_target_scope: "{{ patch_target_scope | default(ansible_limit | default('')) }}"
       patch_wave: "{{ patch_wave_name | default('unspecified') }}"
       patch_wave_name: "{{ patch_wave_name | default('unspecified') }}"
-      result: "{{ _rpt_result }}"
-      reason: "{{ _rpt_reason }}"
-      reason_code: "{{ _rpt_reason_code }}"
-      final_status: "{{ _rpt_result }}"
+      result: "{{ _pub_result }}"
+      reason: "{{ _pub_reason }}"
+      reason_code: "{{ _pub_reason_code }}"
+      final_status: "{{ _pub_result }}"
       patched: "{{ _rpt_patched | bool }}"
       exempt: "{{ _rpt_exempt | bool }}"
       patching_exception_active: "{{ _rpt_exempt | bool }}"
@@ -755,7 +1002,11 @@
       pending_reboot_final: "{{ 'not_available' if ((_rpt_unreachable | bool) or ((windows_pending_reboot_probe_ok is defined) and (not (windows_pending_reboot_probe_ok | bool)))) else (pending_reboot if (pending_reboot is defined) else 'not_available') }}"
       postcheck_status: "{{ _final_postcheck_status }}"
       precheck_status: "{{ _rpt_precheck_status }}"
-      manual_followup_required: "{{ (manual_followup_required | default(false) | bool) or (_rpt_unreachable | bool) }}"
+      failed_phase: "{{ _pub_failed_phase }}"
+      last_completed_phase: "{{ patch_lifecycle_last_completed_phase | default('') }}"
+      failure_timestamp_utc: "{{ _pub_failure_timestamp_utc }}"
+      reboot_recovery_failed: "{{ _pub_reboot_recovery_failed }}"
+      manual_followup_required: "{{ _pub_manual_followup }}"
       windows_connectivity_ok: "{{ windows_connectivity_ok | default(false) | bool }}"
       tower_job_id: "{{ tower_job_id | default('') }}"
       awx_job_id: "{{ awx_job_id | default('') }}"

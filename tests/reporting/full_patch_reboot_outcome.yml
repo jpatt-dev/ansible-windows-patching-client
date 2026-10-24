@@ -1,0 +1,20 @@
+---
+# Same order as playbooks/windows/full_patch.yml after the reboot role returns:
+# record the outcome, then clear the phase. The next phase is a separate task.
+
+- name: Mark this reboot as the current lifecycle phase
+  ansible.builtin.set_fact:
+    patch_lifecycle_current_phase: "{{ reboot_outcome_phase }}"
+  changed_when: false
+
+- name: Record the reboot lifecycle outcome after the reboot role returns
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_phase_outcome.yml"
+  vars:
+    patch_outcome_phase: "{{ reboot_outcome_phase }}"
+  when: (patch_result.phase | default('')) == reboot_result_phase
+
+- name: Clear the lifecycle phase after the reboot role returns
+  ansible.builtin.set_fact:
+    patch_lifecycle_current_phase: ""
+  when: (patch_lifecycle_current_phase | default('')) == reboot_outcome_phase
+  changed_when: false

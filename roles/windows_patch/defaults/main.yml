@@ -101,7 +101,8 @@ windows_powershell_precheck_script: client_precheck.ps1
 
 # OS policy map — caption_regex fail-closed matching (exactly one match).
 # Representative captions: "Microsoft Windows Server 2019 Datacenter",
-# "Microsoft Windows Server 2022 Standard", etc. Unknown OS → unsupported.
+# "Microsoft Windows Server 2022 Standard",
+# "Microsoft Windows Server 2025 Datacenter". Unknown OS → unsupported.
 windows_patch_policy_by_os:
   server_2016:
     caption_regex: "(?i)Windows Server 2016"
@@ -119,6 +120,13 @@ windows_patch_policy_by_os:
       - UpdateRollups
   server_2022:
     caption_regex: "(?i)Windows Server 2022"
+    supported: true
+    categories:
+      - CriticalUpdates
+      - SecurityUpdates
+      - UpdateRollups
+  server_2025:
+    caption_regex: "(?i)Windows Server 2025"
     supported: true
     categories:
       - CriticalUpdates

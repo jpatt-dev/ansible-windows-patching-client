@@ -1,0 +1,27 @@
+---
+- name: Preserve completed apply and postcheck evidence
+  ansible.builtin.set_fact:
+    windows_update_search:
+      found_update_count: 0
+    pending_reboot: false
+    windows_connectivity_ok: true
+    patch_phase_apply: >-
+      {{
+        {
+          inventory_hostname: {
+            'patch_attempted': true,
+            'updates_installed': 4,
+            'updates_failed': 0,
+            'patch_status': 'success'
+          }
+        }
+      }}
+    patch_phase_postcheck: >-
+      {{
+        {
+          inventory_hostname: {
+            'postcheck_status': 'passed'
+          }
+        }
+      }}
+  changed_when: false

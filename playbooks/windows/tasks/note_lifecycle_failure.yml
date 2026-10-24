@@ -1,0 +1,111 @@
+---
+# Called from an existing rescue after the failure message is already stored.
+# Does not change patch_lifecycle_failed_message.
+# An empty current phase stays an empty failed_phase.
+
+- name: Stamp the lifecycle failure time once
+  ansible.builtin.set_fact:
+    patch_lifecycle_failure_timestamp_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+  when: (patch_lifecycle_failure_timestamp_utc | default('not_available')) == 'not_available'
+  changed_when: false
+
+- name: Record the lifecycle phase that was running
+  ansible.builtin.set_fact:
+    patch_lifecycle_failed_phase: "{{ patch_lifecycle_current_phase }}"
+    patch_lifecycle_reboot_recovery_failed: >-
+      {{
+        true
+        if (_reboot_recovery | bool)
+        else (
+          false
+          if (_reboot_phase | bool)
+          else 'not_available'
+        )
+      }}
+  vars:
+    _failed_action: "{{ ansible_failed_task.action | default('') }}"
+    _failed_task_name: "{{ ansible_failed_task.name | default('') }}"
+    _failed_message: "{{ ansible_failed_result.msg | default('') }}"
+    _reboot_phase: >-
+      {{
+        patch_lifecycle_current_phase | default('')
+        in ['pre_patch_reboot', 'post_patch_reboot']
+      }}
+    _reboot_wait_timed_out: >-
+      {{
+        (
+          (_failed_action is search('win_reboot'))
+          or (
+            _failed_task_name
+            == 'Reboot Windows host only when safety gates and reboot policy allow'
+          )
+        )
+        and (_failed_message is search('(?i)timed out|timeout'))
+      }}
+    _post_reboot_winrm_failed: >-
+      {{
+        (_failed_action is search('win_ping'))
+        or (_failed_task_name == 'Confirm WinRM with win_ping after reboot')
+      }}
+    _note_ping_phase_ok: >-
+      {{
+        (
+          ((patch_lifecycle_current_phase | default('')) == 'pre_patch_reboot')
+          and ((reboot_phase | default('')) == 'pre')
+        )
+        or (
+          ((patch_lifecycle_current_phase | default('')) == 'post_patch_reboot')
+          and ((reboot_phase | default('')) == 'post')
+        )
+      }}
+    _note_reboot_initiated: >-
+      {{
+        (windows_reboot_result is defined)
+        and (windows_reboot_result is mapping)
+        and not (windows_reboot_result is skipped)
+        and not (windows_reboot_result is failed)
+        and not (windows_reboot_result is unreachable)
+      }}
+    _note_ping_unhealthy: >-
+      {{
+        (windows_post_reboot_ping is defined)
+        and (windows_post_reboot_ping is mapping)
+        and not (windows_post_reboot_ping is skipped)
+        and (
+          (windows_post_reboot_ping is unreachable)
+          or (windows_post_reboot_ping is failed)
+        )
+      }}
+    _reboot_recovery: >-
+      {{
+        (_reboot_phase | bool)
+        and (
+          (_reboot_wait_timed_out | bool)
+          or (_post_reboot_winrm_failed | bool)
+          or (
+            (_note_ping_phase_ok | bool)
+            and (_note_reboot_initiated | bool)
+            and (_note_ping_unhealthy | bool)
+          )
+        )
+      }}
+    _maintenance_block: >-
+      {{ 'Maintenance window enforcement failed' in _failed_message }}
+  when:
+    - (patch_lifecycle_failed_phase | default('') | length) == 0
+    - patch_lifecycle_current_phase | default('') in [
+        'precheck',
+        'discovery',
+        'pre_patch_reboot',
+        'apply',
+        'post_patch_reboot',
+        'postcheck',
+        'final_reporting',
+      ]
+    - not (_maintenance_block | bool)
+  changed_when: false
+
+- name: Clear the current lifecycle phase after the failure is recorded
+  ansible.builtin.set_fact:
+    patch_lifecycle_current_phase: ""
+  changed_when: false

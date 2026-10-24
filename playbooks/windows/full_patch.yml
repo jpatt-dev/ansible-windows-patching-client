@@ -35,6 +35,21 @@
       tags:
         - always
 
+    - name: Initialize lifecycle phase tracking
+      ansible.builtin.set_fact:
+        patch_lifecycle_current_phase: ""
+        patch_lifecycle_last_completed_phase: ""
+        patch_lifecycle_failed_phase: ""
+        patch_lifecycle_failure_timestamp_utc: not_available
+        patch_lifecycle_reboot_recovery_failed: not_available
+      changed_when: false
+
+    - name: Mark precheck as the current lifecycle phase
+      ansible.builtin.set_fact:
+        patch_lifecycle_current_phase: precheck
+      when: not (patch_lifecycle_failed | default(false) | bool)
+      changed_when: false
+
     - name: Run Windows precheck
       block:
         - name: Include Windows precheck
@@ -56,6 +71,18 @@
       when: (patch_result.phase | default('')) == 'precheck'
       changed_when: false
 
+    - name: Record the precheck lifecycle outcome
+      ansible.builtin.include_tasks: tasks/record_phase_outcome.yml
+      vars:
+        patch_outcome_phase: precheck
+      when: (patch_result.phase | default('')) == 'precheck'
+
+    - name: Clear the lifecycle phase after precheck
+      ansible.builtin.set_fact:
+        patch_lifecycle_current_phase: ""
+      when: (patch_lifecycle_current_phase | default('')) == 'precheck'
+      changed_when: false
+
     - name: Determine host eligibility from precheck status
       ansible.builtin.set_fact:
         patch_host_eligible: >-
@@ -75,6 +102,11 @@
         - patch_host_eligible | bool
         - not (hostvars['localhost']['snow_change_window_blocks_remediation'] | default(false) | bool)
       block:
+        - name: Clear the lifecycle phase before ServiceNow validation
+          ansible.builtin.set_fact:
+            patch_lifecycle_current_phase: ""
+          changed_when: false
+
         - name: Validate ServiceNow change for this host before remediation
           ansible.builtin.include_role:
             name: servicenow_change
@@ -83,6 +115,11 @@
           tags:
             - always
             - servicenow
+
+        - name: Mark discovery as the current lifecycle phase
+          ansible.builtin.set_fact:
+            patch_lifecycle_current_phase: discovery
+          changed_when: false
 
         - name: Run Windows discovery
           ansible.builtin.include_role:
@@ -96,10 +133,29 @@
           when: (patch_result.phase | default('')) == 'discovery'
           changed_when: false
 
+        - name: Record the discovery lifecycle outcome
+          ansible.builtin.include_tasks: tasks/record_phase_outcome.yml
+          vars:
+            patch_outcome_phase: discovery
+          when: (patch_result.phase | default('')) == 'discovery'
+
+        - name: Clear the lifecycle phase before applicable-update confirmation
+          ansible.builtin.set_fact:
+            patch_lifecycle_current_phase: ""
+          changed_when: false
+
         - name: Confirm whether discovery found applicable updates
           ansible.builtin.include_role:
             name: windows_patch
             tasks_from: confirm_applicable_updates.yml
+
+        - name: Mark pre-patch reboot as the current lifecycle phase
+          ansible.builtin.set_fact:
+            patch_lifecycle_current_phase: pre_patch_reboot
+          when:
+            - windows_applicable_updates_present | bool
+            - patch_apply_enabled | default(false) | bool
+          changed_when: false
 
         - name: Run Windows pre-patch reboot
           when:
@@ -117,6 +173,24 @@
           when: (patch_result.phase | default('')) == 'reboot_pre'
           changed_when: false
 
+        - name: Record the pre-patch reboot lifecycle outcome
+          ansible.builtin.include_tasks: tasks/record_phase_outcome.yml
+          vars:
+            patch_outcome_phase: pre_patch_reboot
+          when: (patch_result.phase | default('')) == 'reboot_pre'
+
+        - name: Clear the lifecycle phase after pre-patch reboot
+          ansible.builtin.set_fact:
+            patch_lifecycle_current_phase: ""
+          when: (patch_lifecycle_current_phase | default('')) == 'pre_patch_reboot'
+          changed_when: false
+
+        - name: Mark apply as the current lifecycle phase
+          ansible.builtin.set_fact:
+            patch_lifecycle_current_phase: apply
+          when: windows_applicable_updates_present | bool
+          changed_when: false
+
         - name: Run Windows apply
           when: windows_applicable_updates_present | bool
           ansible.builtin.include_role:
@@ -130,10 +204,29 @@
           when: (patch_result.phase | default('')) == 'apply'
           changed_when: false
 
+        - name: Record the apply lifecycle outcome
+          ansible.builtin.include_tasks: tasks/record_phase_outcome.yml
+          vars:
+            patch_outcome_phase: apply
+          when: (patch_result.phase | default('')) == 'apply'
+
+        - name: Clear the lifecycle phase before post-patch update confirmation
+          ansible.builtin.set_fact:
+            patch_lifecycle_current_phase: ""
+          changed_when: false
+
         - name: Confirm whether this install justifies a post-patch reboot
           ansible.builtin.include_role:
             name: windows_patch
             tasks_from: confirm_applicable_updates.yml
+
+        - name: Mark post-patch reboot as the current lifecycle phase
+          ansible.builtin.set_fact:
+            patch_lifecycle_current_phase: post_patch_reboot
+          when:
+            - windows_post_patch_reboot_justified | bool
+            - patch_apply_enabled | default(false) | bool
+          changed_when: false
 
         - name: Run Windows post-patch reboot
           when:
@@ -151,6 +244,23 @@
           when: (patch_result.phase | default('')) == 'reboot_post'
           changed_when: false
 
+        - name: Record the post-patch reboot lifecycle outcome
+          ansible.builtin.include_tasks: tasks/record_phase_outcome.yml
+          vars:
+            patch_outcome_phase: post_patch_reboot
+          when: (patch_result.phase | default('')) == 'reboot_post'
+
+        - name: Clear the lifecycle phase after post-patch reboot
+          ansible.builtin.set_fact:
+            patch_lifecycle_current_phase: ""
+          when: (patch_lifecycle_current_phase | default('')) == 'post_patch_reboot'
+          changed_when: false
+
+        - name: Mark postcheck as the current lifecycle phase
+          ansible.builtin.set_fact:
+            patch_lifecycle_current_phase: postcheck
+          changed_when: false
+
         - name: Run Windows postcheck
           ansible.builtin.include_role:
             name: windows_patch
@@ -163,6 +273,18 @@
           when: (patch_result.phase | default('')) == 'postcheck'
           changed_when: false
 
+        - name: Record the postcheck lifecycle outcome
+          ansible.builtin.include_tasks: tasks/record_phase_outcome.yml
+          vars:
+            patch_outcome_phase: postcheck
+          when: (patch_result.phase | default('')) == 'postcheck'
+
+        - name: Clear the lifecycle phase after postcheck
+          ansible.builtin.set_fact:
+            patch_lifecycle_current_phase: ""
+          when: (patch_lifecycle_current_phase | default('')) == 'postcheck'
+          changed_when: false
+
       rescue:
         - name: Record remediation lifecycle failure without ending the host
           ansible.builtin.set_fact:
@@ -172,6 +294,9 @@
           when: ansible_failed_result is defined
           changed_when: false
 
+        - name: Record the remediation failure location without changing the message
+          ansible.builtin.include_tasks: tasks/note_lifecycle_failure.yml
+
         - name: Report remediation lifecycle failure for later host reporting
           ansible.builtin.debug:
             msg: >-
@@ -179,6 +304,11 @@
               Remaining phases were not run. Final reporting will use preserved
               phase history only ({{ patch_lifecycle_failed_message }}).
           changed_when: false
+
+    - name: Clear the lifecycle phase before final health collection
+      ansible.builtin.set_fact:
+        patch_lifecycle_current_phase: ""
+      changed_when: false
 
     - name: Collect final host identity and health for reporting
       when: windows_connectivity_ok | default(false) | bool
@@ -194,6 +324,11 @@
           ansible.builtin.include_tasks: tasks/record_unexpected_failure.yml
           vars:
             patch_unexpected_phase: final health collection
+
+    - name: Clear the lifecycle phase before the pending-reboot refresh
+      ansible.builtin.set_fact:
+        patch_lifecycle_current_phase: ""
+      changed_when: false
 
     - name: Refresh pending reboot for final reporting when the host is reachable
       when: windows_connectivity_ok | default(false) | bool
@@ -214,6 +349,11 @@
       tags:
         - report
       block:
+        - name: Mark final reporting as the current lifecycle phase
+          ansible.builtin.set_fact:
+            patch_lifecycle_current_phase: final_reporting
+          changed_when: false
+
         - name: Include final report construction
           ansible.builtin.include_role:
             name: patch_report
@@ -226,6 +366,12 @@
 
         - name: Keep the host in the aggregate when report construction fails
           ansible.builtin.include_tasks: tasks/fallback_final_result.yml
+
+    - name: Clear the lifecycle phase after final reporting
+      ansible.builtin.set_fact:
+        patch_lifecycle_current_phase: ""
+      when: (patch_lifecycle_current_phase | default('')) == 'final_reporting'
+      changed_when: false
 
 - name: Windows full patch - aggregate reporting
   hosts: windows_hosts

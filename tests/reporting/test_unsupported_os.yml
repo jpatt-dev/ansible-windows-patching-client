@@ -8,9 +8,9 @@
   connection: local
   gather_facts: false
   tasks:
-    - name: Add check-only Windows Server 2025
+    - name: Add check-only unknown Windows version
       ansible.builtin.add_host:
-        name: win-2025-check
+        name: win-unknown-check
         groups: unsupported_os_hosts
         ansible_connection: local
         patch_host_eligible: true
@@ -32,9 +32,9 @@
         expected_result: blocked
         expected_reason_code: UNSUPPORTED_OS
 
-    - name: Add authorized Windows Server 2025
+    - name: Add authorized unknown Windows version
       ansible.builtin.add_host:
-        name: win-2025-install
+        name: win-unknown-install
         groups: unsupported_os_hosts
         ansible_connection: local
         patch_host_eligible: true
@@ -77,6 +77,7 @@
           - patch_final_result.result == expected_result
           - patch_final_result.reason_code == expected_reason_code
           - "'OS has no supported patch policy' in patch_final_result.reason"
+          - (patch_final_result.manual_followup_required | bool) == (inventory_hostname == 'win-unknown-install')
           - not (patch_final_result.patched | bool)
           - (patch_final_result.pre_patch_reboot_performed | string) != 'true'
           - (patch_final_result.post_patch_reboot_performed | string) != 'true'
@@ -87,7 +88,7 @@
           reason={{ patch_final_result.reason | default('') }}
 
     - name: Assert check-only still records the pending reboot
-      when: inventory_hostname == 'win-2025-check'
+      when: inventory_hostname == 'win-unknown-check'
       ansible.builtin.assert:
         that:
           - patch_final_result.pending_reboot | bool
@@ -119,7 +120,7 @@
         that:
           - (snow_ctask_requests | length) == 1
           - (snow_ctask_requests[0].hosts | length) == 1
-          - snow_ctask_requests[0].hosts[0].hostname == 'win-2025-install'
+          - snow_ctask_requests[0].hosts[0].hostname == 'win-unknown-install'
           - snow_ctask_requests[0].hosts[0].status == 'failed'
           - snow_ctask_requests[0].hosts[0].reason_code == 'UNSUPPORTED_OS'
         fail_msg: >-

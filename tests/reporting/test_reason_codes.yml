@@ -25,6 +25,7 @@
           found_update_count: 2
         expected_result: blocked
         expected_reason_code: WINDOW_CLOSED
+        expected_manual_followup: false
 
     - name: Add an authorized host failed by maintenance-window enforcement
       ansible.builtin.add_host:
@@ -51,6 +52,7 @@
             reboot_skipped_reason: reboot_not_required
         expected_result: failed
         expected_reason_code: WINDOW_CLOSED
+        expected_manual_followup: false
 
     - name: Add an authorized host blocked by the change-window gate
       ansible.builtin.add_host:
@@ -70,6 +72,7 @@
           found_update_count: 2
         expected_result: blocked
         expected_reason_code: WINDOW_CLOSED
+        expected_manual_followup: false
 
     - name: Add a host that was not authorized to install
       ansible.builtin.add_host:
@@ -89,6 +92,7 @@
           found_update_count: 2
         expected_result: blocked
         expected_reason_code: INSTALL_NOT_AUTHORIZED
+        expected_manual_followup: false
 
     - name: Add a precheck crash
       ansible.builtin.add_host:
@@ -105,6 +109,7 @@
           found_update_count: 0
         expected_result: failed
         expected_reason_code: PRECHECK_FAILED
+        expected_manual_followup: true
 
     - name: Add a final health collection crash
       ansible.builtin.add_host:
@@ -123,6 +128,7 @@
           found_update_count: 0
         expected_result: failed
         expected_reason_code: HEALTH_COLLECTION_FAILED
+        expected_manual_followup: true
 
     - name: Add an unsupported OS lifecycle failure
       ansible.builtin.add_host:
@@ -142,6 +148,7 @@
           found_update_count: 1
         expected_result: failed
         expected_reason_code: UNSUPPORTED_OS
+        expected_manual_followup: true
 
     - name: Add a real installation failure
       ansible.builtin.add_host:
@@ -166,6 +173,7 @@
             patch_status: failed
         expected_result: failed
         expected_reason_code: PATCH_INSTALL_FAILED
+        expected_manual_followup: true
 
 - name: Classify the reason-code hosts
   hosts: reason_code_hosts
@@ -185,12 +193,14 @@
         that:
           - patch_final_result.result == expected_result
           - patch_final_result.reason_code == expected_reason_code
+          - (patch_final_result.manual_followup_required | bool) == (expected_manual_followup | bool)
         fail_msg: >-
           {{ inventory_hostname }} classified as
           result={{ patch_final_result.result }}
           reason_code={{ patch_final_result.reason_code }}
+          manual_followup_required={{ patch_final_result.manual_followup_required | default('') }}
           reason={{ patch_final_result.reason | default('') }},
-          expected {{ expected_result }}/{{ expected_reason_code }}
+          expected {{ expected_result }}/{{ expected_reason_code }}/followup={{ expected_manual_followup }}
 
     - name: Assert a closed window is named in the report
       when: expected_reason_code == 'WINDOW_CLOSED'
@@ -198,3 +208,294 @@
         that:
           - "'Maintenance window is closed' in patch_final_result.reason"
         fail_msg: Closed window was not identified in the final report.
+
+- name: Seed the manual follow-up correction matrix
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add the thirteen reporting outcomes
+      ansible.builtin.add_host:
+        name: "{{ item.name }}"
+        groups: followup_matrix
+        ansible_connection: local
+        sys_id: "{{ item.sys_id }}"
+        patch_host_eligible: "{{ item.eligible | default(true) }}"
+        patch_apply_enabled: "{{ item.apply | default(true) }}"
+        operator_authorize_patch_install: "{{ item.apply | default(true) }}"
+        windows_connectivity_ok: true
+        pending_reboot: false
+        precheck_status: passed
+        windows_critical_services_ok: true
+        windows_disk_low: false
+        windows_os_policy_supported: "{{ item.supported | default(omit) }}"
+        patching_exception_enabled: "{{ item.exempt | default(false) }}"
+        maintenance_window_status: "{{ item.window | default('inside') }}"
+        patch_lifecycle_failed: "{{ item.lifecycle_failed | default(false) }}"
+        patch_lifecycle_failed_phase: "{{ item.failed_phase | default('') }}"
+        patch_lifecycle_failed_message: "{{ item.message | default('') }}"
+        patch_lifecycle_reboot_recovery_failed: "{{ item.recovery | default('not_available') }}"
+        patch_lifecycle_failure_timestamp_utc: "{{ item.timestamp | default('not_available') }}"
+        windows_apply_failed: "{{ item.apply_failed | default(false) }}"
+        windows_update_search: "{{ item.search | default({'found_update_count': 0}) }}"
+        windows_winrm_ping: "{{ item.ping | default(omit) }}"
+        windows_update_install: "{{ item.install | default(omit) }}"
+        patch_result: "{{ item.patch_result | default(omit) }}"
+        patch_phase_apply: "{{ item.apply_phase | default(omit) }}"
+        patch_phase_postcheck: "{{ item.postcheck | default(omit) }}"
+        expected_result: "{{ item.result }}"
+        expected_reason_code: "{{ item.reason }}"
+        expected_manual_followup: "{{ item.follow }}"
+        expected_failed_phase: "{{ item.pub_phase | default('') }}"
+        expected_recovery: "{{ item.pub_recovery | default('not_available') }}"
+      loop:
+        - name: fu-success
+          sys_id: "00000000000000000000000000000001"
+          search:
+            found_update_count: 0
+          apply_phase:
+            fu-success:
+              patch_attempted: true
+              updates_installed: 2
+              updates_failed: 0
+              patch_status: success
+          postcheck:
+            fu-success:
+              postcheck_status: ok
+          result: success
+          reason: PATCH_SUCCEEDED
+          follow: false
+        - name: fu-compliant
+          sys_id: "00000000000000000000000000000002"
+          search:
+            found_update_count: 0
+          result: already_compliant
+          reason: NO_APPLICABLE_UPDATES
+          follow: false
+        - name: fu-exempt
+          sys_id: "00000000000000000000000000000003"
+          exempt: true
+          eligible: false
+          result: exempt
+          reason: PATCH_EXEMPTION
+          follow: false
+        - name: fu-window
+          sys_id: "00000000000000000000000000000004"
+          window: outside
+          search:
+            found_update_count: 2
+          result: blocked
+          reason: WINDOW_CLOSED
+          follow: false
+        - name: fu-not-auth
+          sys_id: "00000000000000000000000000000005"
+          apply: false
+          search:
+            found_update_count: 2
+          result: blocked
+          reason: INSTALL_NOT_AUTHORIZED
+          follow: false
+        - name: fu-install
+          sys_id: "00000000000000000000000000000006"
+          search:
+            found_update_count: 3
+          apply_phase:
+            fu-install:
+              patch_attempted: true
+              updates_installed: 0
+              updates_failed: 1
+              patch_status: failed
+          result: failed
+          reason: PATCH_INSTALL_FAILED
+          follow: true
+        - name: fu-discovery
+          sys_id: "00000000000000000000000000000007"
+          lifecycle_failed: true
+          failed_phase: discovery
+          timestamp: "2026-01-01T00:00:00Z"
+          result: failed
+          reason: REBOOT_FAILED
+          follow: true
+          pub_phase: discovery
+          pub_recovery: not_available
+        - name: fu-unsupported
+          sys_id: "00000000000000000000000000000008"
+          supported: false
+          search:
+            found_update_count: 0
+          result: failed
+          reason: UNSUPPORTED_OS
+          follow: true
+        - name: fu-reboot-command
+          sys_id: "00000000000000000000000000000009"
+          lifecycle_failed: true
+          failed_phase: pre_patch_reboot
+          recovery: false
+          timestamp: "2026-01-01T00:00:00Z"
+          result: failed
+          reason: REBOOT_FAILED
+          follow: true
+          pub_phase: pre_patch_reboot
+          pub_recovery: false
+        - name: fu-unresolved
+          sys_id: "0000000000000000000000000000000a"
+          lifecycle_failed: true
+          failed_phase: pre_patch_reboot
+          recovery: true
+          timestamp: "2026-01-01T00:00:00Z"
+          ping:
+            ping: pong
+            failed: false
+          search:
+            found_update_count: 0
+          result: failed
+          reason: REBOOT_FAILED
+          follow: true
+          pub_phase: pre_patch_reboot
+          pub_recovery: true
+        - name: fu-recovered
+          sys_id: "0000000000000000000000000000000b"
+          failed_phase: pre_patch_reboot
+          recovery: true
+          timestamp: "2026-01-01T00:00:00Z"
+          ping:
+            ping: pong
+            failed: false
+          search:
+            found_update_count: 0
+          apply_phase:
+            fu-recovered:
+              patch_attempted: true
+              updates_installed: 2
+              updates_failed: 0
+              patch_status: success
+          postcheck:
+            fu-recovered:
+              postcheck_status: ok
+          result: success
+          reason: PATCH_SUCCEEDED
+          follow: false
+          pub_phase: ""
+          pub_recovery: false
+        - name: fu-apply-after
+          sys_id: "0000000000000000000000000000000c"
+          failed_phase: pre_patch_reboot
+          recovery: true
+          timestamp: "2026-01-01T00:00:00Z"
+          apply_failed: true
+          ping:
+            ping: pong
+            failed: false
+          search:
+            found_update_count: 1
+          install:
+            failed: true
+            skipped: false
+            unreachable: false
+            failed_update_count: 1
+            installed_update_count: 0
+          patch_result:
+            phase: apply
+            inventory_hostname: fu-apply-after
+            host: fu-apply-after
+            patch_status: failed
+            patch_attempted: true
+          apply_phase:
+            fu-apply-after:
+              patch_attempted: true
+              updates_installed: 0
+              updates_failed: 1
+              patch_status: failed
+          result: failed
+          reason: PATCH_INSTALL_FAILED
+          follow: true
+          pub_phase: apply
+          pub_recovery: false
+        - name: fu-snow
+          sys_id: "0000000000000000000000000000000d"
+          lifecycle_failed: true
+          message: ServiceNow change validation failed
+          timestamp: "2026-01-01T00:00:00Z"
+          result: failed
+          reason: REBOOT_FAILED
+          follow: false
+          pub_phase: ""
+          pub_recovery: not_available
+
+- name: Classify the manual follow-up correction matrix
+  hosts: followup_matrix
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+  tasks:
+    - name: Build the per-host report
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+
+    - name: Assert classification and follow-up
+      ansible.builtin.assert:
+        that:
+          - patch_final_result.result == expected_result
+          - patch_final_result.reason_code == expected_reason_code
+          - (patch_final_result.manual_followup_required | bool) == (expected_manual_followup | bool)
+          - patch_final_result.failed_phase == expected_failed_phase
+          - (patch_final_result.reboot_recovery_failed | string | lower) == (expected_recovery | string | lower)
+        fail_msg: >-
+          {{ inventory_hostname }}
+          result={{ patch_final_result.result | default('') }}/{{ expected_result }}
+          reason_code={{ patch_final_result.reason_code | default('') }}/{{ expected_reason_code }}
+          manual_followup_required={{ patch_final_result.manual_followup_required | default('') }}
+          failed_phase={{ patch_final_result.failed_phase | default('') }}/{{ expected_failed_phase }}
+          reboot_recovery_failed={{ patch_final_result.reboot_recovery_failed | default('') }}/{{ expected_recovery }}
+
+    - name: Assert the resolved interruption does not keep the reboot timestamp
+      when: inventory_hostname == 'fu-apply-after'
+      ansible.builtin.assert:
+        that:
+          - patch_final_result.failure_timestamp_utc == 'not_available'
+        fail_msg: Apply failure reused the resolved reboot interruption timestamp.
+
+- name: Select incident candidates from the correction matrix
+  hosts: followup_matrix
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    snow_patching_tasks_dir: "{{ playbook_dir }}/../../playbooks/windows/tasks"
+  tasks:
+    - name: Aggregate the matrix
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_aggregate.yml
+      run_once: true
+
+    - name: Select follow-up candidates without creating incidents
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_candidates.yml"
+      run_once: true
+
+    - name: Assert the six host technical failures are the only candidates
+      ansible.builtin.assert:
+        that:
+          - snow_patching_incident_candidates | length == 6
+          - snow_patching_incident_candidates | map(attribute='action') | unique | list == ['create']
+          - >-
+            {{
+              snow_patching_incident_candidates | map(attribute='hostname') | sort | list
+              == [
+                'fu-apply-after',
+                'fu-discovery',
+                'fu-install',
+                'fu-reboot-command',
+                'fu-unresolved',
+                'fu-unsupported'
+              ]
+            }}
+        fail_msg: >-
+          Incident candidates={{
+            snow_patching_incident_candidates | default([]) | map(attribute='hostname') | list
+          }}
+      run_once: true

@@ -33,6 +33,61 @@ same AAP job after each phase, before the next phase overwrites `patch_result`:
 A host is treated as present for a phase only when that map exists and contains
 the inventory hostname. Missing history is `not_available`.
 
+Each host JSON result also carries `failed_phase`, `last_completed_phase`,
+`failure_timestamp_utc`, and `reboot_recovery_failed`. These fields are not
+CSV columns. `failed_phase` is empty when the failure is not one of `precheck`,
+`discovery`, `pre_patch_reboot`, `apply`, `post_patch_reboot`, `postcheck`, or
+`final_reporting`. ServiceNow validation, applicable-update confirmation, final
+health collection, and pending-reboot refresh do not set it. A blocked, skipped,
+or exempt phase is not a technical failure. `last_completed_phase` advances
+only after that phase finishes successfully. A skipped reboot does not advance
+it. `failure_timestamp_utc` is `not_available` until a failure is detected.
+`reboot_recovery_failed` is true only when a started reboot times out waiting
+for recovery, or the post-reboot WinRM check fails or is unreachable, and a
+later postcheck does not confirm that WinRM answered. Confirmation requires the
+preserved postcheck artifact to say `ok` or `degraded` and the current
+`windows_winrm_ping` result to be `pong`. A precheck ping or a fallback
+`postcheck_status` fact is not confirmation. When recovery is confirmed and
+that reboot phase is the only recorded failure, the final result publishes
+`reboot_recovery_failed: false`, an empty `failed_phase`, and
+`failure_timestamp_utc: not_available`. That resolved check does not by itself
+set `manual_followup_required`. When recovery is not confirmed, the reboot
+`failed_phase`, timestamp, and `reboot_recovery_failed: true` remain, and
+`manual_followup_required` is true. An unreachable WinRM check is not reported
+as an offline operating system. `ignore_unreachable` does not turn the first
+failed check into a successful reboot, and `last_completed_phase` does not
+advance to it. A WinRM result from the other reboot phase is ignored. An
+unreachable host that never started a reboot does not set the flag true.
+`result` and `reason_code` stay on the existing classifier, except that an
+unresolved reboot recovery is not published as `success` or `already_compliant`;
+that gap is reported as `failed` / `REBOOT_FAILED`.
+
+A resolved pre-patch WinRM interruption does not keep `failed_phase` when apply
+then ran and failed. That publication requires all of the current host's
+`windows_update_install` result (not skipped and not unreachable),
+`windows_apply_failed: true`, and a failed attempted apply record in
+`patch_phase_apply` or the current `patch_result`. The report then publishes
+`failed_phase: apply`, `reboot_recovery_failed: false`, the existing
+installation result and reason code, `manual_followup_required: true`, and
+`failure_timestamp_utc: not_available`. The reboot interruption timestamp is
+not reused. A skipped or unreachable install does not clear an unresolved
+recovery. Post-patch reboot recovery is left as recorded. A discovery failure
+that was stored first still keeps that `failed_phase`.
+
+`manual_followup_required` stays true when it was already true. It is also set
+for a host technical failure shown by structured evidence: an apply failure, a
+discovery failure (`failed_phase`, a failed discovery artifact, or a failed
+`windows_update_search`), a technical precheck failure, final health collection
+failure, pending-reboot refresh failure, authorized unsupported OS, a reboot
+command failure, unresolved reboot recovery, an unreachable host, or a failed
+postcheck artifact. `reason_code` is not the test. `REBOOT_FAILED` can still
+be a discovery failure, which does require follow-up, or a ServiceNow
+validation failure with an empty `failed_phase`, which does not. A closed
+maintenance window, installation that was not authorized, an approved
+exemption, an intentionally skipped operation, and check-only unsupported OS
+do not gain follow-up from this rule. Incident selection is unchanged and
+still excludes exemptions.
+
 Blocked, failed, or exempt hosts that skip later phases keep only the phases
 that actually ran.
 

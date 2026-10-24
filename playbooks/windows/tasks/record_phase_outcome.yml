@@ -1,0 +1,151 @@
+---
+# Called only after a phase include returns and its artifact was preserved.
+# Skipped, blocked, and exempt records do not advance last_completed_phase
+# and are not technical failures.
+# Reboot recovery uses windows_reboot_result and windows_post_reboot_ping
+# from the phase that just returned. reboot_phase must match this outcome,
+# so a result left by the other reboot phase is ignored.
+
+- name: Read the reboot results for this lifecycle phase
+  ansible.builtin.set_fact:
+    _reboot_registers_match_phase: >-
+      {{
+        (
+          (patch_outcome_phase == 'pre_patch_reboot')
+          and ((reboot_phase | default('')) == 'pre')
+        )
+        or (
+          (patch_outcome_phase == 'post_patch_reboot')
+          and ((reboot_phase | default('')) == 'post')
+        )
+      }}
+    _reboot_was_initiated: >-
+      {{
+        (windows_reboot_result is defined)
+        and (windows_reboot_result is mapping)
+        and not (windows_reboot_result is skipped)
+        and not (windows_reboot_result is failed)
+        and not (windows_reboot_result is unreachable)
+      }}
+    _post_reboot_ping_unhealthy: >-
+      {{
+        (windows_post_reboot_ping is defined)
+        and (windows_post_reboot_ping is mapping)
+        and not (windows_post_reboot_ping is skipped)
+        and (
+          (windows_post_reboot_ping is unreachable)
+          or (windows_post_reboot_ping is failed)
+        )
+      }}
+    _reboot_result_unsuccessful: >-
+      {{
+        (windows_reboot_result is defined)
+        and (windows_reboot_result is mapping)
+        and not (windows_reboot_result is skipped)
+        and (
+          (windows_reboot_result is failed)
+          or (windows_reboot_result is unreachable)
+        )
+      }}
+  changed_when: false
+
+- name: Classify reboot recovery from the current phase results
+  ansible.builtin.set_fact:
+    _reboot_recovery_failed: >-
+      {{
+        (_reboot_registers_match_phase | bool)
+        and (_reboot_was_initiated | bool)
+        and (_post_reboot_ping_unhealthy | bool)
+      }}
+    _reboot_result_blocks_success: >-
+      {{
+        (_reboot_registers_match_phase | bool)
+        and (_reboot_result_unsuccessful | bool)
+      }}
+  changed_when: false
+
+- name: Classify the preserved lifecycle phase
+  ansible.builtin.set_fact:
+    _phase_succeeded: >-
+      {{
+        (
+          (patch_outcome_phase == 'precheck')
+          and ((patch_result.precheck_status | default('')) in ['passed', 'warning'])
+        )
+        or (
+          (patch_outcome_phase == 'discovery')
+          and (
+            (patch_result.patch_status | default(''))
+            not in ['failed', 'skipped', 'excluded', 'blocked_unknown_provider']
+          )
+        )
+        or (
+          (patch_outcome_phase == 'apply')
+          and ((patch_result.patch_status | default('')) in ['ok', 'check_only'])
+        )
+        or (
+          (patch_outcome_phase in ['pre_patch_reboot', 'post_patch_reboot'])
+          and ((patch_result.patch_status | default('')) == 'ok')
+          and (patch_result.reboot_performed | default(false) | bool)
+          and not (_reboot_recovery_failed | bool)
+          and not (_reboot_result_blocks_success | bool)
+        )
+        or (
+          (patch_outcome_phase == 'postcheck')
+          and ((patch_result.postcheck_status | default('')) in ['ok', 'degraded'])
+        )
+      }}
+    _phase_technical_failure: >-
+      {{
+        (
+          (patch_outcome_phase == 'precheck')
+          and ((patch_result.precheck_status | default('')) == 'failed')
+        )
+        or (
+          (patch_outcome_phase in ['discovery', 'apply'])
+          and ((patch_result.patch_status | default('')) == 'failed')
+        )
+        or (
+          (patch_outcome_phase == 'postcheck')
+          and ((patch_result.postcheck_status | default('')) == 'failed')
+        )
+        or (
+          (patch_outcome_phase in ['pre_patch_reboot', 'post_patch_reboot'])
+          and (_reboot_recovery_failed | bool)
+        )
+      }}
+  changed_when: false
+
+- name: Advance the last successfully completed lifecycle phase
+  ansible.builtin.set_fact:
+    patch_lifecycle_last_completed_phase: "{{ patch_outcome_phase }}"
+  when:
+    - _phase_succeeded | bool
+    - not (patch_lifecycle_failed | default(false) | bool)
+  changed_when: false
+
+- name: Record a confirmed phase failure that did not raise an exception
+  ansible.builtin.set_fact:
+    patch_lifecycle_failed_phase: "{{ patch_outcome_phase }}"
+    patch_lifecycle_failure_timestamp_utc: >-
+      {{
+        patch_lifecycle_failure_timestamp_utc
+        if ((patch_lifecycle_failure_timestamp_utc | default('not_available')) != 'not_available')
+        else now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ')
+      }}
+    patch_lifecycle_reboot_recovery_failed: >-
+      {{
+        true
+        if (_reboot_recovery_failed | bool)
+        else (patch_lifecycle_reboot_recovery_failed | default('not_available'))
+      }}
+  when:
+    - _phase_technical_failure | bool
+    - (patch_lifecycle_failed_phase | default('') | length) == 0
+    - not (patch_lifecycle_failed | default(false) | bool)
+  changed_when: false
+
+- name: Clear the current lifecycle phase after the phase returns
+  ansible.builtin.set_fact:
+    patch_lifecycle_current_phase: ""
+  changed_when: false

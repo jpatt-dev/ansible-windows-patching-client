@@ -1,0 +1,9 @@
+---
+- name: Record phases that already completed
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_phase_outcome.yml"
+  vars:
+    patch_outcome_phase: "{{ item.phase }}"
+    patch_result: "{{ item.result }}"
+  loop: "{{ prior_phases }}"
+  loop_control:
+    label: "{{ item.phase }}"

@@ -1,0 +1,23 @@
+---
+- name: Set the caption under test
+  ansible.builtin.set_fact:
+    windows_os_caption: "{{ os_case.caption }}"
+
+- name: Resolve OS policy for this caption
+  ansible.builtin.include_role:
+    name: windows_patch
+    tasks_from: resolve_os_policy.yml
+
+- name: Assert the caption resolves to one policy
+  ansible.builtin.assert:
+    that:
+      - (windows_os_policy.policy_id | string) == (os_case.policy_id | string)
+      - (windows_os_policy_supported | bool) == (os_case.supported | bool)
+      - (os_case.supported | bool) or ((windows_os_policy.categories | length) == 0)
+      - (not (os_case.supported | bool)) or (windows_os_policy.categories == windows_patch_categories)
+    fail_msg: >-
+      Caption '{{ os_case.caption }}' resolved to
+      policy={{ windows_os_policy.policy_id | default('') }}
+      supported={{ windows_os_policy_supported | default('') }}
+      categories={{ windows_os_policy.categories | default([]) }},
+      expected {{ os_case.policy_id }}/supported={{ os_case.supported }}.

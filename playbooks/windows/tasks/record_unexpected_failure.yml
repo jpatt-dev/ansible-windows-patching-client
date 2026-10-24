@@ -17,3 +17,13 @@
       Remaining work for this phase was not run.
       Final reporting will continue.
   changed_when: false
+
+- name: Record the lifecycle failure location without changing the message
+  ansible.builtin.include_tasks: "{{ _lifecycle_note_file }}"
+  vars:
+    _lifecycle_note_file: >-
+      {{
+        (playbook_dir ~ '/tasks/note_lifecycle_failure.yml')
+        if ((playbook_dir ~ '/tasks/note_lifecycle_failure.yml') is file)
+        else (playbook_dir ~ '/../../playbooks/windows/tasks/note_lifecycle_failure.yml')
+      }}

@@ -1,0 +1,25 @@
+---
+# The remediation rescue in full_patch.yml. It must not replace a reboot
+# recovery failure already recorded from the WinRM result.
+
+- name: Mark the next lifecycle phase after reboot recovery
+  ansible.builtin.set_fact:
+    patch_lifecycle_current_phase: "{{ next_lifecycle_phase }}"
+  changed_when: false
+
+- name: Fail the next phase inside the remediation block
+  block:
+    - name: Fail the phase that follows reboot recovery
+      ansible.builtin.fail:
+        msg: "{{ next_phase_fail_message }}"
+  rescue:
+    - name: Record the remediation failure with the existing message
+      ansible.builtin.set_fact:
+        patch_lifecycle_failed: true
+        patch_lifecycle_failed_message: >-
+          {{ ansible_failed_result.msg | default('Windows full patch remediation lifecycle failed') }}
+      when: ansible_failed_result is defined
+      changed_when: false
+
+    - name: Record the remediation failure location without changing the message
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/note_lifecycle_failure.yml"

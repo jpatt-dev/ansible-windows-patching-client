@@ -72,6 +72,10 @@
       pre_patch_reboot_performed: not_available
       post_patch_reboot_performed: not_available
       pending_reboot: not_available
+      failed_phase: ""
+      last_completed_phase: ""
+      failure_timestamp_utc: not_available
+      reboot_recovery_failed: not_available
       change_ticket_id: "{{ change_ticket_id | default('') }}"
       patch_wave: "{{ patch_wave_name | default('unspecified') }}"
       patch_wave_name: "{{ patch_wave_name | default('unspecified') }}"

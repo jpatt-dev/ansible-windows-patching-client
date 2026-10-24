@@ -1,0 +1,1237 @@
+---
+# Drives the full_patch reboot outcome order with stubbed win_reboot and
+# win_ping results. No Windows host is contacted.
+#
+#   ANSIBLE_ROLES_PATH=roles ansible-playbook tests/reporting/test_reboot_recovery_orchestration.yml
+
+- name: Seed reboot recovery hosts
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add one host per reboot recovery case
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        groups: reboot_recovery_hosts
+        ansible_connection: local
+      loop:
+        - rec-pre-ok
+        - rec-post-ok
+        - rec-pre-unreach
+        - rec-post-unreach
+        - rec-timeout
+        - rec-skipped
+        - rec-down-before
+        - rec-auth-denied
+        - rec-stale-ping
+        - rec-continued-success
+        - rec-recovered-degraded
+        - rec-postcheck-failed
+        - rec-apply-independent
+        - rec-compliant-gap
+
+- name: Reset lifecycle tracking facts
+  hosts: reboot_recovery_hosts
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Start each host with empty lifecycle tracking
+      ansible.builtin.set_fact:
+        patch_lifecycle_current_phase: ""
+        patch_lifecycle_last_completed_phase: ""
+        patch_lifecycle_failed_phase: ""
+        patch_lifecycle_failure_timestamp_utc: not_available
+        patch_lifecycle_reboot_recovery_failed: not_available
+        patch_lifecycle_failed: false
+        patch_lifecycle_failed_message: ""
+
+- name: Successful pre-patch reboot and WinRM check
+  hosts: rec-pre-ok
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record precheck and discovery
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: precheck
+            result:
+              precheck_status: passed
+          - phase: discovery
+            result:
+              patch_status: ""
+
+    - name: Stub a successful pre-patch reboot and WinRM check
+      ansible.builtin.set_fact:
+        reboot_phase: pre
+        windows_reboot_result:
+          changed: true
+          failed: false
+          rebooted: true
+        windows_post_reboot_ping:
+          ping: pong
+          failed: false
+        patch_result:
+          phase: reboot_pre
+          patch_status: ok
+          reboot_performed: true
+
+    - name: Record the pre-patch reboot the way full_patch.yml does
+      ansible.builtin.include_tasks: full_patch_reboot_outcome.yml
+      vars:
+        reboot_outcome_phase: pre_patch_reboot
+        reboot_result_phase: reboot_pre
+
+    - name: Assert the successful reboot completed and was not a recovery failure
+      ansible.builtin.assert:
+        that:
+          - patch_lifecycle_last_completed_phase == 'pre_patch_reboot'
+          - patch_lifecycle_failed_phase == ''
+          - patch_lifecycle_reboot_recovery_failed == 'not_available'
+        fail_msg: A successful pre-patch WinRM check was recorded as a recovery failure.
+
+    - name: Record apply and postcheck after the reboot
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: apply
+            result:
+              patch_status: ok
+          - phase: postcheck
+            result:
+              postcheck_status: ok
+
+    - name: Preserve the successful cycle artifacts
+      ansible.builtin.include_tasks: tasks/successful_cycle_artifacts.yml
+
+    - name: Build and assert the successful pre-patch reboot cycle
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: success
+        expected_reason_code: PATCH_SUCCEEDED
+        expected_failed_phase: ""
+        expected_last_completed_phase: postcheck
+        expected_failure_timestamp_utc: not_available
+        expected_reboot_recovery_failed: not_available
+        expected_manual_followup: false
+
+- name: Successful post-patch reboot and WinRM check
+  hosts: rec-post-ok
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record phases that finished before the post-patch reboot
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: precheck
+            result:
+              precheck_status: passed
+          - phase: discovery
+            result:
+              patch_status: ""
+          - phase: apply
+            result:
+              patch_status: ok
+
+    - name: Stub a successful post-patch reboot and WinRM check
+      ansible.builtin.set_fact:
+        reboot_phase: post
+        windows_reboot_result:
+          changed: true
+          failed: false
+          rebooted: true
+        windows_post_reboot_ping:
+          ping: pong
+          failed: false
+        patch_result:
+          phase: reboot_post
+          patch_status: ok
+          reboot_performed: true
+
+    - name: Record the post-patch reboot the way full_patch.yml does
+      ansible.builtin.include_tasks: full_patch_reboot_outcome.yml
+      vars:
+        reboot_outcome_phase: post_patch_reboot
+        reboot_result_phase: reboot_post
+
+    - name: Assert the successful post-patch reboot completed
+      ansible.builtin.assert:
+        that:
+          - patch_lifecycle_last_completed_phase == 'post_patch_reboot'
+          - patch_lifecycle_failed_phase == ''
+          - patch_lifecycle_reboot_recovery_failed == 'not_available'
+        fail_msg: A successful post-patch WinRM check was recorded as a recovery failure.
+
+    - name: Record postcheck after the reboot
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: postcheck
+            result:
+              postcheck_status: ok
+
+    - name: Preserve the successful cycle artifacts
+      ansible.builtin.include_tasks: tasks/successful_cycle_artifacts.yml
+
+    - name: Build and assert the successful post-patch reboot cycle
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: success
+        expected_reason_code: PATCH_SUCCEEDED
+        expected_failed_phase: ""
+        expected_last_completed_phase: postcheck
+        expected_failure_timestamp_utc: not_available
+        expected_reboot_recovery_failed: not_available
+        expected_manual_followup: false
+
+- name: Pre-patch WinRM unreachable is the failure even when apply fails later
+  hosts: rec-pre-unreach
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record precheck and discovery
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: precheck
+            result:
+              precheck_status: passed
+          - phase: discovery
+            result:
+              patch_status: ""
+
+    - name: Stub win_reboot success and an unreachable post-reboot win_ping
+      ansible.builtin.set_fact:
+        reboot_phase: pre
+        windows_reboot_result:
+          changed: true
+          failed: false
+          rebooted: true
+        windows_post_reboot_ping:
+          unreachable: true
+          msg: Data could not be sent to remote host
+        patch_result:
+          phase: reboot_pre
+          patch_status: ok
+          reboot_performed: true
+        patch_phase_reboot_pre: >-
+          {{
+            {
+              inventory_hostname: {
+                'phase': 'reboot_pre',
+                'patch_status': 'ok',
+                'reboot_performed': true
+              }
+            }
+          }}
+
+    - name: Record the pre-patch reboot the way full_patch.yml does
+      ansible.builtin.include_tasks: full_patch_reboot_outcome.yml
+      vars:
+        reboot_outcome_phase: pre_patch_reboot
+        reboot_result_phase: reboot_pre
+
+    - name: Assert recovery failed before apply is marked
+      ansible.builtin.assert:
+        that:
+          - patch_lifecycle_failed_phase == 'pre_patch_reboot'
+          - patch_lifecycle_last_completed_phase == 'discovery'
+          - patch_lifecycle_reboot_recovery_failed == true
+          - patch_lifecycle_failure_timestamp_utc is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T')
+        fail_msg: The unreachable pre-patch WinRM check was not recorded before apply.
+
+    - name: Fail apply after the ignored unreachable WinRM check
+      ansible.builtin.include_tasks: full_patch_next_phase_failure.yml
+      vars:
+        next_lifecycle_phase: apply
+        next_phase_fail_message: Windows update installation failed after reboot recovery
+
+    - name: Build and assert the pre-patch recovery failure stayed in place
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: failed
+        expected_reason_code: PATCH_INSTALL_FAILED
+        expected_failed_phase: pre_patch_reboot
+        expected_last_completed_phase: discovery
+        expected_failure_timestamp_utc: timestamp
+        expected_reboot_recovery_failed: true
+        expected_manual_followup: true
+
+- name: Post-patch WinRM unreachable is the failure even when postcheck fails later
+  hosts: rec-post-unreach
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record phases that finished before the post-patch reboot
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: precheck
+            result:
+              precheck_status: passed
+          - phase: discovery
+            result:
+              patch_status: ""
+          - phase: apply
+            result:
+              patch_status: ok
+
+    - name: Preserve the completed apply artifact
+      ansible.builtin.set_fact:
+        patch_phase_apply: >-
+          {{
+            {
+              inventory_hostname: {
+                'patch_attempted': true,
+                'updates_installed': 2,
+                'updates_failed': 0,
+                'patch_status': 'success'
+              }
+            }
+          }}
+
+    - name: Stub win_reboot success and an unreachable post-reboot win_ping
+      ansible.builtin.set_fact:
+        reboot_phase: post
+        windows_reboot_result:
+          changed: true
+          failed: false
+          rebooted: true
+        windows_post_reboot_ping:
+          unreachable: true
+          msg: Data could not be sent to remote host
+        patch_result:
+          phase: reboot_post
+          patch_status: ok
+          reboot_performed: true
+        patch_phase_reboot_post: >-
+          {{
+            {
+              inventory_hostname: {
+                'phase': 'reboot_post',
+                'patch_status': 'ok',
+                'reboot_performed': true
+              }
+            }
+          }}
+
+    - name: Record the post-patch reboot the way full_patch.yml does
+      ansible.builtin.include_tasks: full_patch_reboot_outcome.yml
+      vars:
+        reboot_outcome_phase: post_patch_reboot
+        reboot_result_phase: reboot_post
+
+    - name: Assert recovery failed before postcheck is marked
+      ansible.builtin.assert:
+        that:
+          - patch_lifecycle_failed_phase == 'post_patch_reboot'
+          - patch_lifecycle_last_completed_phase == 'apply'
+          - patch_lifecycle_reboot_recovery_failed == true
+        fail_msg: The unreachable post-patch WinRM check was not recorded before postcheck.
+
+    - name: Fail postcheck after the ignored unreachable WinRM check
+      ansible.builtin.include_tasks: full_patch_next_phase_failure.yml
+      vars:
+        next_lifecycle_phase: postcheck
+        next_phase_fail_message: Postcheck failed after reboot recovery
+
+    - name: Build and assert the post-patch recovery failure stayed in place
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: failed
+        expected_reason_code: PATCH_INSTALL_FAILED
+        expected_failed_phase: post_patch_reboot
+        expected_last_completed_phase: apply
+        expected_failure_timestamp_utc: timestamp
+        expected_reboot_recovery_failed: true
+        expected_manual_followup: true
+
+- name: Reboot timeout is a recovery failure and does not reach apply
+  hosts: rec-timeout
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record precheck and discovery
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: precheck
+            result:
+              precheck_status: passed
+          - phase: discovery
+            result:
+              patch_status: ""
+
+    - name: Mark the pre-patch reboot before the role runs
+      ansible.builtin.set_fact:
+        patch_lifecycle_current_phase: pre_patch_reboot
+        reboot_phase: pre
+
+    - name: Fail inside the reboot role the way a win_reboot timeout does
+      block:
+        - name: Reboot Windows host only when safety gates and reboot policy allow
+          ansible.builtin.fail:
+            msg: Reboot timeout of 3600 seconds reached
+      rescue:
+        - name: Record the remediation failure with the existing message
+          ansible.builtin.set_fact:
+            patch_lifecycle_failed: true
+            patch_lifecycle_failed_message: >-
+              {{ ansible_failed_result.msg | default('Windows full patch remediation lifecycle failed') }}
+          when: ansible_failed_result is defined
+
+        - name: Record the remediation failure location without changing the message
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/note_lifecycle_failure.yml"
+
+    - name: Build and assert the reboot timeout
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: failed
+        expected_reason_code: REBOOT_FAILED
+        expected_failed_phase: pre_patch_reboot
+        expected_last_completed_phase: discovery
+        expected_failure_timestamp_utc: timestamp
+        expected_reboot_recovery_failed: true
+        expected_manual_followup: true
+
+- name: Intentionally skipped reboot is not a recovery failure
+  hosts: rec-skipped
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record precheck and discovery
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: precheck
+            result:
+              precheck_status: passed
+          - phase: discovery
+            result:
+              patch_status: ""
+
+    - name: Stub a reboot that policy skipped
+      ansible.builtin.set_fact:
+        reboot_phase: pre
+        windows_reboot_result:
+          skipped: true
+          skip_reason: Conditional result was False
+        windows_post_reboot_ping:
+          skipped: true
+          skip_reason: Conditional result was False
+        patch_result:
+          phase: reboot_pre
+          patch_status: skipped
+          reboot_performed: false
+          reboot_skipped_reason: reboot_not_required
+
+    - name: Record the skipped reboot the way full_patch.yml does
+      ansible.builtin.include_tasks: full_patch_reboot_outcome.yml
+      vars:
+        reboot_outcome_phase: pre_patch_reboot
+        reboot_result_phase: reboot_pre
+
+    - name: Assert the skip did not complete or fail the reboot phase
+      ansible.builtin.assert:
+        that:
+          - patch_lifecycle_last_completed_phase == 'discovery'
+          - patch_lifecycle_failed_phase == ''
+          - patch_lifecycle_reboot_recovery_failed == 'not_available'
+        fail_msg: An intentionally skipped reboot was treated as recovery or success.
+
+    - name: Record apply and postcheck after the skipped reboot
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: apply
+            result:
+              patch_status: ok
+          - phase: postcheck
+            result:
+              postcheck_status: ok
+
+    - name: Preserve the successful cycle artifacts
+      ansible.builtin.include_tasks: tasks/successful_cycle_artifacts.yml
+
+    - name: Build and assert the skipped reboot still reports success
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: success
+        expected_reason_code: PATCH_SUCCEEDED
+        expected_failed_phase: ""
+        expected_last_completed_phase: postcheck
+        expected_failure_timestamp_utc: not_available
+        expected_reboot_recovery_failed: not_available
+        expected_manual_followup: false
+
+- name: Host unreachable before reboot is not reboot recovery
+  hosts: rec-down-before
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    pending_reboot: false
+  tasks:
+    - name: Record the failed precheck for an unreachable host
+      ansible.builtin.set_fact:
+        windows_connectivity_ok: false
+        patch_result:
+          phase: precheck
+          precheck_status: failed
+
+    - name: Record the precheck outcome
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_phase_outcome.yml"
+      vars:
+        patch_outcome_phase: precheck
+
+    - name: Stub win_reboot and win_ping both unreachable before a reboot starts
+      ansible.builtin.set_fact:
+        reboot_phase: pre
+        windows_reboot_result:
+          unreachable: true
+          msg: Data could not be sent to remote host
+        windows_post_reboot_ping:
+          unreachable: true
+          msg: Data could not be sent to remote host
+        patch_result:
+          phase: reboot_pre
+          patch_status: ok
+          reboot_performed: true
+
+    - name: Record the reboot outcome the way full_patch.yml does
+      ansible.builtin.include_tasks: full_patch_reboot_outcome.yml
+      vars:
+        reboot_outcome_phase: pre_patch_reboot
+        reboot_result_phase: reboot_pre
+
+    - name: Build and assert downtime stayed distinct from reboot recovery
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: failed
+        expected_reason_code: UNREACHABLE
+        expected_failed_phase: precheck
+        expected_last_completed_phase: ""
+        expected_failure_timestamp_utc: timestamp
+        expected_reboot_recovery_failed: not_available
+        expected_manual_followup: true
+
+- name: Reboot authorization denied is not reboot recovery
+  hosts: rec-auth-denied
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record precheck and discovery
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: precheck
+            result:
+              precheck_status: passed
+          - phase: discovery
+            result:
+              patch_status: ""
+
+    - name: Stub a reboot skipped because reboot authorization is off
+      ansible.builtin.set_fact:
+        reboot_phase: pre
+        windows_reboot_result:
+          skipped: true
+          skip_reason: Conditional result was False
+        windows_post_reboot_ping:
+          skipped: true
+          skip_reason: Conditional result was False
+        patch_result:
+          phase: reboot_pre
+          patch_status: skipped
+          reboot_performed: false
+          reboot_skipped_reason: reboot_disabled
+
+    - name: Record the denied reboot the way full_patch.yml does
+      ansible.builtin.include_tasks: full_patch_reboot_outcome.yml
+      vars:
+        reboot_outcome_phase: pre_patch_reboot
+        reboot_result_phase: reboot_pre
+
+    - name: Assert authorization did not start reboot recovery
+      ansible.builtin.assert:
+        that:
+          - patch_lifecycle_last_completed_phase == 'discovery'
+          - patch_lifecycle_failed_phase == ''
+          - patch_lifecycle_reboot_recovery_failed == 'not_available'
+        fail_msg: Reboot authorization denial was recorded as reboot recovery.
+
+    - name: Record apply and postcheck after the denied reboot
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: apply
+            result:
+              patch_status: ok
+          - phase: postcheck
+            result:
+              postcheck_status: ok
+
+    - name: Preserve the successful cycle artifacts
+      ansible.builtin.include_tasks: tasks/successful_cycle_artifacts.yml
+
+    - name: Build and assert authorization denial does not change success
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: success
+        expected_reason_code: PATCH_SUCCEEDED
+        expected_failed_phase: ""
+        expected_last_completed_phase: postcheck
+        expected_failure_timestamp_utc: not_available
+        expected_reboot_recovery_failed: not_available
+        expected_manual_followup: false
+
+- name: A stale WinRM result from the other reboot phase is ignored
+  hosts: rec-stale-ping
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record precheck and discovery
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: precheck
+            result:
+              precheck_status: passed
+          - phase: discovery
+            result:
+              patch_status: ""
+
+    - name: Leave a post-patch unreachable ping in place while recording pre-patch success
+      ansible.builtin.set_fact:
+        reboot_phase: post
+        windows_reboot_result:
+          changed: true
+          failed: false
+          rebooted: true
+        windows_post_reboot_ping:
+          unreachable: true
+          msg: Data could not be sent to remote host
+        patch_result:
+          phase: reboot_pre
+          patch_status: ok
+          reboot_performed: true
+
+    - name: Record the pre-patch reboot the way full_patch.yml does
+      ansible.builtin.include_tasks: full_patch_reboot_outcome.yml
+      vars:
+        reboot_outcome_phase: pre_patch_reboot
+        reboot_result_phase: reboot_pre
+
+    - name: Assert the other phase's WinRM result did not fail this reboot
+      ansible.builtin.assert:
+        that:
+          - patch_lifecycle_last_completed_phase == 'pre_patch_reboot'
+          - patch_lifecycle_failed_phase == ''
+          - patch_lifecycle_reboot_recovery_failed == 'not_available'
+        fail_msg: A stale post-patch WinRM result was applied to the pre-patch reboot.
+
+    - name: Record apply and postcheck
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: apply
+            result:
+              patch_status: ok
+          - phase: postcheck
+            result:
+              postcheck_status: ok
+
+    - name: Preserve the successful cycle artifacts
+      ansible.builtin.include_tasks: tasks/successful_cycle_artifacts.yml
+
+    - name: Build and assert the stale WinRM result did not change success
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: success
+        expected_reason_code: PATCH_SUCCEEDED
+        expected_failed_phase: ""
+        expected_last_completed_phase: postcheck
+        expected_failure_timestamp_utc: not_available
+        expected_reboot_recovery_failed: not_available
+        expected_manual_followup: false
+
+- name: Temporary WinRM failure is cleared after a confirming postcheck
+  hosts: rec-continued-success
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record precheck and discovery
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: precheck
+            result:
+              precheck_status: passed
+          - phase: discovery
+            result:
+              patch_status: ""
+
+    - name: Stub win_reboot success and an unreachable post-reboot win_ping
+      ansible.builtin.set_fact:
+        reboot_phase: pre
+        windows_reboot_result:
+          changed: true
+          failed: false
+          rebooted: true
+        windows_post_reboot_ping:
+          unreachable: true
+          msg: Data could not be sent to remote host
+        patch_result:
+          phase: reboot_pre
+          patch_status: ok
+          reboot_performed: true
+
+    - name: Record the pre-patch reboot the way full_patch.yml does
+      ansible.builtin.include_tasks: full_patch_reboot_outcome.yml
+      vars:
+        reboot_outcome_phase: pre_patch_reboot
+        reboot_result_phase: reboot_pre
+
+    - name: Record apply and postcheck after the ignored unreachable check
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: apply
+            result:
+              patch_status: ok
+          - phase: postcheck
+            result:
+              postcheck_status: ok
+
+    - name: Preserve a successful postcheck and a fresh WinRM answer
+      ansible.builtin.set_fact:
+        windows_connectivity_ok: true
+        windows_winrm_ping:
+          ping: pong
+          failed: false
+        windows_update_search:
+          found_update_count: 0
+        pending_reboot: false
+        patch_phase_apply: >-
+          {{
+            {
+              inventory_hostname: {
+                'patch_attempted': true,
+                'updates_installed': 4,
+                'updates_failed': 0,
+                'patch_status': 'success'
+              }
+            }
+          }}
+        patch_phase_postcheck: >-
+          {{
+            {
+              inventory_hostname: {
+                'postcheck_status': 'ok'
+              }
+            }
+          }}
+
+    - name: Build and assert the recovered WinRM check is not a terminal failure
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: success
+        expected_reason_code: PATCH_SUCCEEDED
+        expected_failed_phase: ""
+        expected_last_completed_phase: postcheck
+        expected_failure_timestamp_utc: not_available
+        expected_reboot_recovery_failed: false
+        expected_manual_followup: false
+
+- name: Degraded postcheck with a fresh WinRM answer clears the reboot failure
+  hosts: rec-recovered-degraded
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    pending_reboot: true
+  tasks:
+    - name: Record precheck and discovery
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: precheck
+            result:
+              precheck_status: passed
+          - phase: discovery
+            result:
+              patch_status: ""
+
+    - name: Stub win_reboot success and an unreachable post-reboot win_ping
+      ansible.builtin.set_fact:
+        reboot_phase: pre
+        windows_reboot_result:
+          changed: true
+          failed: false
+          rebooted: true
+        windows_post_reboot_ping:
+          unreachable: true
+          msg: Data could not be sent to remote host
+        patch_result:
+          phase: reboot_pre
+          patch_status: ok
+          reboot_performed: true
+
+    - name: Record the pre-patch reboot the way full_patch.yml does
+      ansible.builtin.include_tasks: full_patch_reboot_outcome.yml
+      vars:
+        reboot_outcome_phase: pre_patch_reboot
+        reboot_result_phase: reboot_pre
+
+    - name: Record a later degraded postcheck
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: apply
+            result:
+              patch_status: ok
+          - phase: postcheck
+            result:
+              postcheck_status: degraded
+
+    - name: Preserve degraded postcheck evidence and a fresh WinRM answer
+      ansible.builtin.set_fact:
+        windows_connectivity_ok: true
+        windows_winrm_ping:
+          ping: pong
+          failed: false
+        windows_update_search:
+          found_update_count: 0
+        pending_reboot: true
+        patch_phase_apply: >-
+          {{
+            {
+              inventory_hostname: {
+                'patch_attempted': true,
+                'updates_installed': 4,
+                'updates_failed': 0,
+                'patch_status': 'success'
+              }
+            }
+          }}
+        patch_phase_postcheck: >-
+          {{
+            {
+              inventory_hostname: {
+                'postcheck_status': 'degraded'
+              }
+            }
+          }}
+
+    - name: Build and assert degraded recovery is not a reboot failure
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: degraded
+        expected_reason_code: PENDING_REBOOT
+        expected_failed_phase: ""
+        expected_last_completed_phase: postcheck
+        expected_failure_timestamp_utc: not_available
+        expected_reboot_recovery_failed: false
+        expected_manual_followup: false
+
+- name: Failed postcheck does not confirm reboot recovery
+  hosts: rec-postcheck-failed
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record precheck and discovery
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: precheck
+            result:
+              precheck_status: passed
+          - phase: discovery
+            result:
+              patch_status: ""
+
+    - name: Stub win_reboot success and an unreachable post-reboot win_ping
+      ansible.builtin.set_fact:
+        reboot_phase: pre
+        windows_reboot_result:
+          changed: true
+          failed: false
+          rebooted: true
+        windows_post_reboot_ping:
+          unreachable: true
+          msg: Data could not be sent to remote host
+        patch_result:
+          phase: reboot_pre
+          patch_status: ok
+          reboot_performed: true
+        patch_phase_reboot_pre: >-
+          {{
+            {
+              inventory_hostname: {
+                'phase': 'reboot_pre',
+                'patch_status': 'ok',
+                'reboot_performed': true
+              }
+            }
+          }}
+
+    - name: Record the pre-patch reboot the way full_patch.yml does
+      ansible.builtin.include_tasks: full_patch_reboot_outcome.yml
+      vars:
+        reboot_outcome_phase: pre_patch_reboot
+        reboot_result_phase: reboot_pre
+
+    - name: Preserve a failed postcheck without a successful WinRM answer
+      ansible.builtin.set_fact:
+        windows_connectivity_ok: true
+        windows_winrm_ping:
+          ping: ""
+          failed: true
+          unreachable: false
+        patch_phase_postcheck: >-
+          {{
+            {
+              inventory_hostname: {
+                'postcheck_status': 'failed'
+              }
+            }
+          }}
+
+    - name: Build and assert the failed postcheck leaves recovery unresolved
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: failed
+        expected_reason_code: PATCH_INSTALL_FAILED
+        expected_failed_phase: pre_patch_reboot
+        expected_last_completed_phase: discovery
+        expected_failure_timestamp_utc: timestamp
+        expected_reboot_recovery_failed: true
+        expected_manual_followup: true
+
+- name: Apply failure remains after WinRM recovery
+  hosts: rec-apply-independent
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record precheck and discovery
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: precheck
+            result:
+              precheck_status: passed
+          - phase: discovery
+            result:
+              patch_status: ""
+
+    - name: Stub win_reboot success and an unreachable post-reboot win_ping
+      ansible.builtin.set_fact:
+        reboot_phase: pre
+        windows_reboot_result:
+          changed: true
+          failed: false
+          rebooted: true
+        windows_post_reboot_ping:
+          unreachable: true
+          msg: Data could not be sent to remote host
+        patch_result:
+          phase: reboot_pre
+          patch_status: ok
+          reboot_performed: true
+
+    - name: Record the pre-patch reboot the way full_patch.yml does
+      ansible.builtin.include_tasks: full_patch_reboot_outcome.yml
+      vars:
+        reboot_outcome_phase: pre_patch_reboot
+        reboot_result_phase: reboot_pre
+
+    - name: Record the later postcheck without clearing the earlier failure
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: postcheck
+            result:
+              postcheck_status: ok
+
+    - name: Preserve the installation failure and the confirming postcheck
+      ansible.builtin.set_fact:
+        windows_connectivity_ok: true
+        windows_winrm_ping:
+          ping: pong
+          failed: false
+        windows_apply_failed: true
+        windows_update_install:
+          failed: true
+          skipped: false
+          unreachable: false
+          failed_update_count: 1
+          installed_update_count: 0
+        patch_result:
+          phase: apply
+          inventory_hostname: rec-apply-independent
+          host: rec-apply-independent
+          patch_status: failed
+          patch_attempted: true
+        patch_phase_apply: >-
+          {{
+            {
+              inventory_hostname: {
+                'patch_attempted': true,
+                'updates_installed': 0,
+                'updates_failed': 1,
+                'patch_status': 'failed'
+              }
+            }
+          }}
+        patch_phase_postcheck: >-
+          {{
+            {
+              inventory_hostname: {
+                'postcheck_status': 'ok'
+              }
+            }
+          }}
+
+    - name: Build and assert the installation failure survives WinRM recovery
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: failed
+        expected_reason_code: PATCH_INSTALL_FAILED
+        expected_failed_phase: apply
+        expected_last_completed_phase: postcheck
+        expected_failure_timestamp_utc: not_available
+        expected_reboot_recovery_failed: false
+        expected_manual_followup: true
+
+- name: Skipped apply does not clear unresolved reboot recovery
+  hosts: rec-apply-skipped
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record precheck and discovery
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: precheck
+            result:
+              precheck_status: passed
+          - phase: discovery
+            result:
+              patch_status: ""
+
+    - name: Stub win_reboot success and an unreachable post-reboot win_ping
+      ansible.builtin.set_fact:
+        reboot_phase: pre
+        windows_reboot_result:
+          changed: true
+          failed: false
+          rebooted: true
+        windows_post_reboot_ping:
+          unreachable: true
+          msg: Data could not be sent to remote host
+        windows_apply_failed: false
+        windows_update_install:
+          skipped: true
+          failed: false
+        windows_update_search:
+          found_update_count: 0
+        windows_winrm_ping:
+          ping: pong
+          failed: false
+        patch_result:
+          phase: reboot_pre
+          patch_status: ok
+          reboot_performed: true
+
+    - name: Record the pre-patch reboot the way full_patch.yml does
+      ansible.builtin.include_tasks: full_patch_reboot_outcome.yml
+      vars:
+        reboot_outcome_phase: pre_patch_reboot
+        reboot_result_phase: reboot_pre
+
+    - name: Build and assert a skipped install leaves recovery unresolved
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: failed
+        expected_reason_code: REBOOT_FAILED
+        expected_failed_phase: pre_patch_reboot
+        expected_last_completed_phase: discovery
+        expected_failure_timestamp_utc: timestamp
+        expected_reboot_recovery_failed: true
+        expected_manual_followup: true
+
+- name: Unresolved recovery is not published as already compliant
+  hosts: rec-compliant-gap
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record precheck and discovery
+      ansible.builtin.include_tasks: record_prior_phases.yml
+      vars:
+        prior_phases:
+          - phase: precheck
+            result:
+              precheck_status: passed
+          - phase: discovery
+            result:
+              patch_status: ""
+
+    - name: Stub an unresolved pre-patch WinRM failure without postcheck
+      ansible.builtin.set_fact:
+        reboot_phase: pre
+        windows_reboot_result:
+          changed: true
+          failed: false
+          rebooted: true
+        windows_post_reboot_ping:
+          unreachable: true
+          msg: Data could not be sent to remote host
+        windows_winrm_ping:
+          ping: pong
+          failed: false
+        windows_update_search:
+          found_update_count: 0
+        patch_result:
+          phase: reboot_pre
+          patch_status: ok
+          reboot_performed: true
+
+    - name: Record the pre-patch reboot the way full_patch.yml does
+      ansible.builtin.include_tasks: full_patch_reboot_outcome.yml
+      vars:
+        reboot_outcome_phase: pre_patch_reboot
+        reboot_result_phase: reboot_pre
+
+    - name: Build and assert already_compliant is not paired with unresolved recovery
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: failed
+        expected_reason_code: REBOOT_FAILED
+        expected_failed_phase: pre_patch_reboot
+        expected_last_completed_phase: discovery
+        expected_failure_timestamp_utc: timestamp
+        expected_reboot_recovery_failed: true
+        expected_manual_followup: true
+
+- name: Full patch records reboot outcome before the next phase
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Read the full patch play and the reboot role
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      loop:
+        - "{{ playbook_dir }}/../../playbooks/windows/full_patch.yml"
+        - "{{ playbook_dir }}/../../roles/windows_patch/tasks/reboot.yml"
+        - "{{ playbook_dir }}/../../playbooks/windows/tasks/record_phase_outcome.yml"
+      register: _recovery_slurp
+
+    - name: Locate the reboot outcome tasks in full_patch.yml
+      ansible.builtin.set_fact:
+        _full_patch_text: "{{ _recovery_slurp.results[0].content | b64decode }}"
+        _reboot_text: "{{ _recovery_slurp.results[1].content | b64decode }}"
+        _outcome_text: "{{ _recovery_slurp.results[2].content | b64decode }}"
+
+    - name: Assert reboot recovery is judged from the role results before the next phase
+      ansible.builtin.assert:
+        that:
+          - (_pre_outcome | int) > 0
+          - (_mark_apply | int) > (_pre_outcome | int)
+          - (_post_outcome | int) > 0
+          - (_mark_postcheck | int) > (_post_outcome | int)
+          - "'register: windows_reboot_result' in _reboot_text"
+          - "'register: windows_post_reboot_ping' in _reboot_text"
+          - "'ansible.windows.win_reboot:' in _reboot_text"
+          - "'ansible.windows.win_ping:' in _reboot_text"
+          - "'windows_reboot_result is unreachable' in _outcome_text"
+          - "'windows_post_reboot_ping is unreachable' in _outcome_text"
+        fail_msg: full_patch.yml no longer records reboot outcome before the next phase.
+      vars:
+        _pre_outcome: "{{ _full_patch_text.find('Record the pre-patch reboot lifecycle outcome') }}"
+        _mark_apply: "{{ _full_patch_text.find('Mark apply as the current lifecycle phase') }}"
+        _post_outcome: "{{ _full_patch_text.find('Record the post-patch reboot lifecycle outcome') }}"
+        _mark_postcheck: "{{ _full_patch_text.find('Mark postcheck as the current lifecycle phase') }}"

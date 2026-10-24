@@ -48,6 +48,10 @@
       pre_patch_reboot_performed: not_available
       post_patch_reboot_performed: not_available
       pending_reboot: not_available
+      failed_phase: "{{ patch_lifecycle_failed_phase | default('') }}"
+      last_completed_phase: "{{ patch_lifecycle_last_completed_phase | default('') }}"
+      failure_timestamp_utc: "{{ patch_lifecycle_failure_timestamp_utc | default('not_available') }}"
+      reboot_recovery_failed: "{{ patch_lifecycle_reboot_recovery_failed | default('not_available') }}"
       change_ticket_id: "{{ change_ticket_id | default('') }}"
       patch_wave: "{{ patch_wave_name | default('unspecified') }}"
       patch_wave_name: "{{ patch_wave_name | default('unspecified') }}"

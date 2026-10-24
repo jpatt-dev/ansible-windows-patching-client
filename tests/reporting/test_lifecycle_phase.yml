@@ -1,0 +1,780 @@
+---
+# Lifecycle phase facts are set by the same task files full_patch.yml includes.
+# final_build then copies them. Existing result and reason_code stay in place.
+#
+#   ANSIBLE_ROLES_PATH=roles ansible-playbook tests/reporting/test_lifecycle_phase.yml
+
+- name: Seed lifecycle reporting hosts
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add one host per lifecycle case
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        groups: lifecycle_phase_hosts
+        ansible_connection: local
+      loop:
+        - life-success
+        - life-compliant
+        - life-exempt
+        - life-precheck-status
+        - life-precheck-exception
+        - life-discovery
+        - life-apply
+        - life-reboot-pre
+        - life-reboot-post
+        - life-reboot-skipped
+        - life-health
+        - life-unreachable
+        - life-final-report
+        - life-intermediate
+
+- name: Reset lifecycle tracking facts
+  hosts: lifecycle_phase_hosts
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Start each host with empty lifecycle tracking
+      ansible.builtin.set_fact:
+        patch_lifecycle_current_phase: ""
+        patch_lifecycle_last_completed_phase: ""
+        patch_lifecycle_failed_phase: ""
+        patch_lifecycle_failure_timestamp_utc: not_available
+        patch_lifecycle_reboot_recovery_failed: not_available
+        patch_lifecycle_failed: false
+        patch_lifecycle_failed_message: ""
+
+- name: Successful patch cycle records postcheck as the last completed phase
+  hosts: life-success
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record successful precheck, discovery, apply, and postcheck
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_phase_outcome.yml"
+      vars:
+        patch_outcome_phase: "{{ item.phase }}"
+        patch_result: "{{ item.result }}"
+      loop:
+        - phase: precheck
+          result:
+            precheck_status: passed
+        - phase: discovery
+          result:
+            patch_status: ""
+        - phase: apply
+          result:
+            patch_status: ok
+        - phase: postcheck
+          result:
+            postcheck_status: ok
+      loop_control:
+        label: "{{ item.phase }}"
+
+    - name: Preserve successful apply and postcheck evidence
+      ansible.builtin.set_fact:
+        windows_update_search:
+          found_update_count: 0
+        patch_phase_apply: >-
+          {{
+            {
+              inventory_hostname: {
+                'patch_attempted': true,
+                'updates_installed': 4,
+                'updates_failed': 0,
+                'patch_status': 'success'
+              }
+            }
+          }}
+        patch_phase_postcheck: >-
+          {{
+            {
+              inventory_hostname: {
+                'postcheck_status': 'passed'
+              }
+            }
+          }}
+
+    - name: Build and assert the successful result
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: success
+        expected_reason_code: PATCH_SUCCEEDED
+        expected_failed_phase: ""
+        expected_last_completed_phase: postcheck
+        expected_failure_timestamp_utc: not_available
+        expected_reboot_recovery_failed: not_available
+
+- name: Already-compliant server has no technical failure
+  hosts: life-compliant
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record successful precheck, discovery, and postcheck
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_phase_outcome.yml"
+      vars:
+        patch_outcome_phase: "{{ item.phase }}"
+        patch_result: "{{ item.result }}"
+      loop:
+        - phase: precheck
+          result:
+            precheck_status: passed
+        - phase: discovery
+          result:
+            patch_status: ""
+        - phase: postcheck
+          result:
+            postcheck_status: ok
+      loop_control:
+        label: "{{ item.phase }}"
+
+    - name: Preserve a zero-update search
+      ansible.builtin.set_fact:
+        windows_update_search:
+          found_update_count: 0
+
+    - name: Build and assert the already-compliant result
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: already_compliant
+        expected_reason_code: NO_APPLICABLE_UPDATES
+        expected_failed_phase: ""
+        expected_last_completed_phase: postcheck
+        expected_failure_timestamp_utc: not_available
+        expected_reboot_recovery_failed: not_available
+
+- name: Exempt server is not a technical phase failure
+  hosts: life-exempt
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+    patching_exception_active: true
+  tasks:
+    - name: Record a passed precheck and an excluded discovery
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_phase_outcome.yml"
+      vars:
+        patch_outcome_phase: "{{ item.phase }}"
+        patch_result: "{{ item.result }}"
+      loop:
+        - phase: precheck
+          result:
+            precheck_status: passed
+        - phase: discovery
+          result:
+            patch_status: excluded
+      loop_control:
+        label: "{{ item.phase }}"
+
+    - name: Build and assert the exempt result
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: exempt
+        expected_reason_code: PATCH_EXEMPTION
+        expected_failed_phase: ""
+        expected_last_completed_phase: precheck
+        expected_failure_timestamp_utc: not_available
+        expected_reboot_recovery_failed: not_available
+
+- name: Failed precheck without an exception is still the failed phase
+  hosts: life-precheck-status
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: false
+    windows_connectivity_ok: true
+    precheck_status: failed
+    pending_reboot: false
+  tasks:
+    - name: Record precheck status failed without a rescue
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_phase_outcome.yml"
+      vars:
+        patch_outcome_phase: precheck
+        patch_result:
+          precheck_status: failed
+
+    - name: Build and assert the blocked precheck result
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: blocked
+        expected_reason_code: PRECHECK_BLOCKED
+        expected_failed_phase: precheck
+        expected_last_completed_phase: ""
+        expected_failure_timestamp_utc: timestamp
+        expected_reboot_recovery_failed: not_available
+
+- name: Unexpected precheck exception names precheck
+  hosts: life-precheck-exception
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: false
+    windows_connectivity_ok: true
+    precheck_status: failed
+    pending_reboot: false
+  tasks:
+    - name: Mark precheck before the exception
+      ansible.builtin.set_fact:
+        patch_lifecycle_current_phase: precheck
+
+    - name: Raise an unexpected precheck exception
+      block:
+        - name: Reproduce an unexpected precheck module failure
+          ansible.builtin.fail:
+            msg: malformed JSON
+      rescue:
+        - name: Record the unexpected precheck failure
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_unexpected_failure.yml"
+          vars:
+            patch_unexpected_phase: precheck
+
+    - name: Build and assert the unexpected precheck result
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: failed
+        expected_reason_code: PRECHECK_FAILED
+        expected_failed_phase: precheck
+        expected_last_completed_phase: ""
+        expected_failure_timestamp_utc: timestamp
+        expected_reboot_recovery_failed: not_available
+
+- name: Discovery failure keeps the last successful phase
+  hosts: life-discovery
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record a successful precheck before discovery fails
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_phase_outcome.yml"
+      vars:
+        patch_outcome_phase: precheck
+        patch_result:
+          precheck_status: passed
+
+    - name: Mark discovery as the running phase
+      ansible.builtin.set_fact:
+        patch_lifecycle_current_phase: discovery
+
+    - name: Fail discovery the way the role does after recording evidence
+      block:
+        - name: Reproduce a failed discovery search
+          ansible.builtin.fail:
+            msg: Windows update discovery search failed on life-discovery
+      rescue:
+        - name: Record the remediation failure with the existing message
+          ansible.builtin.set_fact:
+            patch_lifecycle_failed: true
+            patch_lifecycle_failed_message: >-
+              {{ ansible_failed_result.msg | default('Windows full patch remediation lifecycle failed') }}
+
+        - name: Record the discovery failure location
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/note_lifecycle_failure.yml"
+
+    - name: Build and assert discovery location without changing the reason code
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: failed
+        expected_reason_code: REBOOT_FAILED
+        expected_failed_phase: discovery
+        expected_last_completed_phase: precheck
+        expected_failure_timestamp_utc: timestamp
+        expected_reboot_recovery_failed: not_available
+        expected_manual_followup: true
+
+- name: Apply failure is not reported as a reboot failure location
+  hosts: life-apply
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record phases that finished before apply
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_phase_outcome.yml"
+      vars:
+        patch_outcome_phase: "{{ item.phase }}"
+        patch_result: "{{ item.result }}"
+      loop:
+        - phase: precheck
+          result:
+            precheck_status: passed
+        - phase: discovery
+          result:
+            patch_status: ""
+        - phase: pre_patch_reboot
+          result:
+            patch_status: ok
+            reboot_performed: true
+      loop_control:
+        label: "{{ item.phase }}"
+
+    - name: Preserve the completed pre-patch reboot artifact
+      ansible.builtin.set_fact:
+        patch_lifecycle_current_phase: apply
+        patch_phase_reboot_pre: >-
+          {{
+            {
+              inventory_hostname: {
+                'pre_patch_reboot_performed': true
+              }
+            }
+          }}
+
+    - name: Fail apply after the reboot artifact exists
+      block:
+        - name: Reproduce a failed update installation
+          ansible.builtin.fail:
+            msg: Windows update installation failed on life-apply
+      rescue:
+        - name: Record the remediation failure with the existing message
+          ansible.builtin.set_fact:
+            patch_lifecycle_failed: true
+            patch_lifecycle_failed_message: >-
+              {{ ansible_failed_result.msg | default('Windows full patch remediation lifecycle failed') }}
+
+        - name: Record the apply failure location
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/note_lifecycle_failure.yml"
+
+    - name: Build and assert the apply failure
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: failed
+        expected_reason_code: PATCH_INSTALL_FAILED
+        expected_failed_phase: apply
+        expected_last_completed_phase: pre_patch_reboot
+        expected_failure_timestamp_utc: timestamp
+        expected_reboot_recovery_failed: not_available
+        expected_manual_followup: true
+
+- name: Pre-patch reboot recovery timeout is distinguished from downtime
+  hosts: life-reboot-pre
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record phases that finished before the reboot wait
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_phase_outcome.yml"
+      vars:
+        patch_outcome_phase: "{{ item.phase }}"
+        patch_result: "{{ item.result }}"
+      loop:
+        - phase: precheck
+          result:
+            precheck_status: passed
+        - phase: discovery
+          result:
+            patch_status: ""
+      loop_control:
+        label: "{{ item.phase }}"
+
+    - name: Mark the pre-patch reboot wait
+      ansible.builtin.set_fact:
+        patch_lifecycle_current_phase: pre_patch_reboot
+
+    - name: Fail the reboot wait with a timeout
+      block:
+        - name: Reboot Windows host only when safety gates and reboot policy allow
+          ansible.builtin.fail:
+            msg: Reboot timeout of 3600 seconds reached
+      rescue:
+        - name: Record the remediation failure with the existing message
+          ansible.builtin.set_fact:
+            patch_lifecycle_failed: true
+            patch_lifecycle_failed_message: >-
+              {{ ansible_failed_result.msg | default('Windows full patch remediation lifecycle failed') }}
+
+        - name: Record the pre-patch reboot recovery failure
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/note_lifecycle_failure.yml"
+
+    - name: Build and assert the pre-patch recovery failure
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: failed
+        expected_reason_code: REBOOT_FAILED
+        expected_failed_phase: pre_patch_reboot
+        expected_last_completed_phase: discovery
+        expected_failure_timestamp_utc: timestamp
+        expected_reboot_recovery_failed: true
+
+- name: Post-patch WinRM check failure is a reboot recovery failure
+  hosts: life-reboot-post
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record phases that finished before the post-patch reboot
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_phase_outcome.yml"
+      vars:
+        patch_outcome_phase: "{{ item.phase }}"
+        patch_result: "{{ item.result }}"
+      loop:
+        - phase: precheck
+          result:
+            precheck_status: passed
+        - phase: discovery
+          result:
+            patch_status: ""
+        - phase: apply
+          result:
+            patch_status: ok
+      loop_control:
+        label: "{{ item.phase }}"
+
+    - name: Preserve the completed apply artifact
+      ansible.builtin.set_fact:
+        patch_lifecycle_current_phase: post_patch_reboot
+        patch_phase_apply: >-
+          {{
+            {
+              inventory_hostname: {
+                'patch_attempted': true,
+                'updates_installed': 2,
+                'updates_failed': 0,
+                'patch_status': 'success'
+              }
+            }
+          }}
+
+    - name: Fail the post-reboot WinRM check
+      block:
+        - name: Confirm WinRM with win_ping after reboot
+          ansible.builtin.fail:
+            msg: WinRM connection failed after reboot
+      rescue:
+        - name: Record the remediation failure with the existing message
+          ansible.builtin.set_fact:
+            patch_lifecycle_failed: true
+            patch_lifecycle_failed_message: >-
+              {{ ansible_failed_result.msg | default('Windows full patch remediation lifecycle failed') }}
+
+        - name: Record the post-patch reboot recovery failure
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/note_lifecycle_failure.yml"
+
+    - name: Build and assert the post-patch recovery failure
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: failed
+        expected_reason_code: REBOOT_FAILED
+        expected_failed_phase: post_patch_reboot
+        expected_last_completed_phase: apply
+        expected_failure_timestamp_utc: timestamp
+        expected_reboot_recovery_failed: true
+
+- name: Intentionally skipped reboot does not complete or fail that phase
+  hosts: life-reboot-skipped
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record precheck, discovery, and a skipped reboot
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_phase_outcome.yml"
+      vars:
+        patch_outcome_phase: "{{ item.phase }}"
+        patch_result: "{{ item.result }}"
+      loop:
+        - phase: precheck
+          result:
+            precheck_status: passed
+        - phase: discovery
+          result:
+            patch_status: ""
+        - phase: pre_patch_reboot
+          result:
+            patch_status: skipped
+            reboot_performed: false
+            reboot_skipped_reason: reboot_not_required
+      loop_control:
+        label: "{{ item.phase }}"
+
+    - name: Assert the skipped reboot did not become the completed phase
+      ansible.builtin.assert:
+        that:
+          - patch_lifecycle_last_completed_phase == 'discovery'
+          - patch_lifecycle_failed_phase == ''
+          - patch_lifecycle_reboot_recovery_failed == 'not_available'
+        fail_msg: A skipped reboot was treated as a completed or failed phase.
+
+    - name: Record the later successful phases
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_phase_outcome.yml"
+      vars:
+        patch_outcome_phase: "{{ item.phase }}"
+        patch_result: "{{ item.result }}"
+      loop:
+        - phase: apply
+          result:
+            patch_status: ok
+        - phase: postcheck
+          result:
+            postcheck_status: ok
+      loop_control:
+        label: "{{ item.phase }}"
+
+    - name: Preserve successful apply and postcheck evidence
+      ansible.builtin.set_fact:
+        windows_update_search:
+          found_update_count: 0
+        patch_phase_apply: >-
+          {{
+            {
+              inventory_hostname: {
+                'patch_attempted': true,
+                'updates_installed': 1,
+                'updates_failed': 0,
+                'patch_status': 'success'
+              }
+            }
+          }}
+        patch_phase_postcheck: >-
+          {{
+            {
+              inventory_hostname: {
+                'postcheck_status': 'passed'
+              }
+            }
+          }}
+
+    - name: Build and assert the skipped reboot stays out of the failure fields
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: success
+        expected_reason_code: PATCH_SUCCEEDED
+        expected_failed_phase: ""
+        expected_last_completed_phase: postcheck
+        expected_failure_timestamp_utc: not_available
+        expected_reboot_recovery_failed: not_available
+
+- name: Health collection failure does not invent a lifecycle phase
+  hosts: life-health
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record a successful precheck before health collection fails
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_phase_outcome.yml"
+      vars:
+        patch_outcome_phase: precheck
+        patch_result:
+          precheck_status: passed
+
+    - name: Clear the phase the way full_patch does before health collection
+      ansible.builtin.set_fact:
+        patch_lifecycle_current_phase: ""
+
+    - name: Raise an unexpected health collection failure
+      block:
+        - name: Reproduce a final health collection failure
+          ansible.builtin.fail:
+            msg: health probe returned malformed JSON
+      rescue:
+        - name: Record the unexpected health collection failure
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_unexpected_failure.yml"
+          vars:
+            patch_unexpected_phase: final health collection
+
+    - name: Build and assert health collection stays out of failed_phase
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: failed
+        expected_reason_code: HEALTH_COLLECTION_FAILED
+        expected_failed_phase: ""
+        expected_last_completed_phase: precheck
+        expected_failure_timestamp_utc: timestamp
+        expected_reboot_recovery_failed: not_available
+
+- name: Unreachable host before remediation is not a reboot recovery failure
+  hosts: life-unreachable
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: false
+    windows_connectivity_ok: false
+    precheck_status: failed
+    pending_reboot: false
+    windows_pending_reboot_probe_ok: false
+  tasks:
+    - name: Record unreachable precheck without an exception
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_phase_outcome.yml"
+      vars:
+        patch_outcome_phase: precheck
+        patch_result:
+          precheck_status: failed
+
+    - name: Build and assert the unreachable result
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: failed
+        expected_reason_code: UNREACHABLE
+        expected_failed_phase: precheck
+        expected_last_completed_phase: ""
+        expected_failure_timestamp_utc: timestamp
+        expected_reboot_recovery_failed: not_available
+
+- name: Final report construction failure uses final_reporting
+  hosts: life-final-report
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+  tasks:
+    - name: Mark final reporting before construction fails
+      ansible.builtin.set_fact:
+        patch_lifecycle_current_phase: final_reporting
+
+    - name: Raise a final report construction failure
+      block:
+        - name: Reproduce a final report template failure
+          ansible.builtin.fail:
+            msg: template error while building patch_final_result
+      rescue:
+        - name: Record the unexpected final report failure
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_unexpected_failure.yml"
+          vars:
+            patch_unexpected_phase: final report construction
+
+        - name: Publish the fallback result
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/fallback_final_result.yml"
+
+    - name: Assert the fallback result keeps the reporting phase
+      ansible.builtin.assert:
+        that:
+          - patch_final_result.schema_version == '3'
+          - patch_final_result.result == 'failed'
+          - patch_final_result.reason_code == 'UNKNOWN_RESULT'
+          - patch_final_result.failed_phase == 'final_reporting'
+          - patch_final_result.last_completed_phase == ''
+          - patch_final_result.failure_timestamp_utc is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T')
+          - patch_final_result.reboot_recovery_failed == 'not_available'
+        fail_msg: >-
+          Final report construction did not keep failed_phase=final_reporting
+          (failed_phase={{ patch_final_result.failed_phase | default('') }},
+          reason_code={{ patch_final_result.reason_code | default('') }}).
+
+- name: Intermediate task failure does not keep a stale lifecycle phase
+  hosts: life-intermediate
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+    patch_host_eligible: true
+    windows_connectivity_ok: true
+    pending_reboot: false
+  tasks:
+    - name: Record a successful discovery before the intermediate task
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/record_phase_outcome.yml"
+      vars:
+        patch_outcome_phase: discovery
+        patch_result:
+          patch_status: ""
+
+    - name: Clear the phase before an intermediate task
+      ansible.builtin.set_fact:
+        patch_lifecycle_current_phase: ""
+
+    - name: Fail an intermediate task that is not a lifecycle phase
+      block:
+        - name: Reproduce a ServiceNow validation failure
+          ansible.builtin.fail:
+            msg: ServiceNow change validation failed
+      rescue:
+        - name: Record the remediation failure with the existing message
+          ansible.builtin.set_fact:
+            patch_lifecycle_failed: true
+            patch_lifecycle_failed_message: >-
+              {{ ansible_failed_result.msg | default('Windows full patch remediation lifecycle failed') }}
+
+        - name: Record the intermediate failure without a lifecycle phase
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/note_lifecycle_failure.yml"
+
+    - name: Build and assert the empty failure location
+      ansible.builtin.include_tasks: tasks/lifecycle_phase_assert.yml
+      vars:
+        expected_result: failed
+        expected_reason_code: REBOOT_FAILED
+        expected_failed_phase: ""
+        expected_last_completed_phase: discovery
+        expected_failure_timestamp_utc: timestamp
+        expected_reboot_recovery_failed: not_available
+        expected_manual_followup: false
+
+- name: Full patch wires phase tracking without changing the rescue message
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Read the full patch play
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../playbooks/windows/full_patch.yml"
+      register: _full_patch_slurp
+
+    - name: Assert phase cursors are set and cleared around non-phase work
+      ansible.builtin.assert:
+        that:
+          - "'patch_lifecycle_current_phase: precheck' in _full_patch_text"
+          - "'patch_lifecycle_current_phase: discovery' in _full_patch_text"
+          - "'patch_lifecycle_current_phase: pre_patch_reboot' in _full_patch_text"
+          - "'patch_lifecycle_current_phase: apply' in _full_patch_text"
+          - "'patch_lifecycle_current_phase: post_patch_reboot' in _full_patch_text"
+          - "'patch_lifecycle_current_phase: postcheck' in _full_patch_text"
+          - "'patch_lifecycle_current_phase: final_reporting' in _full_patch_text"
+          - "'Clear the lifecycle phase before ServiceNow validation' in _full_patch_text"
+          - "'Clear the lifecycle phase before applicable-update confirmation' in _full_patch_text"
+          - "'Clear the lifecycle phase before final health collection' in _full_patch_text"
+          - "'Clear the lifecycle phase before the pending-reboot refresh' in _full_patch_text"
+          - "'tasks/record_phase_outcome.yml' in _full_patch_text"
+          - "'tasks/note_lifecycle_failure.yml' in _full_patch_text"
+          - "\"ansible_failed_result.msg | default('Windows full patch remediation lifecycle failed')\" in _full_patch_text"
+        fail_msg: full_patch.yml is missing lifecycle phase tracking or changed the rescue message.
+      vars:
+        _full_patch_text: "{{ _full_patch_slurp.content | b64decode }}"

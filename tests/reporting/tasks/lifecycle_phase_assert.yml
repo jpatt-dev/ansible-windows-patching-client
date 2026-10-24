@@ -1,0 +1,42 @@
+---
+- name: Build the final result from the lifecycle facts already recorded
+  ansible.builtin.include_role:
+    name: patch_report
+    tasks_from: final_build.yml
+
+- name: Assert lifecycle fields and the existing classification
+  ansible.builtin.assert:
+    that:
+      - patch_final_result.schema_version == '3'
+      - patch_final_result.result == expected_result
+      - patch_final_result.reason_code == expected_reason_code
+      - patch_final_result.failed_phase == expected_failed_phase
+      - patch_final_result.last_completed_phase == expected_last_completed_phase
+      - _timestamp_ok | bool
+      - patch_final_result.reboot_recovery_failed == expected_reboot_recovery_failed
+      - _manual_followup_ok | bool
+    fail_msg: >-
+      {{ inventory_hostname }} lifecycle reporting mismatch:
+      result={{ patch_final_result.result | default('') }}/{{ expected_result }},
+      reason_code={{ patch_final_result.reason_code | default('') }}/{{ expected_reason_code }},
+      failed_phase={{ patch_final_result.failed_phase | default('') }}/{{ expected_failed_phase }},
+      last_completed_phase={{ patch_final_result.last_completed_phase | default('') }}/{{ expected_last_completed_phase }},
+      failure_timestamp_utc={{ patch_final_result.failure_timestamp_utc | default('') }},
+      reboot_recovery_failed={{ patch_final_result.reboot_recovery_failed | default('') }},
+      manual_followup_required={{ patch_final_result.manual_followup_required | default('') }}.
+  vars:
+    _timestamp_ok: >-
+      {{
+        (patch_final_result.failure_timestamp_utc == 'not_available')
+        if (expected_failure_timestamp_utc == 'not_available')
+        else (patch_final_result.failure_timestamp_utc is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T'))
+      }}
+    _manual_followup_ok: >-
+      {{
+        true
+        if (expected_manual_followup is not defined)
+        else (
+          (patch_final_result.manual_followup_required | bool)
+          == (expected_manual_followup | bool)
+        )
+      }}

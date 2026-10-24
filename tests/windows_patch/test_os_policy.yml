@@ -1,0 +1,109 @@
+---
+# OS caption policy. Does not install updates or reboot.
+#   ansible-playbook tests/windows_patch/test_os_policy.yml
+
+- name: Resolve supported and unknown OS captions
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    windows_patch_categories:
+      - CriticalUpdates
+      - SecurityUpdates
+      - UpdateRollups
+  tasks:
+    - name: Resolve each caption against the OS policy map
+      ansible.builtin.include_tasks: tasks/os_policy_case.yml
+      loop:
+        - caption: Microsoft Windows Server 2016 Standard
+          policy_id: server_2016
+          supported: true
+        - caption: Microsoft Windows Server 2019 Datacenter
+          policy_id: server_2019
+          supported: true
+        - caption: Microsoft Windows Server 2022 Standard
+          policy_id: server_2022
+          supported: true
+        - caption: Microsoft Windows Server 2025 Standard
+          policy_id: server_2025
+          supported: true
+        - caption: Microsoft Windows Server 2025 Datacenter
+          policy_id: server_2025
+          supported: true
+        - caption: microsoft windows server 2025 datacenter
+          policy_id: server_2025
+          supported: true
+        - caption: Microsoft Windows Server 2012 R2 Datacenter
+          policy_id: none
+          supported: false
+        - caption: Microsoft Windows 11 Pro
+          policy_id: none
+          supported: false
+        - caption: ""
+          policy_id: none
+          supported: false
+      loop_control:
+        loop_var: os_case
+        label: "{{ os_case.caption | default('empty') }}"
+
+- name: Seed a Windows Server 2025 reporting host
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add Windows Server 2025 Datacenter identity facts
+      ansible.builtin.add_host:
+        name: win-2025-datacenter
+        groups: os_2025_report
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        pending_reboot: false
+        windows_hostname: WIN2025
+        windows_os_caption: Microsoft Windows Server 2025 Datacenter
+        windows_os_version: "10.0.26100"
+        windows_os_build_pre: "26100.1"
+        windows_os_build: "26100.2033"
+        windows_update_search:
+          found_update_count: 0
+        patch_phase_postcheck:
+          win-2025-datacenter:
+            postcheck_status: passed
+
+- name: Report Windows Server 2025 release and build
+  hosts: os_2025_report
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+  tasks:
+    - name: Resolve the 2025 caption before reporting
+      ansible.builtin.include_role:
+        name: windows_patch
+        tasks_from: resolve_os_policy.yml
+
+    - name: Build the per-host report
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+
+    - name: Assert 2025 identity is reported and the host is not unsupported
+      ansible.builtin.assert:
+        that:
+          - windows_os_policy.policy_id == 'server_2025'
+          - windows_os_policy_supported | bool
+          - patch_final_result.os_release == 'Microsoft Windows Server 2025 Datacenter'
+          - patch_final_result.os_version == '10.0.26100'
+          - patch_final_result.os_build_pre == '26100.1'
+          - patch_final_result.os_build == '26100.2033'
+          - patch_final_result.os_policy_id == 'server_2025'
+          - patch_final_result.reason_code != 'UNSUPPORTED_OS'
+          - patch_final_result.result == 'already_compliant'
+        fail_msg: >-
+          Windows Server 2025 reporting
+          result={{ patch_final_result.result | default('') }}
+          reason_code={{ patch_final_result.reason_code | default('') }}
+          os_release={{ patch_final_result.os_release | default('') }}
+          os_build={{ patch_final_result.os_build | default('') }}
+          policy={{ windows_os_policy.policy_id | default('') }}
