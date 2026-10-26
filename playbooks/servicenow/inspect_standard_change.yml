@@ -1,7 +1,7 @@
 ---
-# Read-only inspection of one existing Standard Change.
+# Read-only inspection of one existing Standard Change and its template version.
 # Set existing_standard_cr_number below, or pass it as an extra variable.
-# Does not create, update, or close the change.
+# Does not create, update, or close a change or template.
 #
 # AAP job template:
 #   Playbook: playbooks/servicenow/inspect_standard_change.yml
@@ -53,3 +53,176 @@
           - "Risk: {{ cr.records[0].risk | default('NOT SET') }}"
           - "Impact: {{ cr.records[0].impact | default('NOT SET') }}"
           - "Priority: {{ cr.records[0].priority | default('NOT SET') }}"
+
+    - name: Capture the template version sys_id
+      ansible.builtin.set_fact:
+        std_change_version_sys_id: >-
+          {{
+            cr.records[0].std_change_producer_version.value
+            if (
+              cr.records[0].std_change_producer_version is defined
+              and cr.records[0].std_change_producer_version is mapping
+              and (
+                cr.records[0].std_change_producer_version.value
+                | default('') | string
+              ) is match('^[0-9a-fA-F]{32}$')
+            )
+            else (
+              cr.records[0].std_change_producer_version
+              if (
+                cr.records[0].std_change_producer_version is defined
+                and cr.records[0].std_change_producer_version is string
+                and (cr.records[0].std_change_producer_version | string)
+                is match('^[0-9a-fA-F]{32}$')
+              )
+              else ''
+            )
+          }}
+
+    - name: Read the Standard Change template version
+      when: std_change_version_sys_id | length == 32
+      servicenow.itsm.api_info:
+        resource: std_change_producer_version
+        sysparm_query: "sys_id={{ std_change_version_sys_id }}"
+        exclude_reference_link: true
+      register: std_version_lookup
+      no_log: true
+
+    - name: Select the template version row
+      when: std_version_lookup is not skipped
+      ansible.builtin.set_fact:
+        std_version_row: "{{ (std_version_lookup.record | first) if (std_version_lookup.record is defined and std_version_lookup.record is not string and std_version_lookup.record is sequence and (std_version_lookup.record | length) > 0) else ((std_version_lookup.records | first) if (std_version_lookup.records is defined and std_version_lookup.records is not string and std_version_lookup.records is sequence and (std_version_lookup.records | length) > 0) else (std_version_lookup.record if (std_version_lookup.record is defined and std_version_lookup.record is mapping) else {})) }}"
+
+    - name: Capture the record producer sys_id from the version
+      when: std_version_row is defined
+      ansible.builtin.set_fact:
+        std_change_producer_sys_id: >-
+          {{
+            std_version_row.std_change_producer.value
+            if (
+              std_version_row.std_change_producer is defined
+              and std_version_row.std_change_producer is mapping
+              and (
+                std_version_row.std_change_producer.value
+                | default('') | string
+              ) is match('^[0-9a-fA-F]{32}$')
+            )
+            else (
+              std_version_row.std_change_producer
+              if (
+                std_version_row.std_change_producer is defined
+                and std_version_row.std_change_producer is string
+                and (std_version_row.std_change_producer | string)
+                is match('^[0-9a-fA-F]{32}$')
+              )
+              else ''
+            )
+          }}
+
+    - name: Read the Standard Change record producer
+      when:
+        - std_change_producer_sys_id is defined
+        - std_change_producer_sys_id | length == 32
+      servicenow.itsm.api_info:
+        resource: std_change_record_producer
+        sysparm_query: "sys_id={{ std_change_producer_sys_id }}"
+        exclude_reference_link: true
+      register: std_producer_lookup
+      no_log: true
+
+    - name: Select the record producer row
+      when: std_producer_lookup is not skipped
+      ansible.builtin.set_fact:
+        std_producer_row: "{{ (std_producer_lookup.record | first) if (std_producer_lookup.record is defined and std_producer_lookup.record is not string and std_producer_lookup.record is sequence and (std_producer_lookup.record | length) > 0) else ((std_producer_lookup.records | first) if (std_producer_lookup.records is defined and std_producer_lookup.records is not string and std_producer_lookup.records is sequence and (std_producer_lookup.records | length) > 0) else (std_producer_lookup.record if (std_producer_lookup.record is defined and std_producer_lookup.record is mapping) else {})) }}"
+
+    - name: Build the sanitized template lookup
+      ansible.builtin.set_fact:
+        std_template_lookup_lines: "{{ _std_template_lookup_json | from_json }}"
+      vars:
+        _std_safe_fields:
+          - name
+          - number
+          - version
+          - current
+          - active
+          - sys_class_name
+        _std_template_lookup_json: |
+          {% macro field_state(row, field_name) -%}
+          {%- if row is not mapping or field_name not in row -%}
+          NOT PRESENT
+          {%- elif row[field_name] is mapping and (row[field_name].value | default('') | string | length) > 0 -%}
+          POPULATED
+          {%- elif row[field_name] is string and (row[field_name] | length) > 0 -%}
+          POPULATED
+          {%- elif row[field_name] is not string and row[field_name] is sequence and (row[field_name] | length) > 0 -%}
+          POPULATED
+          {%- elif row[field_name] is boolean or row[field_name] is number -%}
+          POPULATED
+          {%- else -%}
+          EMPTY
+          {%- endif -%}
+          {% endmacro %}
+          {% macro safe_value(row, field_name) -%}
+          {%- if row is not mapping or field_name not in row -%}
+          NOT PRESENT
+          {%- elif row[field_name] is string and (row[field_name] | length) <= 80 and '\n' not in row[field_name] -%}
+          {{ row[field_name] }}
+          {%- elif row[field_name] is boolean or row[field_name] is number -%}
+          {{ row[field_name] }}
+          {%- else -%}
+          {{ field_state(row, field_name) }}
+          {%- endif -%}
+          {% endmacro %}
+          {% set version = std_version_row | default({}) %}
+          {% set producer = std_producer_row | default({}) %}
+          {% set ns = namespace(lines=[]) %}
+          {% set ns.lines = ns.lines + ['Standard Change template lookup'] %}
+          {% if std_change_version_sys_id | default('') | length != 32 %}
+          {% set ns.lines = ns.lines + ['Version sys_id: NOT DETERMINED. std_change_producer_version was not a 32-character sys_id.'] %}
+          {% else %}
+          {% set ns.lines = ns.lines + ['Version table: std_change_producer_version'] %}
+          {% set ns.lines = ns.lines + ['Version sys_id: ' ~ std_change_version_sys_id] %}
+          {% if version is mapping and (version | length) > 0 %}
+          {% set ns.lines = ns.lines + ['Version record: FOUND'] %}
+          {% set ns.lines = ns.lines + ['Version field names: ' ~ (version.keys() | list | sort | join(', '))] %}
+          {% for field_name in _std_safe_fields %}
+          {% set ns.lines = ns.lines + ['Version ' ~ field_name ~ ': ' ~ (safe_value(version, field_name) | trim)] %}
+          {% endfor %}
+          {% set ns.lines = ns.lines + ['Version template field: ' ~ (field_state(version, 'template') | trim)] %}
+          {% if version.template is defined and version.template is string and version.template is match('^\\s*\\{') %}
+          {% set template_fields = version.template | regex_findall('"([A-Za-z0-9_]+)"\\s*:') %}
+          {% set ns.lines = ns.lines + ['Version template JSON field names: ' ~ ((template_fields | unique | sort | join(', ')) if (template_fields | length) > 0 else 'NOT DETERMINED')] %}
+          {% elif version.template is defined and version.template is mapping %}
+          {% set ns.lines = ns.lines + ['Version template JSON field names: ' ~ (version.template.keys() | list | sort | join(', '))] %}
+          {% else %}
+          {% set ns.lines = ns.lines + ['Version template JSON field names: NOT DETERMINED'] %}
+          {% endif %}
+          {% else %}
+          {% set ns.lines = ns.lines + ['Version record: NOT FOUND. The sys_id did not return a std_change_producer_version row.'] %}
+          {% endif %}
+          {% endif %}
+          {% if std_change_producer_sys_id | default('') | length != 32 %}
+          {% set ns.lines = ns.lines + ['Record producer: NOT DETERMINED. The version record has no std_change_producer sys_id.'] %}
+          {% else %}
+          {% set ns.lines = ns.lines + ['Record producer field: std_change_producer'] %}
+          {% set ns.lines = ns.lines + ['Record producer table queried: std_change_record_producer'] %}
+          {% set ns.lines = ns.lines + ['Record producer sys_id: ' ~ std_change_producer_sys_id] %}
+          {% if producer is mapping and (producer | length) > 0 %}
+          {% set ns.lines = ns.lines + ['Record producer record: FOUND'] %}
+          {% set ns.lines = ns.lines + ['Record producer field names: ' ~ (producer.keys() | list | sort | join(', '))] %}
+          {% for field_name in _std_safe_fields %}
+          {% set ns.lines = ns.lines + ['Record producer ' ~ field_name ~ ': ' ~ (safe_value(producer, field_name) | trim)] %}
+          {% endfor %}
+          {% set ns.lines = ns.lines + ['Record producer template field: ' ~ (field_state(producer, 'template') | trim)] %}
+          {% set ns.lines = ns.lines + ['Record producer script field: ' ~ (field_state(producer, 'script') | trim)] %}
+          {% else %}
+          {% set ns.lines = ns.lines + ['Record producer record: NOT FOUND on std_change_record_producer. The producer table or identifier could not be confirmed.'] %}
+          {% endif %}
+          {% endif %}
+          {% set ns.lines = ns.lines + ['Creation field names: change_request.std_change_producer_version, std_change_producer_version.sys_id, std_change_producer_version.std_change_producer, std_change_record_producer.sys_id'] %}
+          {% set ns.lines = ns.lines + ['Instantiation method: NOT DETERMINED. No API path was present. Template and script contents were not displayed.'] %}
+          {{ ns.lines | to_json }}
+
+    - name: Display sanitized template lookup
+      ansible.builtin.debug:
+        msg: "{{ std_template_lookup_lines }}"
