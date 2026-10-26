@@ -1,0 +1,55 @@
+---
+# Read-only inspection of one existing Standard Change.
+# Set existing_standard_cr_number below, or pass it as an extra variable.
+# Does not create, update, or close the change.
+#
+# AAP job template:
+#   Playbook: playbooks/servicenow/inspect_standard_change.yml
+#   Inventory: localhost is enough. Do not limit this job to a Windows wave.
+#   Credential: the custom credential that injects SN_HOST, SN_USERNAME,
+#               and SN_PASSWORD.
+#   Execution environment: one that already includes servicenow.itsm.
+
+- name: Read-only Standard Change field inspection
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    # <-- Put the number of your existing Standard Change here
+    existing_standard_cr_number: "CHG0001234"
+
+  tasks:
+    - name: Read existing Standard Change Request
+      servicenow.itsm.change_request_info:
+        number: "{{ existing_standard_cr_number }}"
+      register: cr
+      no_log: true
+
+    - name: Fail if not found
+      ansible.builtin.assert:
+        that:
+          - cr.records | default([]) | length > 0
+        fail_msg: "Change {{ existing_standard_cr_number }} not found."
+
+    - name: Display sanitized field inspection
+      ansible.builtin.debug:
+        msg:
+          - "Change number: {{ cr.records[0].number }}"
+          - "Type: {{ cr.records[0].type | default('NOT SET') }}"
+          - "Model (chg_model): {{ cr.records[0].chg_model | default('NOT SET') }}"
+          - "Standard template (std_change_producer_version): {{ cr.records[0].std_change_producer_version | default('NOT SET') }}"
+          - "Configuration Item (cmdb_ci): {{ 'POPULATED' if cr.records[0].cmdb_ci | default('') | length > 0 else 'EMPTY' }}"
+          - "Assigned To (assigned_to): {{ 'POPULATED' if cr.records[0].assigned_to | default('') | length > 0 else 'EMPTY' }}"
+          - "Planned Start (start_date): {{ cr.records[0].start_date | default('NOT SET') }}"
+          - "Planned End (end_date): {{ cr.records[0].end_date | default('NOT SET') }}"
+          - "Planned Start alt (planned_start_date): {{ cr.records[0].planned_start_date | default('NOT SET') }}"
+          - "Planned End alt (planned_end_date): {{ cr.records[0].planned_end_date | default('NOT SET') }}"
+          - "Test plan (test_plan): {{ 'POPULATED' if cr.records[0].test_plan | default('') | length > 0 else 'EMPTY' }}"
+          - "Implementation plan (implementation_plan): {{ 'POPULATED' if cr.records[0].implementation_plan | default('') | length > 0 else 'EMPTY' }}"
+          - "Backout plan (backout_plan): {{ 'POPULATED' if cr.records[0].backout_plan | default('') | length > 0 else 'EMPTY' }}"
+          - "Short description: {{ cr.records[0].short_description | default('NOT SET') }}"
+          - "Category: {{ cr.records[0].category | default('NOT SET') }}"
+          - "Risk: {{ cr.records[0].risk | default('NOT SET') }}"
+          - "Impact: {{ cr.records[0].impact | default('NOT SET') }}"
+          - "Priority: {{ cr.records[0].priority | default('NOT SET') }}"
