@@ -7,15 +7,30 @@
 # chg_model. This playbook does not use ansible.builtin.uri.
 #
 # Creation is off until standard_change_allow_create is true.
-# A second run with the same short description does not create another change.
+# Maintenance dates and the pre-implementation result are extra variables.
+# They are not copied from the reference change. Dates are UTC
+# YYYY-MM-DD HH:MM:SS. The start must not be in the past, and the end
+# must be later than the start. The pre-implementation value is never printed.
+#
+# Duplicate detection runs before creation is authorized. An existing
+# change with this test's short description stops the play, including a
+# read-only run. Disable concurrent jobs on the AAP job template: two
+# overlapping runs can both pass the lookup before either creates.
+#
+# Comparing type, chg_model, and std_change_producer_version with the
+# reference change does not prove that the approved template workflow ran.
 #
 # AAP job template:
 #   Playbook: playbooks/servicenow/create_standard_change_test.yml
 #   Inventory: localhost is enough.
+#   Concurrent jobs: disabled.
 #   Credential: the custom credential that injects SN_HOST, SN_USERNAME,
 #               and SN_PASSWORD.
 #   Extra variables:
 #     existing_standard_cr_number: CHG0001234
+#     standard_change_start_date: "2026-10-27 01:00:00"
+#     standard_change_end_date: "2026-10-27 05:00:00"
+#     standard_change_pre_implementation_value: "operator-supplied result"
 #     standard_change_allow_create: false
 
 - name: Prepare one Standard Change field test
@@ -26,8 +41,14 @@
   vars:
     existing_standard_cr_number: ""
     standard_change_allow_create: false
+    standard_change_start_date: ""
+    standard_change_end_date: ""
+    standard_change_pre_implementation_value: ""
     standard_change_test_short_description: "AAP standard change required-field test"
     standard_change_pre_implementation_label: "Pre-Implementation Test Results"
+    standard_change_date_pattern: >-
+      ^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])
+      ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$
 
   tasks:
     - name: Require the approved reference change number
@@ -37,6 +58,63 @@
         fail_msg: >-
           Set existing_standard_cr_number to the manually created
           Standard Change. No request was sent.
+        quiet: true
+
+    - name: Require ServiceNow UTC maintenance dates
+      ansible.builtin.assert:
+        that:
+          - standard_change_start_date is match(standard_change_date_pattern)
+          - standard_change_end_date is match(standard_change_date_pattern)
+        fail_msg: >-
+          Set standard_change_start_date and standard_change_end_date
+          to UTC timestamps YYYY-MM-DD HH:MM:SS. No change was created.
+        quiet: true
+
+    - name: Reject maintenance dates that are not real dates
+      block:
+        - name: Parse the maintenance dates
+          ansible.builtin.assert:
+            that:
+              - (_parsed_start | string | length) > 0
+              - (_parsed_end | string | length) > 0
+            quiet: true
+          vars:
+            _parsed_start: "{{ standard_change_start_date | to_datetime('%Y-%m-%d %H:%M:%S') }}"
+            _parsed_end: "{{ standard_change_end_date | to_datetime('%Y-%m-%d %H:%M:%S') }}"
+      rescue:
+        - name: Report an impossible maintenance date
+          ansible.builtin.fail:
+            msg: >-
+              The maintenance dates are not real calendar dates.
+              No change was created.
+
+    - name: Reject a past or reversed maintenance window
+      ansible.builtin.assert:
+        that:
+          - standard_change_end_date > standard_change_start_date
+          - standard_change_start_date >= _now_utc
+        fail_msg: >-
+          The maintenance window must start at or after {{ _now_utc }} UTC
+          and end after it starts. No change was created.
+        quiet: true
+      vars:
+        _now_utc: "{{ now(utc=true).strftime('%Y-%m-%d %H:%M:%S') }}"
+
+    - name: Record whether a pre-implementation value was supplied
+      ansible.builtin.set_fact:
+        standard_change_pre_value_present: >-
+          {{
+            (standard_change_pre_implementation_value | default('') | string | trim | length) > 0
+          }}
+      no_log: true
+
+    - name: Require a pre-implementation value
+      ansible.builtin.assert:
+        that:
+          - standard_change_pre_value_present | bool
+        fail_msg: >-
+          Set standard_change_pre_implementation_value to a nonempty value.
+          The value is not displayed. No change was created.
         quiet: true
 
     - name: Read the approved reference change
@@ -73,24 +151,13 @@
           {{ value | regex_search('([0-9a-fA-F]{32})$') | default('', true) }}
           {%- endif -%}
           {% endmacro %}
-          {% macro text_value(value) -%}
-          {%- if value is string -%}
-          {{ value }}
-          {%- endif -%}
-          {% endmacro %}
           {% set row = standard_change_reference_lookup.records[0] %}
           {{ {
             'type': row.type | default('') | string,
             'chg_model': ref_id(row.chg_model | default('')) | trim,
             'version_sys_id': ref_id(row.std_change_producer_version | default('')) | trim,
             'cmdb_ci': ref_id(row.cmdb_ci | default('')) | trim,
-            'assigned_to': ref_id(row.assigned_to | default('')) | trim,
-            'start_date': text_value(row.start_date | default('')) | trim,
-            'end_date': text_value(row.end_date | default('')) | trim,
-            'start_date_populated': (row.start_date | default('') | string | length) > 0,
-            'end_date_populated': (row.end_date | default('') | string | length) > 0,
-            'planned_start_populated': (row.planned_start_date | default('') | string | length) > 0,
-            'planned_end_populated': (row.planned_end_date | default('') | string | length) > 0
+            'assigned_to': ref_id(row.assigned_to | default('')) | trim
           } | to_json }}
 
     - name: Require a standard reference with a template version
@@ -235,67 +302,21 @@
           test_plan was not assumed. No change was created.
         quiet: true
 
-    - name: Capture the verified pre-implementation value from the reference
+    - name: Record the pre-implementation field name
       ansible.builtin.set_fact:
         standard_change_pre_element: "{{ standard_change_pre_elements[0] }}"
-        standard_change_pre_value: "{{ _pre_value_json | from_json }}"
-      no_log: true
-      vars:
-        _pre_value_json: |
-          {% set row = standard_change_reference_lookup.records[0] %}
-          {% set field_name = standard_change_pre_elements[0] %}
-          {% if field_name in row and row[field_name] is string %}
-          {{ row[field_name] | to_json }}
-          {% else %}
-          {{ '' | to_json }}
-          {% endif %}
 
     - name: Stop when a required reference value is missing
       ansible.builtin.assert:
         that:
           - standard_change_reference.cmdb_ci is match('^[0-9a-fA-F]{32}$')
           - standard_change_reference.assigned_to is match('^[0-9a-fA-F]{32}$')
-          - standard_change_reference.start_date | length > 0
-          - standard_change_reference.end_date | length > 0
-          - standard_change_pre_value | default('') | length > 0
         fail_msg: >-
-          The reference change does not have all required values.
+          The reference change does not have cmdb_ci and assigned_to
+          sys_ids. No change was created.
           cmdb_ci_sys_id={{ standard_change_reference.cmdb_ci is match('^[0-9a-fA-F]{32}$') }},
-          assigned_to_sys_id={{ standard_change_reference.assigned_to is match('^[0-9a-fA-F]{32}$') }},
-          start_date_populated={{ standard_change_reference.start_date_populated }},
-          end_date_populated={{ standard_change_reference.end_date_populated }},
-          planned_start_populated={{ standard_change_reference.planned_start_populated }},
-          planned_end_populated={{ standard_change_reference.planned_end_populated }},
-          {{ standard_change_pre_element }} populated={{ (standard_change_pre_value | default('') | length) > 0 }}.
-          planned_start_date and planned_end_date were not substituted.
-          No change was created.
+          assigned_to_sys_id={{ standard_change_reference.assigned_to is match('^[0-9a-fA-F]{32}$') }}.
         quiet: true
-
-    - name: Show the verified Standard Change field preparation
-      ansible.builtin.debug:
-        msg:
-          - "Reference change: {{ existing_standard_cr_number }}"
-          - "Reference type: {{ standard_change_reference.type }}"
-          - "Reference chg_model: {{ standard_change_reference.chg_model }}"
-          - "Template version sys_id: {{ standard_change_reference.version_sys_id }}"
-          - "Template name: {{ standard_change_version_name }}"
-          - "cmdb_ci: POPULATED 32-character sys_id"
-          - "assigned_to: POPULATED 32-character sys_id"
-          - "start_date: {{ standard_change_reference.start_date }}"
-          - "end_date: {{ standard_change_reference.end_date }}"
-          - >-
-            {{ standard_change_pre_implementation_label }}
-            field: {{ standard_change_pre_element }}
-          - >-
-            {{ standard_change_pre_implementation_label }}
-            value: POPULATED
-          - >-
-            Creation:
-            {{ 'AUTHORIZED' if (standard_change_allow_create | bool) else 'NOT AUTHORIZED' }}
-
-    - name: Stop before creation until explicitly authorized
-      when: not (standard_change_allow_create | bool)
-      ansible.builtin.meta: end_play
 
     - name: Look for an earlier test change with the same short description
       servicenow.itsm.api_info:  # noqa: args[module]
@@ -322,6 +343,33 @@
           No additional change was created.
         quiet: true
 
+    - name: Show the verified Standard Change field preparation
+      ansible.builtin.debug:
+        msg:
+          - "Reference change: {{ existing_standard_cr_number }}"
+          - "Reference type: {{ standard_change_reference.type }}"
+          - "Reference chg_model: {{ standard_change_reference.chg_model }}"
+          - "Template version sys_id: {{ standard_change_reference.version_sys_id }}"
+          - "Template name: {{ standard_change_version_name }}"
+          - "cmdb_ci: POPULATED 32-character sys_id"
+          - "assigned_to: POPULATED 32-character sys_id"
+          - "start_date: {{ standard_change_start_date }}"
+          - "end_date: {{ standard_change_end_date }}"
+          - >-
+            {{ standard_change_pre_implementation_label }}
+            field: {{ standard_change_pre_element }}
+          - >-
+            {{ standard_change_pre_implementation_label }}
+            value: POPULATED
+          - "Duplicate test change: NONE"
+          - >-
+            Creation:
+            {{ 'AUTHORIZED' if (standard_change_allow_create | bool) else 'NOT AUTHORIZED' }}
+
+    - name: Stop before creation until explicitly authorized
+      when: not (standard_change_allow_create | bool)
+      ansible.builtin.meta: end_play
+
     - name: Create one Standard Change with the verified fields
       servicenow.itsm.change_request:  # noqa: args[module]
         instance:
@@ -338,9 +386,11 @@
             {
               'cmdb_ci': standard_change_reference.cmdb_ci,
               'assigned_to': standard_change_reference.assigned_to,
-              'start_date': standard_change_reference.start_date,
-              'end_date': standard_change_reference.end_date
-            } | combine({standard_change_pre_element: standard_change_pre_value})
+              'start_date': standard_change_start_date,
+              'end_date': standard_change_end_date
+            } | combine({
+              standard_change_pre_element: standard_change_pre_implementation_value
+            })
           }}
       register: standard_change_create
       no_log: true
@@ -363,6 +413,17 @@
       register: standard_change_created_lookup
       no_log: true
 
+    - name: Require the created change to be readable
+      ansible.builtin.assert:
+        that:
+          - standard_change_created_lookup.records | default([]) | length == 1
+        fail_msg: >-
+          Created change {{ standard_change_create.record.number }} could not
+          be read back. Review or cancel
+          {{ standard_change_create.record.number }} in ServiceNow.
+          This playbook did not update, close, or cancel it.
+        quiet: true
+
     - name: Compare the created change with the approved reference
       ansible.builtin.set_fact:
         standard_change_verification: "{{ _verification_json | from_json }}"
@@ -384,23 +445,27 @@
           {% set created_ci = ref_id(created.cmdb_ci | default('')) | trim %}
           {% set created_assignee = ref_id(created.assigned_to | default('')) | trim %}
           {% set created_pre = created[standard_change_pre_element] if standard_change_pre_element in created else '' %}
-          {% set type_match = (created.type | default('') | string) == 'standard' %}
-          {% set model_match = (created_model | lower) == (standard_change_reference.chg_model | lower) %}
-          {% set version_match = (created_version | lower) == (standard_change_reference.version_sys_id | lower) %}
+          {% set raw_model = created.chg_model | default('') %}
+          {% if (created_model | length) == 32 %}
+          {% set shown_model = created_model %}
+          {% elif raw_model is string and (raw_model | length) <= 80 and '\n' not in raw_model %}
+          {% set shown_model = raw_model %}
+          {% else %}
+          {% set shown_model = 'POPULATED' %}
+          {% endif %}
           {{ {
             'number': created.number | default(''),
             'sys_id': created.sys_id | default(''),
             'type': created.type | default('') | string,
-            'type_match': type_match,
-            'chg_model': created_model if (created_model | length) == 32 else (created.chg_model | default('') | string),
-            'chg_model_match': model_match,
-            'version_match': version_match,
+            'type_match': (created.type | default('') | string) == 'standard',
+            'chg_model': shown_model,
+            'chg_model_match': (created_model | lower) == (standard_change_reference.chg_model | lower),
+            'version_match': (created_version | lower) == (standard_change_reference.version_sys_id | lower),
             'cmdb_ci_match': (created_ci | lower) == (standard_change_reference.cmdb_ci | lower),
             'assigned_to_match': (created_assignee | lower) == (standard_change_reference.assigned_to | lower),
-            'start_date_match': (created.start_date | default('') | string) == standard_change_reference.start_date,
-            'end_date_match': (created.end_date | default('') | string) == standard_change_reference.end_date,
-            'pre_match': (created_pre | string) == standard_change_pre_value,
-            'template_match': type_match and model_match and version_match
+            'start_date_match': (created.start_date | default('') | string) == standard_change_start_date,
+            'end_date_match': (created.end_date | default('') | string) == standard_change_end_date,
+            'pre_match': (created_pre | string) == standard_change_pre_implementation_value
           } | to_json }}
 
     - name: Show whether the created change matches the approved template
@@ -425,5 +490,33 @@
             {{ standard_change_pre_element }}:
             {{ 'MATCH' if standard_change_verification.pre_match else 'DIFFERENT' }}
           - >-
-            Approved template match:
-            {{ 'YES' if standard_change_verification.template_match else 'NO' }}
+            Matching type, chg_model, and std_change_producer_version
+            does not prove that the approved template workflow executed.
+
+    - name: Require the created change to pass verification
+      ansible.builtin.assert:
+        that:
+          - standard_change_verification.type_match | bool
+          - standard_change_verification.chg_model_match | bool
+          - standard_change_verification.version_match | bool
+          - standard_change_verification.cmdb_ci_match | bool
+          - standard_change_verification.assigned_to_match | bool
+          - standard_change_verification.start_date_match | bool
+          - standard_change_verification.end_date_match | bool
+          - standard_change_verification.pre_match | bool
+        fail_msg: >-
+          Created change {{ standard_change_verification.number }} failed
+          verification. Review or cancel
+          {{ standard_change_verification.number }} in ServiceNow.
+          This playbook did not update, close, or cancel it.
+          type={{ 'MATCH' if standard_change_verification.type_match else 'DIFFERENT' }},
+          chg_model={{ 'MATCH' if standard_change_verification.chg_model_match else 'DIFFERENT' }},
+          std_change_producer_version={{ 'MATCH' if standard_change_verification.version_match else 'DIFFERENT' }},
+          cmdb_ci={{ 'MATCH' if standard_change_verification.cmdb_ci_match else 'DIFFERENT' }},
+          assigned_to={{ 'MATCH' if standard_change_verification.assigned_to_match else 'DIFFERENT' }},
+          start_date={{ 'MATCH' if standard_change_verification.start_date_match else 'DIFFERENT' }},
+          end_date={{ 'MATCH' if standard_change_verification.end_date_match else 'DIFFERENT' }},
+          pre_implementation={{ 'MATCH' if standard_change_verification.pre_match else 'DIFFERENT' }}.
+          Matching type, chg_model, and std_change_producer_version does not
+          prove that the approved template workflow executed.
+        quiet: true
