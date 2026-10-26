@@ -2,6 +2,9 @@
 # Read-only inspection of one existing Standard Change and its template version.
 # Set existing_standard_cr_number below, or pass it as an extra variable.
 # Does not create, update, or close a change or template.
+# After the producer sys_id is known, performs one read-only GET:
+#   /api/sn_sc/servicecatalog/items/{record_producer_sys_id}
+# A successful GET does not prove that template submission is supported.
 #
 # AAP job template:
 #   Playbook: playbooks/servicenow/inspect_standard_change.yml
@@ -226,3 +229,126 @@
     - name: Display sanitized template lookup
       ansible.builtin.debug:
         msg: "{{ std_template_lookup_lines }}"
+
+    - name: Build the Service Catalog item URL
+      when: std_change_producer_sys_id | default('') | length == 32
+      ansible.builtin.set_fact:
+        std_catalog_item_url: "{{ _std_catalog_base ~ '/api/sn_sc/servicecatalog/items/' ~ std_change_producer_sys_id }}"
+      vars:
+        _std_catalog_base: "{{ lookup('ansible.builtin.env', 'SN_HOST') | trim | regex_replace('/+$', '') }}"
+      no_log: true
+
+    - name: Read the record producer through the Service Catalog API
+      when:
+        - std_catalog_item_url is defined
+        - std_catalog_item_url is match('^https://\S+/api/sn_sc/servicecatalog/items/[0-9a-fA-F]{32}$')
+      ansible.builtin.uri:
+        url: "{{ std_catalog_item_url }}"
+        method: GET
+        url_username: "{{ lookup('ansible.builtin.env', 'SN_USERNAME') }}"
+        url_password: "{{ lookup('ansible.builtin.env', 'SN_PASSWORD') }}"
+        force_basic_auth: true
+        use_netrc: false
+        validate_certs: true
+        status_code:
+          - 200
+          - 401
+          - 403
+          - 404
+        headers:
+          Accept: application/json
+      register: std_catalog_item
+      no_log: true
+
+    - name: Build the sanitized Service Catalog lookup
+      ansible.builtin.set_fact:
+        std_catalog_lookup_lines: "{{ _std_catalog_lookup_json | from_json }}"
+      no_log: true
+      vars:
+        _std_catalog_safe_fields:
+          - name
+          - sys_class_name
+          - type
+          - active
+        _std_catalog_lookup_json: |
+          {% set producer_id = std_change_producer_sys_id | default('') %}
+          {% set catalog_url = std_catalog_item_url | default('') %}
+          {% set catalog = std_catalog_item | default({}) %}
+          {% set result = {} %}
+          {% if catalog is mapping and catalog.status is defined and catalog.json is defined and catalog.json is mapping and catalog.json.result is defined and catalog.json.result is mapping %}
+          {% set result = catalog.json.result %}
+          {% endif %}
+          {% set ns = namespace(lines=[]) %}
+          {% set ns.lines = ns.lines + ['Service Catalog item lookup'] %}
+          {% if producer_id | length != 32 %}
+          {% set ns.lines = ns.lines + ['Service Catalog API: NOT ATTEMPTED. The record producer sys_id was not available.'] %}
+          {% elif catalog_url is not match('^https://\\S+/api/sn_sc/servicecatalog/items/[0-9a-fA-F]{32}$') %}
+          {% set ns.lines = ns.lines + ['Service Catalog API: NOT ATTEMPTED. SN_HOST was not available as an https URL.'] %}
+          {% elif catalog is not mapping or catalog is skipped or catalog.status is not defined %}
+          {% set ns.lines = ns.lines + ['Service Catalog API: NOT ATTEMPTED. The GET did not return an HTTP status.'] %}
+          {% else %}
+          {% set ns.lines = ns.lines + ['Service Catalog request: GET /api/sn_sc/servicecatalog/items/' ~ producer_id] %}
+          {% set ns.lines = ns.lines + ['HTTP status: ' ~ (catalog.status | string)] %}
+          {% if catalog.status | int == 200 and (result | length) > 0 %}
+          {% set ns.lines = ns.lines + ['Service Catalog item: RECOGNIZED'] %}
+          {% set ns.lines = ns.lines + ['Result field names: ' ~ (result.keys() | list | sort | join(', '))] %}
+          {% if result.sys_id is defined and result.sys_id is string and result.sys_id is match('^[0-9a-fA-F]{32}$') %}
+          {% set ns.lines = ns.lines + ['Catalog item sys_id: ' ~ result.sys_id] %}
+          {% set ns.lines = ns.lines + ['Catalog item sys_id matches record producer: ' ~ ((result.sys_id | lower) == (producer_id | lower))] %}
+          {% else %}
+          {% set ns.lines = ns.lines + ['Catalog item sys_id: NOT PRESENT'] %}
+          {% endif %}
+          {% for field_name in _std_catalog_safe_fields %}
+          {% if result[field_name] is defined and result[field_name] is string and (result[field_name] | length) > 0 and (result[field_name] | length) <= 80 and '\n' not in result[field_name] %}
+          {% set ns.lines = ns.lines + ['Catalog ' ~ field_name ~ ': ' ~ result[field_name]] %}
+          {% elif result[field_name] is defined and (result[field_name] is boolean or result[field_name] is number) %}
+          {% set ns.lines = ns.lines + ['Catalog ' ~ field_name ~ ': ' ~ (result[field_name] | string)] %}
+          {% elif result[field_name] is defined and result[field_name] is string and (result[field_name] | length) == 0 %}
+          {% set ns.lines = ns.lines + ['Catalog ' ~ field_name ~ ': EMPTY'] %}
+          {% elif result[field_name] is defined %}
+          {% set ns.lines = ns.lines + ['Catalog ' ~ field_name ~ ': POPULATED'] %}
+          {% else %}
+          {% set ns.lines = ns.lines + ['Catalog ' ~ field_name ~ ': NOT PRESENT'] %}
+          {% endif %}
+          {% endfor %}
+          {% if result.category is defined and result.category is string and (result.category | length) > 0 and (result.category | length) <= 80 and '\n' not in result.category %}
+          {% set ns.lines = ns.lines + ['Catalog category: ' ~ result.category] %}
+          {% elif result.category is defined and result.category is mapping and result.category.title is defined and result.category.title is string and (result.category.title | length) > 0 and (result.category.title | length) <= 80 and '\n' not in result.category.title %}
+          {% set ns.lines = ns.lines + ['Catalog category title: ' ~ result.category.title] %}
+          {% elif result.category is defined and result.category is string and (result.category | length) == 0 %}
+          {% set ns.lines = ns.lines + ['Catalog category: EMPTY'] %}
+          {% elif result.category is defined %}
+          {% set ns.lines = ns.lines + ['Catalog category: POPULATED'] %}
+          {% else %}
+          {% set ns.lines = ns.lines + ['Catalog category: NOT PRESENT'] %}
+          {% endif %}
+          {% if result.variables is defined and result.variables is not string and result.variables is sequence %}
+          {% set variable_names = namespace(items=[]) %}
+          {% for variable in result.variables %}
+          {% if variable is mapping and variable.name is defined and variable.name is string and (variable.name | length) > 0 and (variable.name | length) <= 80 and '\n' not in variable.name %}
+          {% set variable_names.items = variable_names.items + [variable.name] %}
+          {% endif %}
+          {% endfor %}
+          {% set ns.lines = ns.lines + ['Catalog variable count: ' ~ (result.variables | length)] %}
+          {% set ns.lines = ns.lines + ['Catalog variable names: ' ~ ((variable_names.items | join(', ')) if (variable_names.items | length) > 0 else 'NOT DETERMINED')] %}
+          {% else %}
+          {% set ns.lines = ns.lines + ['Catalog variables: NOT PRESENT'] %}
+          {% endif %}
+          {% elif catalog.status | int == 200 %}
+          {% set ns.lines = ns.lines + ['Service Catalog item: NOT CONFIRMED. HTTP 200 did not include a result object.'] %}
+          {% elif catalog.status | int == 401 %}
+          {% set ns.lines = ns.lines + ['Service Catalog API access: DENIED. The existing credentials were not accepted.'] %}
+          {% elif catalog.status | int == 403 %}
+          {% set ns.lines = ns.lines + ['Service Catalog API access: FORBIDDEN. The credentials cannot read this catalog item.'] %}
+          {% elif catalog.status | int == 404 %}
+          {% set ns.lines = ns.lines + ['Service Catalog API access: NOT FOUND. This endpoint does not recognize the record producer sys_id.'] %}
+          {% else %}
+          {% set ns.lines = ns.lines + ['Service Catalog API access: UNEXPECTED STATUS. No response body was displayed.'] %}
+          {% endif %}
+          {% endif %}
+          {% set ns.lines = ns.lines + ['A successful GET shows only that the Service Catalog API recognizes this record producer. It does not prove that template submission is supported.'] %}
+          {{ ns.lines | to_json }}
+
+    - name: Display sanitized Service Catalog lookup
+      ansible.builtin.debug:
+        msg: "{{ std_catalog_lookup_lines }}"
