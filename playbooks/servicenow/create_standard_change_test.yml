@@ -1,0 +1,429 @@
+---
+# Standalone test for one Standard Change using servicenow.itsm.change_request.
+# Authentication matches roles/servicenow_patching_change/tasks/create.yml.
+# Columns that are not direct module arguments are sent with other.
+# The collection looks up template by the std_change_producer_version name,
+# then posts the Table API change_request record. It also copies type into
+# chg_model. This playbook does not use ansible.builtin.uri.
+#
+# Creation is off until standard_change_allow_create is true.
+# A second run with the same short description does not create another change.
+#
+# AAP job template:
+#   Playbook: playbooks/servicenow/create_standard_change_test.yml
+#   Inventory: localhost is enough.
+#   Credential: the custom credential that injects SN_HOST, SN_USERNAME,
+#               and SN_PASSWORD.
+#   Extra variables:
+#     existing_standard_cr_number: CHG0001234
+#     standard_change_allow_create: false
+
+- name: Prepare one Standard Change field test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    existing_standard_cr_number: ""
+    standard_change_allow_create: false
+    standard_change_test_short_description: "AAP standard change required-field test"
+    standard_change_pre_implementation_label: "Pre-Implementation Test Results"
+
+  tasks:
+    - name: Require the approved reference change number
+      ansible.builtin.assert:
+        that:
+          - existing_standard_cr_number is match('^CHG[0-9]+$')
+        fail_msg: >-
+          Set existing_standard_cr_number to the manually created
+          Standard Change. No request was sent.
+        quiet: true
+
+    - name: Read the approved reference change
+      servicenow.itsm.change_request_info:  # noqa: args[module]
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        number: "{{ existing_standard_cr_number }}"
+      register: standard_change_reference_lookup
+      no_log: true
+
+    - name: Require one reference change
+      ansible.builtin.assert:
+        that:
+          - standard_change_reference_lookup.records | default([]) | length == 1
+        fail_msg: >-
+          Expected one change {{ existing_standard_cr_number }}.
+          Found {{ standard_change_reference_lookup.records | default([]) | length }}.
+          No change was created.
+        quiet: true
+
+    - name: Capture reference identifiers and required values
+      ansible.builtin.set_fact:
+        standard_change_reference: "{{ _standard_change_reference_json | from_json }}"
+      no_log: true
+      vars:
+        _standard_change_reference_json: |
+          {% macro ref_id(value) -%}
+          {%- if value is string and value is match('^[0-9a-fA-F]{32}$') -%}
+          {{ value }}
+          {%- elif value is mapping and (value.value | default('') | string) is match('^[0-9a-fA-F]{32}$') -%}
+          {{ value.value }}
+          {%- elif value is string -%}
+          {{ value | regex_search('([0-9a-fA-F]{32})$') | default('', true) }}
+          {%- endif -%}
+          {% endmacro %}
+          {% macro text_value(value) -%}
+          {%- if value is string -%}
+          {{ value }}
+          {%- endif -%}
+          {% endmacro %}
+          {% set row = standard_change_reference_lookup.records[0] %}
+          {{ {
+            'type': row.type | default('') | string,
+            'chg_model': ref_id(row.chg_model | default('')) | trim,
+            'version_sys_id': ref_id(row.std_change_producer_version | default('')) | trim,
+            'cmdb_ci': ref_id(row.cmdb_ci | default('')) | trim,
+            'assigned_to': ref_id(row.assigned_to | default('')) | trim,
+            'start_date': text_value(row.start_date | default('')) | trim,
+            'end_date': text_value(row.end_date | default('')) | trim,
+            'start_date_populated': (row.start_date | default('') | string | length) > 0,
+            'end_date_populated': (row.end_date | default('') | string | length) > 0,
+            'planned_start_populated': (row.planned_start_date | default('') | string | length) > 0,
+            'planned_end_populated': (row.planned_end_date | default('') | string | length) > 0
+          } | to_json }}
+
+    - name: Require a standard reference with a template version
+      ansible.builtin.assert:
+        that:
+          - standard_change_reference.type == 'standard'
+          - standard_change_reference.chg_model is match('^[0-9a-fA-F]{32}$')
+          - standard_change_reference.version_sys_id is match('^[0-9a-fA-F]{32}$')
+        fail_msg: >-
+          The reference change is not a usable Standard Change template.
+          type={{ standard_change_reference.type | default('') }},
+          chg_model_is_sys_id={{ standard_change_reference.chg_model is match('^[0-9a-fA-F]{32}$') }},
+          version_is_sys_id={{ standard_change_reference.version_sys_id is match('^[0-9a-fA-F]{32}$') }}.
+          No change was created.
+        quiet: true
+
+    - name: Read the template version named by the reference change
+      servicenow.itsm.api_info:  # noqa: args[module]
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        resource: std_change_producer_version
+        sysparm_query: "sys_id={{ standard_change_reference.version_sys_id }}"
+        columns:
+          - sys_id
+          - name
+        exclude_reference_link: true
+      register: standard_change_version_lookup
+      no_log: true
+
+    - name: Capture the template version name
+      ansible.builtin.set_fact:
+        standard_change_version_name: "{{ _version_name | trim }}"
+      vars:
+        _version_name: |
+          {% set rows = standard_change_version_lookup.record | default([]) %}
+          {% if rows is not string and rows is sequence and (rows | length) == 1 and rows[0].name is string %}
+          {{ rows[0].name }}
+          {% endif %}
+
+    - name: Require one template version name
+      ansible.builtin.assert:
+        that:
+          - standard_change_version_name | default('') | length > 0
+          - "'^' not in standard_change_version_name"
+          - "'=' not in standard_change_version_name"
+        fail_msg: >-
+          The reference template version did not provide one name that can
+          be queried. servicenow.itsm.change_request looks up the template
+          by that name. No change was created.
+        quiet: true
+
+    - name: Confirm the template name identifies only that version
+      servicenow.itsm.api_info:  # noqa: args[module]
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        resource: std_change_producer_version
+        sysparm_query: "name={{ standard_change_version_name }}"
+        columns:
+          - sys_id
+          - name
+        exclude_reference_link: true
+      register: standard_change_version_name_lookup
+      no_log: true
+
+    - name: Require the template name to match the reference version
+      ansible.builtin.assert:
+        that:
+          - standard_change_version_name_lookup.record | default([]) | length == 1
+          - >-
+            (standard_change_version_name_lookup.record[0].sys_id | default('') | lower)
+            == (standard_change_reference.version_sys_id | lower)
+        fail_msg: >-
+          Template name {{ standard_change_version_name }} matched
+          {{ standard_change_version_name_lookup.record | default([]) | length }}
+          std_change_producer_version rows. The collection would not be able
+          to select the approved version. No change was created.
+        quiet: true
+
+    - name: Find the Pre-Implementation Test Results column
+      servicenow.itsm.api_info:  # noqa: args[module]
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        resource: sys_dictionary
+        sysparm_query: >-
+          column_label={{ standard_change_pre_implementation_label }}^nameINchange_request,task
+        columns:
+          - element
+          - column_label
+          - name
+          - internal_type
+        exclude_reference_link: true
+      register: standard_change_dictionary_lookup
+      no_log: true
+
+    - name: Find the label when the dictionary column label differs
+      when: standard_change_dictionary_lookup.record | default([]) | length == 0
+      servicenow.itsm.api_info:  # noqa: args[module]
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        resource: sys_documentation
+        sysparm_query: >-
+          label={{ standard_change_pre_implementation_label }}^nameINchange_request,task
+        columns:
+          - element
+          - label
+          - name
+        exclude_reference_link: true
+      register: standard_change_documentation_lookup
+      no_log: true
+
+    - name: Select the Pre-Implementation Test Results element
+      ansible.builtin.set_fact:
+        standard_change_pre_elements: "{{ _pre_elements_json | from_json }}"
+      vars:
+        _pre_elements_json: |
+          {% set dictionary_rows = standard_change_dictionary_lookup.record | default([]) %}
+          {% set documentation_rows = standard_change_documentation_lookup.record | default([]) %}
+          {% set source = dictionary_rows if (dictionary_rows | length) > 0 else documentation_rows %}
+          {% set ns = namespace(elements=[]) %}
+          {% for row in source %}
+          {% if row is mapping and row.element | default('') | string | length > 0 %}
+          {% if row.element not in ns.elements %}
+          {% set ns.elements = ns.elements + [row.element] %}
+          {% endif %}
+          {% endif %}
+          {% endfor %}
+          {{ ns.elements | to_json }}
+
+    - name: Stop when the pre-implementation field is not verified
+      ansible.builtin.assert:
+        that:
+          - standard_change_pre_elements | length == 1
+          - standard_change_pre_elements[0] is match('^[A-Za-z0-9_]+$')
+        fail_msg: >-
+          Could not verify one API field for
+          {{ standard_change_pre_implementation_label }}.
+          Matches: {{ standard_change_pre_elements | join(', ') | default('none') }}.
+          test_plan was not assumed. No change was created.
+        quiet: true
+
+    - name: Capture the verified pre-implementation value from the reference
+      ansible.builtin.set_fact:
+        standard_change_pre_element: "{{ standard_change_pre_elements[0] }}"
+        standard_change_pre_value: "{{ _pre_value_json | from_json }}"
+      no_log: true
+      vars:
+        _pre_value_json: |
+          {% set row = standard_change_reference_lookup.records[0] %}
+          {% set field_name = standard_change_pre_elements[0] %}
+          {% if field_name in row and row[field_name] is string %}
+          {{ row[field_name] | to_json }}
+          {% else %}
+          {{ '' | to_json }}
+          {% endif %}
+
+    - name: Stop when a required reference value is missing
+      ansible.builtin.assert:
+        that:
+          - standard_change_reference.cmdb_ci is match('^[0-9a-fA-F]{32}$')
+          - standard_change_reference.assigned_to is match('^[0-9a-fA-F]{32}$')
+          - standard_change_reference.start_date | length > 0
+          - standard_change_reference.end_date | length > 0
+          - standard_change_pre_value | default('') | length > 0
+        fail_msg: >-
+          The reference change does not have all required values.
+          cmdb_ci_sys_id={{ standard_change_reference.cmdb_ci is match('^[0-9a-fA-F]{32}$') }},
+          assigned_to_sys_id={{ standard_change_reference.assigned_to is match('^[0-9a-fA-F]{32}$') }},
+          start_date_populated={{ standard_change_reference.start_date_populated }},
+          end_date_populated={{ standard_change_reference.end_date_populated }},
+          planned_start_populated={{ standard_change_reference.planned_start_populated }},
+          planned_end_populated={{ standard_change_reference.planned_end_populated }},
+          {{ standard_change_pre_element }} populated={{ (standard_change_pre_value | default('') | length) > 0 }}.
+          planned_start_date and planned_end_date were not substituted.
+          No change was created.
+        quiet: true
+
+    - name: Show the verified Standard Change field preparation
+      ansible.builtin.debug:
+        msg:
+          - "Reference change: {{ existing_standard_cr_number }}"
+          - "Reference type: {{ standard_change_reference.type }}"
+          - "Reference chg_model: {{ standard_change_reference.chg_model }}"
+          - "Template version sys_id: {{ standard_change_reference.version_sys_id }}"
+          - "Template name: {{ standard_change_version_name }}"
+          - "cmdb_ci: POPULATED 32-character sys_id"
+          - "assigned_to: POPULATED 32-character sys_id"
+          - "start_date: {{ standard_change_reference.start_date }}"
+          - "end_date: {{ standard_change_reference.end_date }}"
+          - >-
+            {{ standard_change_pre_implementation_label }}
+            field: {{ standard_change_pre_element }}
+          - >-
+            {{ standard_change_pre_implementation_label }}
+            value: POPULATED
+          - >-
+            Creation:
+            {{ 'AUTHORIZED' if (standard_change_allow_create | bool) else 'NOT AUTHORIZED' }}
+
+    - name: Stop before creation until explicitly authorized
+      when: not (standard_change_allow_create | bool)
+      ansible.builtin.meta: end_play
+
+    - name: Look for an earlier test change with the same short description
+      servicenow.itsm.api_info:  # noqa: args[module]
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        resource: change_request
+        sysparm_query: "short_description={{ standard_change_test_short_description }}"
+        columns:
+          - number
+        exclude_reference_link: true
+      register: standard_change_duplicate_lookup
+      no_log: true
+
+    - name: Do not create a duplicate test change
+      ansible.builtin.assert:
+        that:
+          - standard_change_duplicate_lookup.record | default([]) | length == 0
+        fail_msg: >-
+          A change with short description
+          {{ standard_change_test_short_description }}
+          already exists:
+          {{ standard_change_duplicate_lookup.record | map(attribute='number') | join(', ') }}.
+          No additional change was created.
+        quiet: true
+
+    - name: Create one Standard Change with the verified fields
+      servicenow.itsm.change_request:  # noqa: args[module]
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        type: standard
+        state: new
+        template: "{{ standard_change_version_name }}"
+        short_description: "{{ standard_change_test_short_description }}"
+        other: "{{ standard_change_other }}"
+      vars:
+        standard_change_other: >-
+          {{
+            {
+              'cmdb_ci': standard_change_reference.cmdb_ci,
+              'assigned_to': standard_change_reference.assigned_to,
+              'start_date': standard_change_reference.start_date,
+              'end_date': standard_change_reference.end_date
+            } | combine({standard_change_pre_element: standard_change_pre_value})
+          }}
+      register: standard_change_create
+      no_log: true
+
+    - name: Require the created change number and sys_id
+      ansible.builtin.assert:
+        that:
+          - standard_change_create.record is mapping
+          - standard_change_create.record.number | default('') is match('^CHG[0-9]+$')
+          - standard_change_create.record.sys_id | default('') is match('^[0-9a-fA-F]{32}$')
+        fail_msg: ServiceNow did not return a change number and sys_id.
+        quiet: true
+
+    - name: Read the created change
+      servicenow.itsm.change_request_info:  # noqa: args[module]
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        number: "{{ standard_change_create.record.number }}"
+      register: standard_change_created_lookup
+      no_log: true
+
+    - name: Compare the created change with the approved reference
+      ansible.builtin.set_fact:
+        standard_change_verification: "{{ _verification_json | from_json }}"
+      no_log: true
+      vars:
+        _verification_json: |
+          {% macro ref_id(value) -%}
+          {%- if value is string and value is match('^[0-9a-fA-F]{32}$') -%}
+          {{ value }}
+          {%- elif value is mapping and (value.value | default('') | string) is match('^[0-9a-fA-F]{32}$') -%}
+          {{ value.value }}
+          {%- elif value is string -%}
+          {{ value | regex_search('([0-9a-fA-F]{32})$') | default('', true) }}
+          {%- endif -%}
+          {% endmacro %}
+          {% set created = standard_change_created_lookup.records[0] %}
+          {% set created_model = ref_id(created.chg_model | default('')) | trim %}
+          {% set created_version = ref_id(created.std_change_producer_version | default('')) | trim %}
+          {% set created_ci = ref_id(created.cmdb_ci | default('')) | trim %}
+          {% set created_assignee = ref_id(created.assigned_to | default('')) | trim %}
+          {% set created_pre = created[standard_change_pre_element] if standard_change_pre_element in created else '' %}
+          {% set type_match = (created.type | default('') | string) == 'standard' %}
+          {% set model_match = (created_model | lower) == (standard_change_reference.chg_model | lower) %}
+          {% set version_match = (created_version | lower) == (standard_change_reference.version_sys_id | lower) %}
+          {{ {
+            'number': created.number | default(''),
+            'sys_id': created.sys_id | default(''),
+            'type': created.type | default('') | string,
+            'type_match': type_match,
+            'chg_model': created_model if (created_model | length) == 32 else (created.chg_model | default('') | string),
+            'chg_model_match': model_match,
+            'version_match': version_match,
+            'cmdb_ci_match': (created_ci | lower) == (standard_change_reference.cmdb_ci | lower),
+            'assigned_to_match': (created_assignee | lower) == (standard_change_reference.assigned_to | lower),
+            'start_date_match': (created.start_date | default('') | string) == standard_change_reference.start_date,
+            'end_date_match': (created.end_date | default('') | string) == standard_change_reference.end_date,
+            'pre_match': (created_pre | string) == standard_change_pre_value,
+            'template_match': type_match and model_match and version_match
+          } | to_json }}
+
+    - name: Show whether the created change matches the approved template
+      ansible.builtin.debug:
+        msg:
+          - "Created change: {{ standard_change_verification.number }}"
+          - "Created sys_id: {{ standard_change_verification.sys_id }}"
+          - >-
+            type: {{ standard_change_verification.type }}
+            ({{ 'MATCH' if standard_change_verification.type_match else 'DIFFERENT' }})
+          - >-
+            chg_model: {{ standard_change_verification.chg_model }}
+            ({{ 'MATCH' if standard_change_verification.chg_model_match else 'DIFFERENT' }})
+          - >-
+            std_change_producer_version:
+            {{ 'MATCH' if standard_change_verification.version_match else 'DIFFERENT' }}
+          - "cmdb_ci: {{ 'MATCH' if standard_change_verification.cmdb_ci_match else 'DIFFERENT' }}"
+          - "assigned_to: {{ 'MATCH' if standard_change_verification.assigned_to_match else 'DIFFERENT' }}"
+          - "start_date: {{ 'MATCH' if standard_change_verification.start_date_match else 'DIFFERENT' }}"
+          - "end_date: {{ 'MATCH' if standard_change_verification.end_date_match else 'DIFFERENT' }}"
+          - >-
+            {{ standard_change_pre_element }}:
+            {{ 'MATCH' if standard_change_verification.pre_match else 'DIFFERENT' }}
+          - >-
+            Approved template match:
+            {{ 'YES' if standard_change_verification.template_match else 'NO' }}
