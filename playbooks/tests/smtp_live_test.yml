@@ -1,0 +1,151 @@
+---
+# Standalone SMTP connectivity and submission test for AAP 2.7.
+# Runs on localhost in the execution environment. It does not patch Windows
+# hosts and does not use the report email role.
+#
+# No SMTP username or password is passed, so the relay is used without
+# authentication. Do not add credentials to the extra variables.
+#
+# AAP job template:
+#   Playbook: playbooks/tests/smtp_live_test.yml
+#   Inventory: localhost is enough. Do not limit this job to a Windows wave.
+#   Execution environment: ee-supported-rhel9, with community.general installed.
+#   Concurrent jobs: one is enough.
+#   Extra variables:
+#     smtp_test_host: smtp.example.internal
+#     smtp_test_port: 25
+#     smtp_test_secure: never
+#     smtp_test_from: aap-test@example.internal
+#     smtp_test_to:
+#       - operator@example.internal
+
+- name: Test SMTP connectivity and send one message
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    smtp_test_host: ""
+    smtp_test_port: 25
+    smtp_test_secure: "never"
+    smtp_test_from: ""
+    smtp_test_to: ""
+
+  tasks:
+    - name: Normalize SMTP test inputs
+      ansible.builtin.set_fact:
+        smtp_test_host_normalized: "{{ smtp_test_host | default('') | string | trim }}"
+        smtp_test_port_normalized: "{{ smtp_test_port | default(25) | string | trim }}"
+        smtp_test_secure_normalized: "{{ smtp_test_secure | default('never') | string | trim | lower }}"
+        smtp_test_from_normalized: "{{ smtp_test_from | default('') | string | trim }}"
+        smtp_test_recipients: "{{ _smtp_test_recipients }}"
+        smtp_test_job_id: "{{ tower_job_id | default(awx_job_id | default('not available')) }}"
+      vars:
+        _smtp_test_recipients: >-
+          {{
+            (
+              smtp_test_to | map('string') | map('trim') | reject('equalto', '') | list
+            )
+            if (smtp_test_to is not string and smtp_test_to is sequence)
+            else (
+              (smtp_test_to | default('') | string).split(',')
+              | map('trim') | reject('equalto', '') | list
+            )
+          }}
+
+    - name: Require SMTP host, port, security mode, sender, and recipients
+      ansible.builtin.assert:
+        that:
+          - smtp_test_host_normalized | length > 0
+          - smtp_test_port_normalized is match('^[0-9]+$')
+          - (smtp_test_port_normalized | int) >= 1
+          - (smtp_test_port_normalized | int) <= 65535
+          - smtp_test_secure_normalized in ['always', 'never', 'starttls', 'try']
+          - smtp_test_from_normalized | length > 0
+          - smtp_test_recipients | length > 0
+        fail_msg: >-
+          Set smtp_test_host, smtp_test_port (1-65535, default 25),
+          smtp_test_secure (always, never, starttls, or try; default never),
+          smtp_test_from, and smtp_test_to.
+          smtp_test_to accepts one address or a list. No email was sent.
+        quiet: true
+
+    - name: Check TCP connectivity to the SMTP relay
+      block:
+        - name: Wait for the SMTP port
+          ansible.builtin.wait_for:
+            host: "{{ smtp_test_host_normalized }}"
+            port: "{{ smtp_test_port_normalized | int }}"
+            timeout: 10
+            state: started
+      rescue:
+        - name: Report the SMTP connectivity failure
+          ansible.builtin.debug:
+            msg:
+              - "SMTP TCP connectivity: FAILED"
+              - "Host: {{ smtp_test_host_normalized }}"
+              - "Port: {{ smtp_test_port_normalized }}"
+              - >-
+                Reason:
+                {{ ansible_failed_result.msg | default('wait_for did not return a message.') }}
+        - name: Fail the job because the SMTP port is unreachable
+          ansible.builtin.fail:
+            msg: >-
+              SMTP TCP connectivity failed for
+              {{ smtp_test_host_normalized }}:{{ smtp_test_port_normalized }}.
+              {{ ansible_failed_result.msg | default('wait_for did not return a message.') }}
+              Email was not sent.
+
+    - name: Send one plain-text SMTP test message
+      block:
+        - name: Submit the test message without authentication
+          community.general.mail:
+            host: "{{ smtp_test_host_normalized }}"
+            port: "{{ smtp_test_port_normalized | int }}"
+            secure: "{{ smtp_test_secure_normalized }}"
+            timeout: 20
+            sender: "{{ smtp_test_from_normalized }}"
+            to: "{{ smtp_test_recipients }}"
+            subject: "AAP 2.7 SMTP Connectivity Test"
+            subtype: plain
+            charset: utf-8
+            body: |
+              This is a test email from Ansible Automation Platform 2.7.
+
+              SMTP server: {{ smtp_test_host_normalized }}
+              AAP Job ID: {{ smtp_test_job_id }}
+
+              This email verifies SMTP relay connectivity and message submission.
+          register: smtp_test_mail
+      rescue:
+        - name: Report the SMTP submission failure
+          ansible.builtin.debug:
+            msg:
+              - "SMTP submission: FAILED"
+              - "Host: {{ smtp_test_host_normalized }}"
+              - "Port: {{ smtp_test_port_normalized }}"
+              - "Secure: {{ smtp_test_secure_normalized }}"
+              - "From: {{ smtp_test_from_normalized }}"
+              - "Recipients: {{ smtp_test_recipients | join(', ') }}"
+              - >-
+                Module error:
+                {{ ansible_failed_result.msg | default('community.general.mail did not return an error message.') }}
+        - name: Fail the job because the test message was not accepted
+          ansible.builtin.fail:
+            msg: >-
+              SMTP test email was not accepted by
+              {{ smtp_test_host_normalized }}:{{ smtp_test_port_normalized }}.
+              {{ ansible_failed_result.msg | default('community.general.mail did not return an error message.') }}
+
+    - name: Report the SMTP test result
+      ansible.builtin.debug:
+        msg:
+          - "SMTP TCP connectivity: REACHED"
+          - "SMTP submission: ACCEPTED"
+          - "Host: {{ smtp_test_host_normalized }}"
+          - "Port: {{ smtp_test_port_normalized }}"
+          - "Secure: {{ smtp_test_secure_normalized }}"
+          - "From: {{ smtp_test_from_normalized }}"
+          - "Recipients: {{ smtp_test_recipients | join(', ') }}"
+          - "AAP Job ID: {{ smtp_test_job_id }}"
+          - "Module message: {{ smtp_test_mail.msg | default('community.general.mail did not return a message.') }}"

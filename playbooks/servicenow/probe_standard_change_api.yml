@@ -1,0 +1,90 @@
+---
+# Read-only GET of the candidate Change Management standard-change endpoint.
+# servicenow.itsm 2.6.3 api_info accepts api_path and sends GET. It does not
+# return the HTTP status. On success it returns a result list. It also sends
+# its usual list query parameters, including sysparm_limit and sysparm_offset.
+# A successful response does not prove that template creation is supported.
+# This playbook does not create, update, or delete a record, and it does not
+# use ansible.builtin.uri.
+#
+# AAP job template:
+#   Playbook: playbooks/servicenow/probe_standard_change_api.yml
+#   Inventory: localhost is enough. Do not limit this job to a Windows wave.
+#   Credential: the custom credential that injects SN_HOST, SN_USERNAME,
+#               and SN_PASSWORD.
+#   Execution environment: one that already includes servicenow.itsm 2.6.3.
+
+- name: Probe the Change Management standard change endpoint
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: GET the candidate standard change endpoint
+      block:
+        # args[module] does not see the collection env_fallback for SN_USERNAME.
+        - name: Read the standard change API path  # noqa: args[module]
+          servicenow.itsm.api_info:
+            instance:
+              host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+              validate_certs: true
+            api_path: api/sn_chg_rest/change/standard
+          register: chg_standard_api
+          no_log: true
+      rescue:
+        - name: Record the sanitized probe failure
+          ansible.builtin.set_fact:
+            chg_standard_probe:
+              succeeded: false
+              http_status: "{{ _status | default('NOT RETURNED', true) }}"
+              detail: "{{ _detail }}"
+          no_log: true
+          vars:
+            _msg: "{{ ansible_failed_result.msg | default('') | string }}"
+            _status_text: >-
+              {{
+                _msg | regex_search(
+                  '(?:Unexpected response - |Failed to authenticate with the instance: )[0-9]{3}'
+                )
+              }}
+            _status: "{{ _status_text | regex_search('[0-9]{3}$') }}"
+            _detail: >-
+              {{
+                'authentication rejected'
+                if ('Failed to authenticate' in _msg)
+                else (
+                  'unexpected response'
+                  if ('Unexpected response' in _msg)
+                  else 'the collection did not return a record list'
+                )
+              }}
+
+    - name: Record a sanitized successful probe
+      when: chg_standard_probe is not defined
+      ansible.builtin.set_fact:
+        chg_standard_probe:
+          succeeded: true
+          http_status: NOT RETURNED
+          record_count: "{{ chg_standard_api.record | default([]) | length }}"
+
+    - name: Show the sanitized standard change API probe
+      ansible.builtin.debug:
+        msg:
+          - "Change Management API GET: {{ 'SUCCEEDED' if (chg_standard_probe.succeeded | bool) else 'FAILED' }}"
+          - "Path: /api/sn_chg_rest/change/standard"
+          - "HTTP status: {{ chg_standard_probe.http_status }}"
+          - >-
+            {{
+              'Record count: ' ~ chg_standard_probe.record_count
+              if (chg_standard_probe.succeeded | bool)
+              else 'Detail: ' ~ chg_standard_probe.detail
+            }}
+          - >-
+            api_info does not return the HTTP status after a successful GET.
+            HTTP 404 is also accepted when the body contains a result list.
+          - >-
+            This GET includes the collection list query parameters.
+            A failure can come from those parameters or from this endpoint.
+          - >-
+            A successful GET does not prove that Standard Change creation
+            is supported. The response body was not displayed.
