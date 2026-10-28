@@ -1,0 +1,150 @@
+---
+# Build a fictional Windows patching-window report for dashboard testing.
+# Uses the production aggregate and CSV writer. It does not patch, reboot,
+# call ServiceNow, or send email.
+#
+# Local run, from the repository root:
+#   ansible-playbook playbooks/tests/generate_sample_window_report.yml
+#
+# AAP job template:
+#   Playbook: playbooks/tests/generate_sample_window_report.yml
+#   Inventory: localhost is enough. Do not limit this job to a Windows wave.
+#   Execution environment: the Windows patching environment is sufficient.
+#   Credentials: none.
+# Artifacts: patch_workflow_report, patch_workflow_report_json,
+# and patch_workflow_report_csv.
+
+- name: Load fictional patch results
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    sample_reason_codes:
+      - PATCH_SUCCEEDED
+      - NO_APPLICABLE_UPDATES
+      - PATCH_EXEMPTION
+      - PRECHECK_BLOCKED
+      - PRECHECK_FAILED
+      - HEALTH_COLLECTION_FAILED
+      - UNSUPPORTED_OS
+      - WINDOW_CLOSED
+      - INSTALL_NOT_AUTHORIZED
+      - PATCH_INSTALL_FAILED
+      - REBOOT_FAILED
+      - POSTCHECK_DEGRADED
+      - PARTIAL_PATCH
+      - PENDING_REBOOT
+      - POSTCHECK_MISSING
+      - UNREACHABLE
+      - UNKNOWN_RESULT
+    sample_results:
+      - success
+      - already_compliant
+      - exempt
+      - blocked
+      - failed
+      - degraded
+      - unknown
+
+  tasks:
+    - name: Load the sample patch results
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/fixtures/sample_patch_results.yml"
+
+    - name: Require every canonical result and reason code in the fixture
+      ansible.builtin.assert:
+        that:
+          - sample_patch_results | length == 25
+          - sample_results | difference(sample_patch_results | map(attribute='result') | unique | list) | length == 0
+          - sample_reason_codes | difference(sample_patch_results | map(attribute='reason_code') | unique | list) | length == 0
+        fail_msg: The sample fixture is missing a canonical result or reason code.
+
+    - name: Apply shared sample defaults
+      ansible.builtin.set_fact:
+        sample_patch_results_effective: "{{ sample_patch_results_effective | default([]) + [sample_patch_defaults | combine(item)] }}"
+      loop: "{{ sample_patch_results }}"
+      loop_control:
+        label: "{{ item.inventory_hostname }}"
+
+    - name: Register fictional patch hosts
+      ansible.builtin.add_host:
+        name: "{{ item.inventory_hostname }}"
+        groups: sample_patch_hosts
+        patch_final_result: "{{ item }}"
+      loop: "{{ sample_patch_results_effective }}"
+      loop_control:
+        label: "{{ item.inventory_hostname }}"
+
+- name: Aggregate the fictional patching window
+  hosts: sample_patch_hosts
+  connection: local
+  gather_facts: false
+
+  vars:
+    change_ticket_id: CHG0042001
+    patch_wave_name: windows_wave_3
+    patch_target_scope: sample-dashboard-window
+    patch_report_output_dir: /tmp/aap-sample-patch-reports
+    sample_csv_columns:
+      - Hostname
+      - FQDN
+      - OS Release
+      - Post-Patch Kernel/Build
+      - Location
+      - Patched
+      - Exempt
+      - Result
+      - Reason
+      - Updates Installed
+      - Updates Remaining
+      - Change Ticket
+      - Patch Wave
+      - Reason Code
+      - Pending Reboot
+      - Manual Follow-up Required
+    sample_csv_header: "{{ sample_csv_columns | map('to_json') | join(',') }}"
+
+  tasks:
+    - name: Aggregate sample host results
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/patch_report/tasks/final_aggregate.yml"
+      run_once: true
+
+    - name: Write sample JSON, CSV, and Markdown
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/patch_report/tasks/final_write.yml"
+      run_once: true
+
+    - name: Require reconciled sample totals and the production CSV header
+      ansible.builtin.assert:
+        that:
+          - (patch_workflow_report.total_systems | int) == 25
+          - (patch_workflow_report.systems_patched | int) + (patch_workflow_report.systems_not_patched | int) == 25
+          - >-
+            (patch_workflow_report.status_counts.success | int)
+            + (patch_workflow_report.status_counts.already_compliant | int)
+            + (patch_workflow_report.status_counts.exempt | int)
+            + (patch_workflow_report.status_counts.blocked | int)
+            + (patch_workflow_report.status_counts.failed | int)
+            + (patch_workflow_report.status_counts.degraded | int)
+            + (patch_workflow_report.status_counts.unknown | int)
+            == 25
+          - >-
+            (patch_workflow_report.not_patched_breakdown.exempt | int)
+            + (patch_workflow_report.not_patched_breakdown.already_compliant | int)
+            + (patch_workflow_report.not_patched_breakdown.blocked | int)
+            + (patch_workflow_report.not_patched_breakdown.failed | int)
+            + (patch_workflow_report.not_patched_breakdown.degraded | int)
+            + (patch_workflow_report.not_patched_breakdown.unknown | int)
+            == (patch_workflow_report.systems_not_patched | int)
+          - (patch_workflow_report.status_counts.success | int) > 0
+          - (patch_workflow_report.status_counts.already_compliant | int) > 0
+          - (patch_workflow_report.status_counts.exempt | int) > 0
+          - (patch_workflow_report.status_counts.blocked | int) > 0
+          - (patch_workflow_report.status_counts.failed | int) > 0
+          - (patch_workflow_report.status_counts.degraded | int) > 0
+          - (patch_workflow_report.status_counts.unknown | int) > 0
+          - (patch_workflow_report_csv.split('\n') | first) == sample_csv_header
+          - patch_workflow_report.hosts | selectattr('patched', 'equalto', true) | selectattr('result', 'equalto', 'failed') | list | length > 0
+          - patch_workflow_report.hosts | selectattr('patched', 'equalto', true) | selectattr('result', 'equalto', 'degraded') | list | length > 0
+        fail_msg: The sample window totals or CSV header do not match the production report.
+      run_once: true

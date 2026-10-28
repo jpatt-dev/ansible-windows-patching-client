@@ -1,0 +1,511 @@
+---
+# Fictional patch_final_result rows for dashboard samples.
+# Hostnames, domains, and change numbers are not production systems.
+# sample_patch_defaults fills every omitted field. Host entries only
+# override what is different for that situation.
+sample_patch_defaults:
+  schema_version: "3"
+  platform: windows
+  report_source: windows_full_patch
+  patch_environment: LAB
+  change_ticket_id: CHG0042001
+  patch_wave: windows_wave_3
+  patch_wave_name: windows_wave_3
+  git_revision: not_available
+  exempt: false
+  patched: false
+  manual_followup_required: false
+  pending_reboot: false
+  pre_patch_reboot_performed: false
+  post_patch_reboot_performed: false
+  updates_installed: 0
+  updates_remaining: 0
+  updates_failed: 0
+  patching_exception_reference: ""
+  patching_exception_source: inventory
+  patching_exception_kind: none
+  patching_exception_status: none
+  patching_exception_expires_at: ""
+  failed_phase: ""
+  last_completed_phase: final_reporting
+  failure_timestamp_utc: not_available
+  reboot_recovery_failed: false
+  os_release: Microsoft Windows Server 2022 Datacenter
+  os_version: "10.0.20348"
+  os_build: "20348.2849"
+  os_build_pre: "20348.2582"
+  location: Lexington Datacenter
+
+sample_patch_results:
+  - inventory_hostname: win-lab-01
+    host: win-lab-01
+    hostname: WIN-LAB-01
+    fqdn: win-lab-01.lab.example.internal
+    snow_ci_sys_id: "00000000000000000000000000000001"
+    result: success
+    final_status: success
+    reason: Updates installed successfully
+    reason_code: PATCH_SUCCEEDED
+    patched: true
+    updates_installed: 3
+    updates_installed_kbs:
+      - KB5030211
+      - KB5031364
+      - KB5032198
+    post_patch_reboot_performed: true
+    last_completed_phase: postcheck
+
+  - inventory_hostname: win-lab-02
+    host: win-lab-02
+    hostname: WIN-LAB-02
+    fqdn: win-lab-02.lab.example.internal
+    snow_ci_sys_id: "00000000000000000000000000000002"
+    os_release: Microsoft Windows Server 2019 Datacenter
+    os_version: "10.0.17763"
+    os_build: "17763.6530"
+    os_build_pre: "17763.6414"
+    location: London
+    result: success
+    final_status: success
+    reason: Updates installed successfully
+    reason_code: PATCH_SUCCEEDED
+    patched: true
+    updates_installed: 1
+    updates_installed_kbs:
+      - KB5034441
+    post_patch_reboot_performed: true
+    last_completed_phase: postcheck
+
+  - inventory_hostname: win-lab-03
+    host: win-lab-03
+    hostname: WIN-LAB-03
+    fqdn: win-lab-03.lab.example.internal
+    snow_ci_sys_id: "00000000000000000000000000000003"
+    os_release: Microsoft Windows Server 2025 Datacenter
+    os_version: "10.0.26100"
+    os_build: "26100.2033"
+    os_build_pre: "26100.1742"
+    location: Azure-East-US
+    result: success
+    final_status: success
+    reason: Updates installed successfully
+    reason_code: PATCH_SUCCEEDED
+    patched: true
+    updates_installed: 5
+    post_patch_reboot_performed: true
+    last_completed_phase: postcheck
+
+  - inventory_hostname: win-lab-04
+    host: win-lab-04
+    hostname: WIN-LAB-04
+    fqdn: win-lab-04.lab.example.internal
+    snow_ci_sys_id: "00000000000000000000000000000004"
+    os_release: Microsoft Windows Server 2016 Standard
+    os_version: "10.0.14393"
+    os_build: "14393.7699"
+    os_build_pre: "14393.7699"
+    location: Physical
+    result: already_compliant
+    final_status: already_compliant
+    reason: No applicable updates
+    reason_code: NO_APPLICABLE_UPDATES
+    last_completed_phase: postcheck
+
+  - inventory_hostname: win-lab-05
+    host: win-lab-05
+    hostname: WIN-LAB-05
+    fqdn: win-lab-05.lab.example.internal
+    snow_ci_sys_id: "00000000000000000000000000000005"
+    location: London
+    result: already_compliant
+    final_status: already_compliant
+    reason: No applicable updates
+    reason_code: NO_APPLICABLE_UPDATES
+    last_completed_phase: postcheck
+
+  - inventory_hostname: win-lab-06
+    host: win-lab-06
+    hostname: WIN-LAB-06
+    fqdn: win-lab-06.lab.example.internal
+    snow_ci_sys_id: "00000000000000000000000000000006"
+    result: exempt
+    final_status: exempt
+    reason: Approved exemption
+    reason_code: PATCH_EXEMPTION
+    exempt: true
+    patching_exception_reference: EXM-PERM-0142
+    patching_exception_kind: patch
+    patching_exception_status: active
+    updates_installed: not_available
+    updates_remaining: not_available
+    updates_failed: not_available
+    pending_reboot: not_available
+    pre_patch_reboot_performed: not_available
+    post_patch_reboot_performed: not_available
+    last_completed_phase: precheck
+
+  - inventory_hostname: win-lab-07
+    host: win-lab-07
+    hostname: WIN-LAB-07
+    fqdn: win-lab-07.lab.example.internal
+    snow_ci_sys_id: "00000000000000000000000000000007"
+    location: Azure-East-US
+    result: exempt
+    final_status: exempt
+    reason: Approved exemption
+    reason_code: PATCH_EXEMPTION
+    exempt: true
+    patching_exception_reference: EXM-TEMP-2088
+    patching_exception_source: aap_group
+    patching_exception_kind: patch
+    patching_exception_status: active
+    patching_exception_expires_at: "2026-12-31T23:59:59Z"
+    updates_installed: not_available
+    updates_remaining: not_available
+    updates_failed: not_available
+    pending_reboot: not_available
+    pre_patch_reboot_performed: not_available
+    post_patch_reboot_performed: not_available
+    last_completed_phase: precheck
+
+  - inventory_hostname: win-lab-08
+    host: win-lab-08
+    hostname: WIN-LAB-08
+    fqdn: win-lab-08.lab.example.internal
+    snow_ci_sys_id: "00000000000000000000000000000008"
+    os_release: Microsoft Windows Server 2019 Standard
+    os_version: "10.0.17763"
+    os_build: "17763.6530"
+    os_build_pre: "17763.6414"
+    location: vCenter-East
+    result: exempt
+    final_status: exempt
+    reason: Approved exemption
+    reason_code: PATCH_EXEMPTION
+    exempt: true
+    patching_exception_reference: EXM-PERM-0301
+    patching_exception_kind: patch_and_reboot
+    patching_exception_status: active
+    patching_exception_patch_source: inventory
+    patching_exception_patch_reference: EXM-PERM-0301
+    patching_reboot_exception_source: aap_group
+    patching_reboot_exception_reference: EXM-TEMP-REBOOT-77
+    patching_reboot_exception_expires_at: "2026-11-15T23:59:59Z"
+    updates_installed: not_available
+    updates_remaining: not_available
+    updates_failed: not_available
+    pending_reboot: not_available
+    pre_patch_reboot_performed: not_available
+    post_patch_reboot_performed: not_available
+    last_completed_phase: precheck
+
+  - inventory_hostname: win-lab-09
+    host: win-lab-09
+    hostname: WIN-LAB-09
+    fqdn: win-lab-09.lab.example.internal
+    snow_ci_sys_id: "00000000000000000000000000000009"
+    result: blocked
+    final_status: blocked
+    reason: Precheck blocked remediation
+    reason_code: PRECHECK_BLOCKED
+    precheck_status: blocked
+    updates_installed: not_available
+    updates_remaining: not_available
+    updates_failed: not_available
+    pending_reboot: not_available
+    pre_patch_reboot_performed: not_available
+    post_patch_reboot_performed: not_available
+    last_completed_phase: ""
+
+  - inventory_hostname: win-lab-10
+    host: win-lab-10
+    hostname: WIN-LAB-10
+    fqdn: win-lab-10.lab.example.internal
+    snow_ci_sys_id: "0000000000000000000000000000000a"
+    location: London
+    result: blocked
+    final_status: blocked
+    reason: Maintenance window is closed
+    reason_code: WINDOW_CLOSED
+    updates_remaining: 2
+    last_completed_phase: discovery
+
+  - inventory_hostname: win-lab-11
+    host: win-lab-11
+    hostname: WIN-LAB-11
+    fqdn: win-lab-11.lab.example.internal
+    snow_ci_sys_id: "0000000000000000000000000000000b"
+    location: Physical
+    result: blocked
+    final_status: blocked
+    reason: Patch installation was not authorized
+    reason_code: INSTALL_NOT_AUTHORIZED
+    updates_remaining: 3
+    last_completed_phase: discovery
+
+  - inventory_hostname: win-lab-12
+    host: win-lab-12
+    hostname: WIN-LAB-12
+    fqdn: win-lab-12.lab.example.internal
+    snow_ci_sys_id: "0000000000000000000000000000000c"
+    os_release: Microsoft Windows Server 2012 R2 Standard
+    os_version: "6.3.9600"
+    os_build: "9600.21615"
+    os_build_pre: "9600.21615"
+    result: blocked
+    final_status: blocked
+    reason: OS has no supported patch policy
+    reason_code: UNSUPPORTED_OS
+    updates_remaining: not_available
+    last_completed_phase: discovery
+
+  - inventory_hostname: win-lab-13
+    host: win-lab-13
+    hostname: WIN-LAB-13
+    fqdn: win-lab-13.lab.example.internal
+    snow_ci_sys_id: "0000000000000000000000000000000d"
+    result: failed
+    final_status: failed
+    reason: Precheck failed before remediation
+    reason_code: PRECHECK_FAILED
+    manual_followup_required: true
+    updates_installed: not_available
+    updates_remaining: not_available
+    updates_failed: not_available
+    pending_reboot: not_available
+    pre_patch_reboot_performed: not_available
+    post_patch_reboot_performed: not_available
+    failed_phase: precheck
+    failure_timestamp_utc: "2026-10-27T02:15:00Z"
+    last_completed_phase: ""
+
+  - inventory_hostname: win-lab-14
+    host: win-lab-14
+    hostname: WIN-LAB-14
+    fqdn: win-lab-14.lab.example.internal
+    snow_ci_sys_id: "0000000000000000000000000000000e"
+    location: Azure-East-US
+    result: failed
+    final_status: failed
+    reason: Final health collection failed
+    reason_code: HEALTH_COLLECTION_FAILED
+    manual_followup_required: true
+    patched: true
+    updates_installed: 2
+    updates_remaining: not_available
+    pending_reboot: not_available
+    post_patch_reboot_performed: true
+    failure_timestamp_utc: "2026-10-27T03:40:00Z"
+    last_completed_phase: post_patch_reboot
+
+  - inventory_hostname: win-lab-15
+    host: win-lab-15
+    hostname: WIN-LAB-15
+    fqdn: win-lab-15.lab.example.internal
+    snow_ci_sys_id: "0000000000000000000000000000000f"
+    os_release: Microsoft Windows 11 Enterprise
+    os_version: "10.0.22631"
+    os_build: "22631.4317"
+    os_build_pre: "22631.4317"
+    result: failed
+    final_status: failed
+    reason: OS has no supported patch policy
+    reason_code: UNSUPPORTED_OS
+    manual_followup_required: true
+    updates_remaining: not_available
+    failed_phase: discovery
+    failure_timestamp_utc: "2026-10-27T02:20:00Z"
+    last_completed_phase: precheck
+
+  - inventory_hostname: win-lab-16
+    host: win-lab-16
+    hostname: WIN-LAB-16
+    fqdn: win-lab-16.lab.example.internal
+    snow_ci_sys_id: "00000000000000000000000000000010"
+    location: London
+    result: failed
+    final_status: failed
+    reason: Update installation failed
+    reason_code: PATCH_INSTALL_FAILED
+    manual_followup_required: true
+    updates_failed: 4
+    updates_remaining: 4
+    failed_phase: apply
+    failure_timestamp_utc: "2026-10-27T02:55:00Z"
+    last_completed_phase: discovery
+
+  - inventory_hostname: win-lab-17
+    host: win-lab-17
+    hostname: WIN-LAB-17
+    fqdn: win-lab-17.lab.example.internal
+    snow_ci_sys_id: "00000000000000000000000000000011"
+    location: vCenter-East
+    result: failed
+    final_status: failed
+    reason: Pre-patch or post-patch reboot failed
+    reason_code: REBOOT_FAILED
+    manual_followup_required: true
+    patched: true
+    updates_installed: 2
+    updates_remaining: not_available
+    pending_reboot: not_available
+    post_patch_reboot_performed: not_available
+    reboot_recovery_failed: true
+    failed_phase: post_patch_reboot
+    failure_timestamp_utc: "2026-10-27T03:10:00Z"
+    last_completed_phase: apply
+
+  - inventory_hostname: win-lab-18
+    host: win-lab-18
+    hostname: WIN-LAB-18
+    fqdn: win-lab-18.lab.example.internal
+    snow_ci_sys_id: "00000000000000000000000000000012"
+    os_release: ""
+    os_version: not_available
+    os_build: ""
+    os_build_pre: not_available
+    location: London
+    result: failed
+    final_status: failed
+    reason: Host unreachable
+    reason_code: UNREACHABLE
+    manual_followup_required: true
+    updates_installed: not_available
+    updates_remaining: not_available
+    updates_failed: not_available
+    pending_reboot: not_available
+    pre_patch_reboot_performed: not_available
+    post_patch_reboot_performed: not_available
+    reboot_recovery_failed: not_available
+    failure_timestamp_utc: "2026-10-27T02:05:00Z"
+    last_completed_phase: ""
+
+  - inventory_hostname: win-lab-19
+    host: win-lab-19
+    hostname: WIN-LAB-19
+    fqdn: win-lab-19.lab.example.internal
+    snow_ci_sys_id: "00000000000000000000000000000013"
+    result: degraded
+    final_status: degraded
+    reason: Postcheck detected unhealthy services
+    reason_code: POSTCHECK_DEGRADED
+    manual_followup_required: true
+    patched: true
+    updates_installed: 2
+    post_patch_reboot_performed: true
+    postcheck_status: degraded
+    last_completed_phase: postcheck
+
+  - inventory_hostname: win-lab-20
+    host: win-lab-20
+    hostname: WIN-LAB-20
+    fqdn: win-lab-20.lab.example.internal
+    snow_ci_sys_id: "00000000000000000000000000000014"
+    os_release: Microsoft Windows Server 2019 Datacenter
+    os_version: "10.0.17763"
+    os_build: "17763.6530"
+    os_build_pre: "17763.5936"
+    location: Azure-East-US
+    result: degraded
+    final_status: degraded
+    reason: Updates remain after installation
+    reason_code: PARTIAL_PATCH
+    manual_followup_required: true
+    patched: true
+    updates_installed: 2
+    updates_remaining: 1
+    post_patch_reboot_performed: true
+    last_completed_phase: postcheck
+
+  - inventory_hostname: win-lab-21
+    host: win-lab-21
+    hostname: WIN-LAB-21
+    fqdn: win-lab-21.lab.example.internal
+    snow_ci_sys_id: "00000000000000000000000000000015"
+    location: Physical
+    result: degraded
+    final_status: degraded
+    reason: A reboot is pending and requires follow-up
+    reason_code: PENDING_REBOOT
+    manual_followup_required: true
+    patched: true
+    pending_reboot: true
+    updates_installed: 1
+    last_completed_phase: postcheck
+
+  - inventory_hostname: win-lab-22
+    host: win-lab-22
+    hostname: WIN-LAB-22
+    fqdn: win-lab-22.lab.example.internal
+    snow_ci_sys_id: "00000000000000000000000000000016"
+    os_release: Microsoft Windows Server 2016 Datacenter
+    os_version: "10.0.14393"
+    os_build: "14393.7699"
+    os_build_pre: "14393.7428"
+    location: London
+    result: degraded
+    final_status: degraded
+    reason: A reboot is pending and requires follow-up
+    reason_code: PENDING_REBOOT
+    manual_followup_required: true
+    pending_reboot: true
+    last_completed_phase: postcheck
+
+  - inventory_hostname: win-lab-23
+    host: win-lab-23
+    hostname: WIN-LAB-23
+    fqdn: win-lab-23.lab.example.internal
+    snow_ci_sys_id: "00000000000000000000000000000017"
+    location: vCenter-East
+    result: unknown
+    final_status: unknown
+    reason: Postcheck evidence is missing
+    reason_code: POSTCHECK_MISSING
+    manual_followup_required: true
+    patched: true
+    updates_installed: 2
+    updates_remaining: not_available
+    pending_reboot: not_available
+    post_patch_reboot_performed: true
+    postcheck_status: not_available
+    last_completed_phase: post_patch_reboot
+
+  - inventory_hostname: win-lab-24
+    host: win-lab-24
+    hostname: WIN-LAB-24
+    fqdn: win-lab-24.lab.example.internal
+    snow_ci_sys_id: ""
+    os_release: ""
+    os_version: not_available
+    os_build: ""
+    os_build_pre: not_available
+    location: ""
+    result: unknown
+    final_status: unknown
+    reason: Reliable execution outcome cannot be established
+    reason_code: UNKNOWN_RESULT
+    manual_followup_required: true
+    updates_installed: not_available
+    updates_remaining: not_available
+    updates_failed: not_available
+    pending_reboot: not_available
+    pre_patch_reboot_performed: not_available
+    post_patch_reboot_performed: not_available
+    reboot_recovery_failed: not_available
+    last_completed_phase: ""
+
+  - inventory_hostname: win-lab-25
+    host: win-lab-25
+    hostname: WIN-LAB-25
+    fqdn: win-lab-25.lab.example.internal
+    snow_ci_sys_id: "00000000000000000000000000000019"
+    os_release: Microsoft Windows Server 2025 Standard
+    os_version: "10.0.26100"
+    os_build: "26100.2033"
+    os_build_pre: "26100.2033"
+    location: Azure-East-US
+    result: already_compliant
+    final_status: already_compliant
+    reason: No applicable updates
+    reason_code: NO_APPLICABLE_UPDATES
+    last_completed_phase: postcheck
