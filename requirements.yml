@@ -18,3 +18,5 @@ collections:
     version: ">=2.3.0"
   - name: servicenow.itsm
     version: ">=2.6.3"
+  - name: community.general
+    version: ">=9.5.0,<11.0.0"
