@@ -8,9 +8,9 @@ sample_patch_defaults:
   platform: windows
   report_source: windows_full_patch
   patch_environment: LAB
-  change_ticket_id: CHG0042001
-  patch_wave: windows_wave_3
-  patch_wave_name: windows_wave_3
+  change_ticket_id: SAMPLE-CHG0042001
+  patch_wave: SYNTHETIC-windows_wave_3
+  patch_wave_name: SYNTHETIC-windows_wave_3
   git_revision: not_available
   exempt: false
   patched: false

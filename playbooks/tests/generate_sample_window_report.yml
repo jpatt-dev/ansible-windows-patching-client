@@ -1,16 +1,22 @@
 ---
 # Build a fictional Windows patching-window report for dashboard testing.
 # Uses the production aggregate and CSV writer. It does not patch, reboot,
-# call ServiceNow, or send email.
+# call ServiceNow, or contact Windows hosts.
+#
+# Optional SMTP (disabled by default) reuses roles/report_email after the CSV
+# exists. Enable with report_email_enabled=true plus the usual SMTP variables.
 #
 # Local run, from the repository root:
 #   ansible-playbook playbooks/tests/generate_sample_window_report.yml
+#   ansible-playbook playbooks/tests/generate_sample_window_report.yml \
+#     -e report_email_enabled=true -e report_email_smtp_host=... \
+#     -e report_email_from=... -e '{"report_email_to":["ops@example.test"]}'
 #
 # AAP job template:
 #   Playbook: playbooks/tests/generate_sample_window_report.yml
 #   Inventory: localhost is enough. Do not limit this job to a Windows wave.
 #   Execution environment: the Windows patching environment is sufficient.
-#   Credentials: none.
+#   Credentials: none for report generation; SMTP credential only if email is enabled.
 # Artifacts: patch_workflow_report, patch_workflow_report_json,
 # and patch_workflow_report_csv.
 
@@ -82,10 +88,13 @@
   gather_facts: false
 
   vars:
-    change_ticket_id: CHG0042001
-    patch_wave_name: windows_wave_3
+    # Fictional SAMPLE/SYNTHETIC identifiers appear in the optional email subject
+    # via production report_email (no production email behavior changes).
+    change_ticket_id: SAMPLE-CHG0042001
+    patch_wave_name: SYNTHETIC-windows_wave_3
     patch_target_scope: sample-dashboard-window
     patch_report_output_dir: /tmp/aap-sample-patch-reports
+    report_email_enabled: false
     sample_csv_columns:
       - Hostname
       - FQDN
@@ -146,5 +155,14 @@
           - (patch_workflow_report_csv.split('\n') | first) == sample_csv_header
           - patch_workflow_report.hosts | selectattr('patched', 'equalto', true) | selectattr('result', 'equalto', 'failed') | list | length > 0
           - patch_workflow_report.hosts | selectattr('patched', 'equalto', true) | selectattr('result', 'equalto', 'degraded') | list | length > 0
+          - patch_final_report_csv_path is defined
+          - (patch_final_report_csv_path | length) > 0
+          - "'SAMPLE' in (patch_workflow_report.change_ticket_id | default(''))"
+          - "'SYNTHETIC' in (patch_workflow_report.patch_wave | default(patch_workflow_report.patch_wave_name | default('')))"
         fail_msg: The sample window totals or CSV header do not match the production report.
+      run_once: true
+
+    - name: Optionally email the sample report once (roles/report_email)
+      ansible.builtin.include_role:
+        name: report_email
       run_once: true
