@@ -1,6 +1,8 @@
 ---
 # Turn one Windows OS query into a build-verification row.
 # Caller sets windows_build_query. This file does not contact Windows.
+# A row is success only when caption, version, and base build are present.
+# Missing UBR keeps the base build and says the revision is unavailable.
 
 - name: Record an unreachable Windows build query
   ansible.builtin.set_fact:
@@ -15,13 +17,23 @@
       patch_environment: "{{ patch_environment | default('') | string | trim }}"
       collection_status: unreachable
       collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
-      diagnostic: >-
-        {{
-          (
-            'Host unreachable. '
-            ~ (windows_build_query.msg | default('WinRM connection failed') | string)
-          ) | truncate(180, true, '')
-        }}
+      diagnostic: "{{ build_verify_unreachable_diagnostic }}"
+  vars:
+    build_verify_unreachable_diagnostic: >-
+      {{
+        (
+          'Host unreachable. '
+          ~ (
+            'redacted'
+            if ('password' in (windows_build_query.msg | default('') | string | lower))
+            else (windows_build_query.msg | default('WinRM connection failed') | string)
+          )
+        )
+        | replace(('%c' | format(13)) ~ ('%c' | format(10)), ' ')
+        | replace(('%c' | format(10)), ' ')
+        | replace(('%c' | format(13)), ' ')
+        | trim | truncate(160, true, '')
+      }}
   when: (windows_build_query.unreachable | default(false)) == true
   changed_when: false
 
@@ -38,84 +50,183 @@
       patch_environment: "{{ patch_environment | default('') | string | trim }}"
       collection_status: failed
       collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
-      diagnostic: >-
-        {{
-          (
-            'OS query failed. '
-            ~ (windows_build_query.msg | default('No OS information was returned') | string)
-          ) | truncate(180, true, '')
-        }}
+      diagnostic: "{{ build_verify_failed_diagnostic }}"
+  vars:
+    build_verify_failed_diagnostic: >-
+      {{
+        'WinRM query timed out.'
+        if ('timed out' in (windows_build_query.msg | default('') | string | lower))
+        else (
+          'OS query failed. '
+          ~ (
+            (
+              'redacted'
+              if ('password' in (windows_build_query.msg | default('') | string | lower))
+              else (windows_build_query.msg | default('No OS information was returned') | string)
+            )
+            | replace(('%c' | format(13)) ~ ('%c' | format(10)), ' ')
+            | replace(('%c' | format(10)), ' ')
+            | replace(('%c' | format(13)), ' ')
+            | trim | truncate(120, true, '')
+          )
+        )
+      }}
   when:
+    - windows_build_record is not defined
     - (windows_build_query.unreachable | default(false)) != true
-    - (windows_build_query.rc | default(1) | int) != 0 or (windows_build_query.failed | default(false)) == true
+    - >-
+      (windows_build_query.rc | default(1) | int) != 0
+      or (windows_build_query.failed | default(false)) == true
   changed_when: false
 
-- name: Parse a successful Windows OS query
+- name: Decode a completed OS query
   when:
     - windows_build_record is not defined
     - (windows_build_query.rc | default(1) | int) == 0
     - (windows_build_query.failed | default(false)) != true
   block:
-    - name: Decode the OS query JSON
+    - name: Accept a JSON string or an already decoded mapping
       ansible.builtin.set_fact:
-        windows_build_parsed: "{{ windows_build_query.stdout | trim | from_json }}"
+        windows_build_parsed: >-
+          {{
+            windows_build_query.stdout
+            if (windows_build_query.stdout is mapping)
+            else (windows_build_query.stdout | default('') | string | trim | from_json)
+          }}
       changed_when: false
 
-    - name: Record the current Windows build
+    - name: Read OS fields from the decoded query
+      ansible.builtin.set_fact:
+        build_verify_caption: "{{ windows_build_parsed.Caption | default('') | string | trim }}"
+        build_verify_version: "{{ windows_build_parsed.Version | default('') | string | trim }}"
+        build_verify_base: "{{ windows_build_parsed.BuildNumber | default('') | string | trim }}"
+        build_verify_full: "{{ windows_build_parsed.FullBuild | default('') | string | trim }}"
+        build_verify_ubr: "{{ windows_build_parsed.UBR | default('') | string | trim }}"
+        build_verify_ubr_flag: "{{ (windows_build_parsed.UbrAvailable | default(false)) == true }}"
+        build_verify_dns: "{{ windows_build_parsed.DNSHostName | default('') | string | trim }}"
+        build_verify_csname: "{{ windows_build_parsed.CSName | default('') | string | trim }}"
+        build_verify_fqdn_raw: "{{ windows_build_parsed.FQDN | default('') | string | trim }}"
+      when: windows_build_parsed is mapping
+      changed_when: false
+
+    - name: Reject an OS query that is not a JSON object
+      ansible.builtin.set_fact:
+        windows_build_record: "{{ build_verify_incomplete_record }}"
+      vars:
+        build_verify_incomplete_record:
+          inventory_hostname: "{{ inventory_hostname }}"
+          hostname: "{{ inventory_hostname }}"
+          fqdn: not_available
+          os_release: not_available
+          os_version: not_available
+          current_build: not_available
+          location: "{{ patch_location | default('') | string | trim }}"
+          patch_environment: "{{ patch_environment | default('') | string | trim }}"
+          collection_status: failed
+          collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+          diagnostic: OS information incomplete.
+      when: windows_build_parsed is not mapping
+      changed_when: false
+
+    - name: Classify the decoded OS information
+      ansible.builtin.set_fact:
+        build_verify_complete: >-
+          {{
+            (build_verify_caption | default('') | length > 0)
+            and (build_verify_version | default('') | length > 0)
+            and (build_verify_base | default('') is match('^[0-9]+$'))
+          }}
+        build_verify_ubr_ok: >-
+          {{
+            (build_verify_ubr_flag | default(false) | bool)
+            or (
+              (build_verify_ubr | default('') | length > 0)
+              and (build_verify_ubr | default('') != 'None')
+              and (build_verify_full | default('') is match('^[0-9]+[.][0-9]+$'))
+            )
+          }}
+      when:
+        - windows_build_record is not defined
+        - build_verify_caption is defined
+      changed_when: false
+
+    - name: Record a validated Windows build
       ansible.builtin.set_fact:
         windows_build_record:
           inventory_hostname: "{{ inventory_hostname }}"
-          hostname: "{{ _build_hostname }}"
-          fqdn: "{{ _build_fqdn }}"
-          os_release: "{{ _build_caption }}"
-          os_version: "{{ _build_version }}"
-          current_build: "{{ _build_current }}"
+          hostname: "{{ build_verify_hostname }}"
+          fqdn: "{{ build_verify_fqdn }}"
+          os_release: "{{ build_verify_os_release }}"
+          os_version: "{{ build_verify_os_version }}"
+          current_build: "{{ build_verify_current }}"
           location: "{{ patch_location | default('') | string | trim }}"
           patch_environment: "{{ patch_environment | default('') | string | trim }}"
-          collection_status: success
+          collection_status: "{{ 'success' if (build_verify_complete | bool) else 'failed' }}"
           collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
-          diagnostic: "{{ _build_diagnostic }}"
+          diagnostic: "{{ build_verify_diagnostic }}"
       vars:
-        _build_name: "{{ windows_build_parsed.CSName | default('') | string | trim }}"
-        _build_hostname: "{{ _build_name if (_build_name | length > 0) else inventory_hostname }}"
-        _build_fqdn_raw: "{{ windows_build_parsed.FQDN | default('') | string | trim }}"
-        _build_fqdn: "{{ _build_fqdn_raw if (_build_fqdn_raw | length > 0) else 'not_available' }}"
-        _build_caption_raw: "{{ windows_build_parsed.Caption | default('') | string | trim }}"
-        _build_caption: "{{ _build_caption_raw if (_build_caption_raw | length > 0) else 'not_available' }}"
-        _build_version_raw: "{{ windows_build_parsed.Version | default('') | string | trim }}"
-        _build_version: "{{ _build_version_raw if (_build_version_raw | length > 0) else 'not_available' }}"
-        _build_base: "{{ windows_build_parsed.BuildNumber | default('') | string | trim }}"
-        _build_full: "{{ windows_build_parsed.FullBuild | default('') | string | trim }}"
-        _build_ubr_raw: "{{ windows_build_parsed.UBR | default('') | string | trim }}"
-        _build_ubr_ok: >-
+        build_verify_hostname: >-
           {{
-            (windows_build_parsed.UbrAvailable | default(false)) == true
-            or (
-              (_build_ubr_raw | length) > 0
-              and _build_ubr_raw != 'None'
-              and _build_full is match('^[0-9]+[.][0-9]+$')
-            )
-          }}
-        _build_current: >-
-          {{
-            _build_full
-            if (_build_ubr_ok | bool and _build_full is match('^[0-9]+[.][0-9]+$'))
+            build_verify_dns
+            if (build_verify_dns | default('') | length > 0)
             else (
-              (_build_base ~ ' (revision unavailable)')
-              if (_build_base is match('^[0-9]+$'))
-              else 'not_available'
+              build_verify_csname
+              if (build_verify_csname | default('') | length > 0)
+              else inventory_hostname
             )
           }}
-        _build_diagnostic: >-
+        build_verify_fqdn: >-
           {{
-            'UBR registry value was not available. Current Build shows the base build only.'
-            if (_build_current is match('^[0-9]+ [(]revision unavailable[)]$'))
+            build_verify_fqdn_raw
+            if (build_verify_fqdn_raw | default('') | length > 0)
+            else 'not_available'
+          }}
+        build_verify_os_release: >-
+          {{
+            build_verify_caption
+            if (build_verify_caption | default('') | length > 0)
+            else 'not_available'
+          }}
+        build_verify_os_version: >-
+          {{
+            build_verify_version
+            if (build_verify_version | default('') | length > 0)
+            else 'not_available'
+          }}
+        build_verify_current: >-
+          {{
+            'not_available' if not (build_verify_complete | bool)
             else (
-              'Windows hostname was empty. Hostname is the inventory name.'
-              if (_build_name | length == 0)
-              else ''
+              build_verify_full
+              if (
+                (build_verify_ubr_ok | bool)
+                and (build_verify_full | default('') is match('^[0-9]+[.][0-9]+$'))
+              )
+              else (build_verify_base ~ ' (revision unavailable)')
             )
           }}
+        build_verify_diagnostic: >-
+          {{
+            'OS information incomplete.' if not (build_verify_complete | bool)
+            else (
+              'revision unavailable'
+              if not (
+                (build_verify_ubr_ok | bool)
+                and (build_verify_full | default('') is match('^[0-9]+[.][0-9]+$'))
+              )
+              else (
+                'Windows hostname was empty. Hostname is the inventory name.'
+                if (
+                  (build_verify_dns | default('') | length == 0)
+                  and (build_verify_csname | default('') | length == 0)
+                )
+                else ''
+              )
+            )
+          }}
+      when:
+        - windows_build_record is not defined
+        - build_verify_complete is defined
       changed_when: false
   rescue:
     - name: Record an unreadable OS query

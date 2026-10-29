@@ -3,17 +3,24 @@
 # Collects hostname, FQDN, OS caption, OS version, and BuildNumber.UBR.
 # It does not install updates, reboot, change WSUS, or call ServiceNow.
 #
-# Both plays use hosts: windows_hosts. An AAP Limit such as a wave group
-# or a host list still selects both plays. A localhost play would be skipped.
+# Both plays use hosts: windows_hosts, so a Limit only narrows that group.
+# Blank Limit, all, and * are allowed. Full Patch still rejects those Limits.
+# A localhost play would be skipped when the Limit is a Windows group.
+#
+# A failed OS query is rescued on that host so the other hosts and the report
+# still run. The job is not successful when a query fails. Unreachable hosts
+# stay in the play. The report is still written when every host fails.
 #
 # Job template: Windows - Build Verification
 #   Inventory: the LAB, IST, UAT, or PROD Windows inventory
 #   Credential: existing Windows WinRM credential
 #   Execution environment: Windows patching EE
-#   Limit at launch: hosts or an inventory group. Blank, all, and * fail.
+#   Limit: optional. Blank, all, *, hosts, or an inventory group.
 #   Playbook: playbooks/windows/build_verification.yml
 #
 # Email is off unless the job template sets report_email_enabled=true.
+# SMTP tasks are loaded only then, so a report-only run does not need
+# the mail collection.
 # Example extra variables:
 #   report_email_enabled: true
 #   report_email_smtp_host: smtp.example.internal
@@ -41,47 +48,53 @@
     build_verify_output_dir: /tmp/aap-build-verification
 
   tasks:
-    - name: Require an explicit AAP Limit
-      ansible.builtin.include_tasks: tasks/build_verification_limit.yml
-      run_once: true
-
     - name: Read Windows hostname, FQDN, OS caption, version, and build
-      ansible.windows.win_shell: |
-        $os = Get-CimInstance -ClassName Win32_OperatingSystem
-        $cs = Get-CimInstance -ClassName Win32_ComputerSystem
-        $fqdn = [string]$cs.DNSHostName
-        if ($cs.PartOfDomain -and $cs.DNSHostName -and $cs.Domain) {
-          $fqdn = "$($cs.DNSHostName).$($cs.Domain)"
-        }
-        $ubr = $null
-        try {
-          $reg = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
-          $ubr = (Get-ItemProperty -Path $reg -Name UBR -ErrorAction Stop).UBR
-        } catch {
-          $ubr = $null
-        }
-        $fullBuild = [string]$os.BuildNumber
-        $ubrOk = $false
-        if ($null -ne $ubr -and "$ubr" -ne '') {
-          $fullBuild = "$($os.BuildNumber).$ubr"
-          $ubrOk = $true
-        }
-        [PSCustomObject]@{
-          Caption = [string]$os.Caption
-          Version = [string]$os.Version
-          BuildNumber = [string]$os.BuildNumber
-          UBR = $ubr
-          UbrAvailable = $ubrOk
-          FullBuild = [string]$fullBuild
-          CSName = [string]$os.CSName
-          FQDN = [string]$fqdn
-        } | ConvertTo-Json -Compress
-      register: windows_build_query
-      changed_when: false
-      failed_when: false
-
-    - name: Record the Windows build query
-      ansible.builtin.include_tasks: tasks/build_verification_record.yml
+      block:
+        - name: Query Win32 operating system and the UBR registry value
+          ansible.windows.win_shell: |
+            $ErrorActionPreference = 'Stop'
+            $os = Get-CimInstance -ClassName Win32_OperatingSystem
+            $cs = Get-CimInstance -ClassName Win32_ComputerSystem
+            $dns = [string]$cs.DNSHostName
+            $fqdn = $dns
+            if ($cs.PartOfDomain -and $dns -and $cs.Domain) {
+              $fqdn = "$dns.$($cs.Domain)"
+            }
+            $ubr = $null
+            try {
+              $reg = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+              $ubr = (Get-ItemProperty -Path $reg -Name UBR -ErrorAction Stop).UBR
+            } catch {
+              $ubr = $null
+            }
+            $fullBuild = [string]$os.BuildNumber
+            $ubrOk = $false
+            if ($null -ne $ubr -and "$ubr" -ne '') {
+              $fullBuild = "$($os.BuildNumber).$ubr"
+              $ubrOk = $true
+            }
+            [PSCustomObject]@{
+              Caption = [string]$os.Caption
+              Version = [string]$os.Version
+              BuildNumber = [string]$os.BuildNumber
+              UBR = $ubr
+              UbrAvailable = $ubrOk
+              FullBuild = [string]$fullBuild
+              DNSHostName = $dns
+              CSName = [string]$os.CSName
+              FQDN = [string]$fqdn
+            } | ConvertTo-Json -Compress
+          register: windows_build_query
+          timeout: 120
+          changed_when: false
+      rescue:
+        - name: Keep the failed OS query for the host report row
+          ansible.builtin.set_fact:
+            windows_build_query: "{{ ansible_failed_result }}"
+          changed_when: false
+      always:
+        - name: Record the Windows build query
+          ansible.builtin.include_tasks: tasks/build_verification_record.yml
 
 - name: Report current Windows builds
   hosts: windows_hosts
@@ -97,6 +110,7 @@
     report_email_attach_csv: true
     report_email_fail_on_error: true
     build_verify_output_dir: /tmp/aap-build-verification
+    build_verify_email_tasks: "{{ playbook_dir }}/tasks/build_verification_email.yml"
 
   tasks:
     - name: Aggregate and publish the build verification report

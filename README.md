@@ -29,8 +29,10 @@ Read-only current-build snapshot, independent of the patch lifecycle:
 
 `playbooks/windows/build_verification.yml`
 
-All Windows playbooks use `hosts: windows_hosts`. Launch with an explicit AAP
-Limit. Effective hosts are `windows_hosts` ∩ Limit.
+All Windows playbooks use `hosts: windows_hosts`. Effective hosts are
+`windows_hosts` ∩ Limit. Full Patch and Precheck still reject a blank Limit,
+`all`, and `*`. Build Verification allows those Limits because it is read-only
+and never leaves the `windows_hosts` group.
 
 ## Windows build verification
 
@@ -42,7 +44,7 @@ Job template name: `Windows - Build Verification`.
 | Inventory | Existing LAB, IST, UAT, or PROD Windows inventory |
 | Credential | Existing Windows WinRM credential |
 | Execution environment | Windows patching EE |
-| Limit | Required at launch. Hosts or an inventory group. Blank, `all`, and `*` fail. |
+| Limit | Optional. Blank, `all`, `*`, hosts, or an inventory group. |
 
 The job reads the current OS caption, version, and `BuildNumber.UBR`. It does
 not install updates, reboot, change WSUS, or call ServiceNow. Location comes
@@ -65,9 +67,13 @@ report_email_fail_on_error: true
 ```
 
 AAP artifacts: `windows_build_verification_report` and
-`windows_build_verification_csv`. The CSV is UTF-8 with a byte order mark so
-Microsoft Excel opens it as text. Missing collected facts are `not_available`.
-A missing `patch_location` is an empty location, not a fabricated site.
+`windows_build_verification_csv`. The CSV is UTF-8 with a byte order mark and
+CRLF so Microsoft Excel opens it as text. A `Diagnostic` column is blank after
+a complete collection. Values that start with `=`, `+`, `-`, `@`, a tab, or a
+carriage return are prefixed with an apostrophe so Excel does not treat them
+as formulas. Missing collected facts are `not_available`. A missing
+`patch_location` is an empty location, not a fabricated site. Per-host rows
+stay in the JSON artifact for later operational reporting.
 
 ## Full Patch lifecycle
 

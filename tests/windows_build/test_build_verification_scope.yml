@@ -1,0 +1,20 @@
+---
+# Confirms Build Verification's hosts pattern honors every Limit form.
+# The production play is not executed, so nothing contacts Windows.
+#   ansible-playbook -i tests/windows_build/inventory.ini \
+#     tests/windows_build/test_build_verification_scope.yml \
+#     -e build_scope_expected=2
+
+- name: Count windows_hosts selected by the current Limit
+  hosts: windows_hosts
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Assert the Limit selection size
+      ansible.builtin.assert:
+        that:
+          - (ansible_play_hosts_all | length) == (build_scope_expected | int)
+        fail_msg: >-
+          Expected {{ build_scope_expected }} windows_hosts,
+          selected {{ ansible_play_hosts_all | join(', ') }}.
+      run_once: true

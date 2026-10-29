@@ -1,0 +1,107 @@
+---
+# One SMTP message for the build verification CSV.
+# Included only when report_email_enabled is true, so a report-only run
+# does not load community.general.
+
+- name: Validate SMTP settings before sending the build report
+  ansible.builtin.assert:
+    that:
+      - (report_email_smtp_host | default('') | string | trim | length) > 0
+      - (report_email_smtp_port | default(0) | int) >= 1
+      - (report_email_smtp_port | default(0) | int) <= 65535
+      - >-
+        (report_email_smtp_secure | default('never') | string | trim | lower)
+        in ['always', 'never', 'starttls', 'try']
+      - (report_email_from | default('') | string | trim | length) > 0
+      - report_email_to | default([]) is sequence
+      - report_email_to | default([]) is not string
+      - >-
+        (report_email_to | default([]) | select('string') | map('trim')
+        | reject('equalto', '') | list | length) > 0
+    fail_msg: >-
+      Build verification email requires report_email_smtp_host,
+      report_email_smtp_port, report_email_smtp_secure
+      (always, never, starttls, or try), report_email_from,
+      and a non-empty report_email_to list.
+  # Tests set this so an expected rejection can be asserted. A job leaves it false.
+  ignore_errors: "{{ build_verify_email_expect_invalid | default(false) | bool }}"
+  register: windows_build_email_validation
+  run_once: true
+
+- name: Send one build verification email
+  when: windows_build_email_validation is succeeded
+  run_once: true
+  block:
+    - name: Confirm the CSV attachment is a regular file
+      ansible.builtin.stat:
+        path: "{{ windows_build_csv_write.dest }}"
+      delegate_to: localhost
+      become: false
+      register: windows_build_csv_stat
+      when: report_email_attach_csv | default(true) | bool
+
+    - name: Fail when the CSV attachment is missing
+      ansible.builtin.fail:
+        msg: >-
+          report_email_attach_csv is true but the build verification CSV
+          was not written. Email was not sent.
+      when:
+        - report_email_attach_csv | default(true) | bool
+        - not (windows_build_csv_stat.stat.exists | default(false) | bool)
+          or not (windows_build_csv_stat.stat.isreg | default(false) | bool)
+
+    - name: Deliver the build verification CSV
+      community.general.mail:
+        host: "{{ report_email_smtp_host | string | trim }}"
+        port: "{{ report_email_smtp_port | int }}"
+        secure: "{{ report_email_smtp_secure | string | trim | lower }}"
+        sender: "{{ report_email_from | string | trim }}"
+        to: "{{ report_email_to | map('trim') | reject('equalto', '') | list }}"
+        subject: "{{ windows_build_email_subject }}"
+        body: "{{ windows_build_email_body }}"
+        subtype: plain
+        charset: utf-8
+        timeout: 20
+        attach: >-
+          {{
+            [windows_build_csv_write.dest]
+            if (report_email_attach_csv | default(true) | bool)
+            else []
+          }}
+      delegate_to: localhost
+      become: false
+      register: windows_build_email_result
+
+    - name: Record that the build verification email was sent
+      ansible.builtin.set_fact:
+        windows_build_verification_report: >-
+          {{ windows_build_verification_report | combine({'email_delivery': 'sent'}) }}
+      changed_when: false
+
+    - name: Publish the email delivery status
+      ansible.builtin.set_stats:
+        data:
+          windows_build_verification_report: "{{ windows_build_verification_report }}"
+          windows_build_verification_csv: "{{ windows_build_verification_csv }}"
+        per_host: false
+  rescue:
+    - name: Record that the build verification email failed
+      ansible.builtin.set_fact:
+        windows_build_verification_report: >-
+          {{ windows_build_verification_report | combine({'email_delivery': 'failed'}) }}
+      changed_when: false
+
+    - name: Publish the failed email status without SMTP secrets
+      ansible.builtin.set_stats:
+        data:
+          windows_build_verification_report: "{{ windows_build_verification_report }}"
+          windows_build_verification_csv: "{{ windows_build_verification_csv }}"
+        per_host: false
+
+    - name: Show the SMTP failure and stop when email errors fail the job
+      ansible.builtin.fail:
+        msg: >-
+          Build verification email failed
+          ({{ ansible_failed_result.msg | default('SMTP delivery failed') | truncate(160, true, '') }}).
+          The CSV artifact was left in place.
+      when: report_email_fail_on_error | default(true) | bool

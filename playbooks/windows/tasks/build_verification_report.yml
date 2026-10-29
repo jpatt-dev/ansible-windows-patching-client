@@ -1,41 +1,67 @@
 ---
-# Aggregate build rows, write one CSV, and optionally send one email.
-# Include this file once, with run_once, from a non-serial connection:local
-# play whose hosts are the same windows_hosts Limit.
+# Aggregate build rows and write one CSV.
+# Include once, with run_once, from a non-serial connection:local play
+# whose hosts are the same windows_hosts selection.
+# Email tasks load only when report_email_enabled is true.
 
-- name: Start a new build verification host list
+- name: Collect existing build records in inventory order
   ansible.builtin.set_fact:
-    windows_build_hosts: []
+    windows_build_present: >-
+      {{
+        ansible_play_hosts_all
+        | map('extract', hostvars)
+        | selectattr('windows_build_record', 'defined')
+        | map(attribute='windows_build_record')
+        | list
+      }}
+    windows_build_generated_at: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
   run_once: true
   changed_when: false
 
-- name: Collect build verification rows for every targeted host
+- name: Find targeted hosts that never produced a build record
   ansible.builtin.set_fact:
-    windows_build_hosts: "{{ windows_build_hosts | default([]) + [_build_row] }}"
+    windows_build_missing_names: >-
+      {{
+        ansible_play_hosts_all
+        | difference(windows_build_present | map(attribute='inventory_hostname') | list)
+      }}
+  run_once: true
+  changed_when: false
+
+- name: Build fallback rows for hosts missing a collection result
+  ansible.builtin.set_fact:
+    windows_build_fallbacks: "{{ windows_build_fallbacks_json | from_json }}"
   vars:
-    _build_existing: "{{ hostvars[item].windows_build_record | default({}, true) }}"
-    _build_missing:
-      inventory_hostname: "{{ item }}"
-      hostname: "{{ item }}"
-      fqdn: not_available
-      os_release: not_available
-      os_version: not_available
-      current_build: not_available
-      location: "{{ hostvars[item].patch_location | default('') | string | trim }}"
-      patch_environment: "{{ hostvars[item].patch_environment | default('') | string | trim }}"
-      collection_status: failed
-      collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
-      diagnostic: Build record was not produced for this host.
-    _build_row: "{{ _build_existing if ((_build_existing | length) > 0) else _build_missing }}"
-  loop: "{{ ansible_play_hosts_all }}"
-  loop_control:
-    label: "{{ item }}"
+    windows_build_fallbacks_json: |
+      {% set ns = namespace(rows=[]) %}
+      {% for name in windows_build_missing_names %}
+      {% set row = {
+        'inventory_hostname': name,
+        'hostname': name,
+        'fqdn': 'not_available',
+        'os_release': 'not_available',
+        'os_version': 'not_available',
+        'current_build': 'not_available',
+        'location': hostvars[name].patch_location | default('') | string | trim,
+        'patch_environment': hostvars[name].patch_environment | default('') | string | trim,
+        'collection_status': 'failed',
+        'collection_time_utc': windows_build_generated_at,
+        'diagnostic': 'Build record was not produced for this host.'
+      } %}
+      {% set _ = ns.rows.append(row) %}
+      {% endfor %}
+      {{- ns.rows | to_json -}}
+  run_once: true
+  changed_when: false
+
+- name: Combine collected and fallback build rows
+  ansible.builtin.set_fact:
+    windows_build_hosts: "{{ windows_build_present + windows_build_fallbacks }}"
   run_once: true
   changed_when: false
 
 - name: Summarize the Windows build verification
   ansible.builtin.set_fact:
-    windows_build_generated_at: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
     windows_build_environments: >-
       {{
         windows_build_hosts
@@ -117,66 +143,21 @@
     fail_msg: Windows build verification totals do not match the targeted hosts.
   run_once: true
 
-- name: Start the Excel CSV with its header
+- name: Render the Excel CSV in one pass
   ansible.builtin.set_fact:
-    windows_build_csv_columns:
-      - Hostname
-      - FQDN
-      - OS Release
-      - OS Version
-      - Current Build
-      - Location
-      - Collection Status
-      - Collection Time
-    windows_build_csv_lines:
-      - >-
-        {{
-          [
-            'Hostname',
-            'FQDN',
-            'OS Release',
-            'OS Version',
-            'Current Build',
-            'Location',
-            'Collection Status',
-            'Collection Time'
-          ]
-          | map('replace', '"', '""')
-          | map('regex_replace', '^(.*)$', '"\1"')
-          | join(',')
-        }}
-  run_once: true
-  changed_when: false
-
-- name: Append one CSV row per targeted host
-  ansible.builtin.set_fact:
-    windows_build_csv_lines: "{{ windows_build_csv_lines + [_csv_row] }}"
-  vars:
-    _csv_fields:
-      - "{{ item.hostname | default('not_available') | string }}"
-      - "{{ item.fqdn | default('not_available') | string }}"
-      - "{{ item.os_release | default('not_available') | string }}"
-      - "{{ item.os_version | default('not_available') | string }}"
-      - "{{ item.current_build | default('not_available') | string }}"
-      - "{{ item.location | default('') | string }}"
-      - "{{ item.collection_status | default('failed') | string }}"
-      - "{{ item.collection_time_utc | default('not_available') | string }}"
-    _csv_row: >-
+    windows_build_verification_csv: >-
       {{
-        _csv_fields
-        | map('replace', '"', '""')
-        | map('regex_replace', '^(.*)$', '"\1"')
-        | join(',')
+        windows_build_csv_text[:-1]
+        if (
+          windows_build_csv_text[-3:]
+          == (
+            ('%c' | format(13))
+            ~ ('%c' | format(10))
+            ~ ('%c' | format(10))
+          )
+        )
+        else windows_build_csv_text
       }}
-  loop: "{{ windows_build_hosts }}"
-  loop_control:
-    label: "{{ item.hostname | default(item.inventory_hostname) }}"
-  run_once: true
-  changed_when: false
-
-- name: Finish the Excel CSV text
-  ansible.builtin.set_fact:
-    windows_build_verification_csv: "{{ '\ufeff' ~ (windows_build_csv_lines | join('\r\n')) ~ '\r\n' }}"
     windows_build_csv_filename: >-
       windows-build-verification-{{ now(utc=true, fmt='%Y-%m-%dT%H-%M-%SZ') }}.csv
     windows_build_email_subject: >-
@@ -194,6 +175,48 @@
 
       The attached CSV is a current-state inventory snapshot for Microsoft Excel.
       It is not a patch installation history or a compliance result.
+  vars:
+    windows_build_csv_text: |
+      {%- set cr = '%c' | format(13) -%}
+      {%- set lf = '%c' | format(10) -%}
+      {%- set bom = '%c' | format(65279) -%}
+      {%- macro cell(value) -%}
+      {%- set cr = '%c' | format(13) -%}
+      {%- set lf = '%c' | format(10) -%}
+      {%- set tab = '%c' | format(9) -%}
+      {%- set text = '' if value is none else (value | string) -%}
+      {%- if text[:1] in ['=', '+', '-', '@', tab, cr] -%}
+      {%- set text = "'" ~ text -%}
+      {%- endif -%}
+      {%- set text = text | replace(cr ~ lf, ' ') -%}
+      {%- set text = text | replace(lf, ' ') | replace(cr, ' ') -%}
+      "{{ text | replace('"', '""') }}"
+      {%- endmacro %}
+      {%- set ns = namespace(lines=[]) -%}
+      {%- set header = [
+        'Hostname', 'FQDN', 'OS Release', 'OS Version', 'Current Build',
+        'Location', 'Collection Status', 'Collection Time', 'Diagnostic'
+      ] -%}
+      {%- set quoted = namespace(cols=[]) -%}
+      {%- for name in header -%}
+      {%- set _ = quoted.cols.append('"' ~ (name | replace('"', '""')) ~ '"') -%}
+      {%- endfor -%}
+      {%- set _ = ns.lines.append(quoted.cols | join(',')) -%}
+      {%- for item in windows_build_hosts -%}
+      {%- set row = [
+        cell(item.hostname | default('not_available')),
+        cell(item.fqdn | default('not_available')),
+        cell(item.os_release | default('not_available')),
+        cell(item.os_version | default('not_available')),
+        cell(item.current_build | default('not_available')),
+        cell(item.location | default('')),
+        cell(item.collection_status | default('failed')),
+        cell(item.collection_time_utc | default('not_available')),
+        cell(item.diagnostic | default(''))
+      ] -%}
+      {%- set _ = ns.lines.append(row | join(',')) -%}
+      {%- endfor -%}
+      {{- bom ~ (ns.lines | join(cr ~ lf)) ~ cr ~ lf -}}
   run_once: true
   changed_when: false
 
@@ -234,104 +257,7 @@
     per_host: false
   run_once: true
 
-- name: Validate SMTP settings before sending the build report
-  ansible.builtin.assert:
-    that:
-      - (report_email_smtp_host | default('') | string | trim | length) > 0
-      - (report_email_smtp_port | default(0) | int) >= 1
-      - (report_email_smtp_port | default(0) | int) <= 65535
-      - (report_email_smtp_secure | default('never') | string | trim | lower) in ['always', 'never', 'starttls', 'try']
-      - (report_email_from | default('') | string | trim | length) > 0
-      - report_email_to | default([]) is sequence
-      - report_email_to | default([]) is not string
-      - (report_email_to | default([]) | select('string') | map('trim') | reject('equalto', '') | list | length) > 0
-    fail_msg: >-
-      Build verification email requires report_email_smtp_host,
-      report_email_smtp_port, report_email_smtp_secure
-      (always, never, starttls, or try), report_email_from,
-      and a non-empty report_email_to list.
+- name: Send the build verification email when requested
+  ansible.builtin.include_tasks: "{{ build_verify_email_tasks }}"
   when: report_email_enabled | default(false) | bool
-  # Tests set this so an expected rejection can be asserted. A job leaves it false.
-  ignore_errors: "{{ build_verify_email_expect_invalid | default(false) | bool }}"
-  register: windows_build_email_validation
   run_once: true
-
-- name: Send one build verification email
-  when:
-    - report_email_enabled | default(false) | bool
-    - windows_build_email_validation is skipped or windows_build_email_validation is succeeded
-  run_once: true
-  block:
-    - name: Confirm the CSV attachment is a regular file
-      ansible.builtin.stat:
-        path: "{{ windows_build_csv_write.dest }}"
-      delegate_to: localhost
-      become: false
-      register: windows_build_csv_stat
-      when: report_email_attach_csv | default(true) | bool
-
-    - name: Fail when the CSV attachment is missing
-      ansible.builtin.fail:
-        msg: >-
-          report_email_attach_csv is true but the build verification CSV
-          was not written. Email was not sent.
-      when:
-        - report_email_attach_csv | default(true) | bool
-        - not (windows_build_csv_stat.stat.exists | default(false) | bool)
-          or not (windows_build_csv_stat.stat.isreg | default(false) | bool)
-
-    - name: Deliver the build verification CSV
-      community.general.mail:
-        host: "{{ report_email_smtp_host | string | trim }}"
-        port: "{{ report_email_smtp_port | int }}"
-        secure: "{{ report_email_smtp_secure | string | trim | lower }}"
-        sender: "{{ report_email_from | string | trim }}"
-        to: "{{ report_email_to | map('trim') | reject('equalto', '') | list }}"
-        subject: "{{ windows_build_email_subject }}"
-        body: "{{ windows_build_email_body }}"
-        subtype: plain
-        charset: utf-8
-        timeout: 20
-        attach: >-
-          {{
-            [windows_build_csv_write.dest]
-            if (report_email_attach_csv | default(true) | bool)
-            else []
-          }}
-      delegate_to: localhost
-      become: false
-      register: windows_build_email_result
-
-    - name: Record that the build verification email was sent
-      ansible.builtin.set_fact:
-        windows_build_verification_report: >-
-          {{ windows_build_verification_report | combine({'email_delivery': 'sent'}) }}
-      changed_when: false
-
-    - name: Publish the email delivery status
-      ansible.builtin.set_stats:
-        data:
-          windows_build_verification_report: "{{ windows_build_verification_report }}"
-          windows_build_verification_csv: "{{ windows_build_verification_csv }}"
-        per_host: false
-  rescue:
-    - name: Record that the build verification email failed
-      ansible.builtin.set_fact:
-        windows_build_verification_report: >-
-          {{ windows_build_verification_report | combine({'email_delivery': 'failed'}) }}
-      changed_when: false
-
-    - name: Publish the failed email status without SMTP secrets
-      ansible.builtin.set_stats:
-        data:
-          windows_build_verification_report: "{{ windows_build_verification_report }}"
-          windows_build_verification_csv: "{{ windows_build_verification_csv }}"
-        per_host: false
-
-    - name: Show the SMTP failure and stop when email errors fail the job
-      ansible.builtin.fail:
-        msg: >-
-          Build verification email failed
-          ({{ ansible_failed_result.msg | default('SMTP delivery failed') | truncate(180, true, '') }}).
-          The CSV artifact was left in place.
-      when: report_email_fail_on_error | default(true) | bool
