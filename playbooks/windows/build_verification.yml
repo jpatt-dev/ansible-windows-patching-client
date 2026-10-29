@@ -1,0 +1,104 @@
+---
+# Read-only Windows build snapshot for AAP 2.7.
+# Collects hostname, FQDN, OS caption, OS version, and BuildNumber.UBR.
+# It does not install updates, reboot, change WSUS, or call ServiceNow.
+#
+# Both plays use hosts: windows_hosts. An AAP Limit such as a wave group
+# or a host list still selects both plays. A localhost play would be skipped.
+#
+# Job template: Windows - Build Verification
+#   Inventory: the LAB, IST, UAT, or PROD Windows inventory
+#   Credential: existing Windows WinRM credential
+#   Execution environment: Windows patching EE
+#   Limit at launch: hosts or an inventory group. Blank, all, and * fail.
+#   Playbook: playbooks/windows/build_verification.yml
+#
+# Email is off unless the job template sets report_email_enabled=true.
+# Example extra variables:
+#   report_email_enabled: true
+#   report_email_smtp_host: smtp.example.internal
+#   report_email_smtp_port: 25
+#   report_email_smtp_secure: never
+#   report_email_from: patching@example.internal
+#   report_email_to:
+#     - ops@example.internal
+#   report_email_attach_csv: true
+#   report_email_fail_on_error: true
+
+- name: Collect current Windows build information
+  hosts: windows_hosts
+  gather_facts: false
+  ignore_unreachable: true
+  vars:
+    report_email_enabled: false
+    report_email_smtp_host: ""
+    report_email_smtp_port: 25
+    report_email_smtp_secure: "never"
+    report_email_from: ""
+    report_email_to: []
+    report_email_attach_csv: true
+    report_email_fail_on_error: true
+    build_verify_output_dir: /tmp/aap-build-verification
+
+  tasks:
+    - name: Require an explicit AAP Limit
+      ansible.builtin.include_tasks: tasks/build_verification_limit.yml
+      run_once: true
+
+    - name: Read Windows hostname, FQDN, OS caption, version, and build
+      ansible.windows.win_shell: |
+        $os = Get-CimInstance -ClassName Win32_OperatingSystem
+        $cs = Get-CimInstance -ClassName Win32_ComputerSystem
+        $fqdn = [string]$cs.DNSHostName
+        if ($cs.PartOfDomain -and $cs.DNSHostName -and $cs.Domain) {
+          $fqdn = "$($cs.DNSHostName).$($cs.Domain)"
+        }
+        $ubr = $null
+        try {
+          $reg = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+          $ubr = (Get-ItemProperty -Path $reg -Name UBR -ErrorAction Stop).UBR
+        } catch {
+          $ubr = $null
+        }
+        $fullBuild = [string]$os.BuildNumber
+        $ubrOk = $false
+        if ($null -ne $ubr -and "$ubr" -ne '') {
+          $fullBuild = "$($os.BuildNumber).$ubr"
+          $ubrOk = $true
+        }
+        [PSCustomObject]@{
+          Caption = [string]$os.Caption
+          Version = [string]$os.Version
+          BuildNumber = [string]$os.BuildNumber
+          UBR = $ubr
+          UbrAvailable = $ubrOk
+          FullBuild = [string]$fullBuild
+          CSName = [string]$os.CSName
+          FQDN = [string]$fqdn
+        } | ConvertTo-Json -Compress
+      register: windows_build_query
+      changed_when: false
+      failed_when: false
+
+    - name: Record the Windows build query
+      ansible.builtin.include_tasks: tasks/build_verification_record.yml
+
+- name: Report current Windows builds
+  hosts: windows_hosts
+  connection: local
+  gather_facts: false
+  vars:
+    report_email_enabled: false
+    report_email_smtp_host: ""
+    report_email_smtp_port: 25
+    report_email_smtp_secure: "never"
+    report_email_from: ""
+    report_email_to: []
+    report_email_attach_csv: true
+    report_email_fail_on_error: true
+    build_verify_output_dir: /tmp/aap-build-verification
+
+  tasks:
+    - name: Aggregate and publish the build verification report
+      ansible.builtin.include_tasks: tasks/build_verification_report.yml
+      run_once: true

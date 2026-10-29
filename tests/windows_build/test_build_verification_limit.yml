@@ -1,0 +1,13 @@
+---
+# Proves AAP Limit handling for build verification.
+# Run with an extra var, not a play var. ansible_limit is magic.
+#   ansible-playbook tests/windows_build/test_build_verification_limit.yml \
+#     -e '{"ansible_limit":"windows_wave_1"}'
+
+- name: Evaluate one build verification Limit
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Include the production Limit check
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/build_verification_limit.yml"

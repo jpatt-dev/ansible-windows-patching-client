@@ -1,0 +1,33 @@
+---
+# Reject a blank Limit and unrestricted patterns. Hosts and inventory
+# groups remain valid. ansible_limit is the AAP Limit for this job.
+
+- name: Normalize the AAP Limit
+  ansible.builtin.set_fact:
+    build_verify_limit: "{{ ansible_limit | default('') | string | trim }}"
+    build_verify_limit_tokens: >-
+      {{
+        (ansible_limit | default('') | string | trim | regex_replace('[: ]+', ','))
+        .split(',')
+        | map('trim')
+        | reject('equalto', '')
+        | list
+      }}
+  run_once: true
+  delegate_to: localhost
+  become: false
+  changed_when: false
+
+- name: Require an explicit host or group Limit
+  ansible.builtin.assert:
+    that:
+      - (build_verify_limit | length) > 0
+      - (build_verify_limit_tokens | length) > 0
+      - (build_verify_limit_tokens | map('lower') | intersect(['all', '*']) | length) == 0
+    fail_msg: >-
+      Launch Windows - Build Verification with an explicit AAP Limit
+      naming hosts or an inventory group. Blank Limit, all, and *
+      are not allowed (ansible_limit='{{ build_verify_limit }}').
+  run_once: true
+  delegate_to: localhost
+  become: false

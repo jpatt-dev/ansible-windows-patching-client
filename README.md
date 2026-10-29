@@ -25,8 +25,49 @@ Read-only standalone validation/troubleshooting:
 
 `playbooks/windows/precheck.yml`
 
+Read-only current-build snapshot, independent of the patch lifecycle:
+
+`playbooks/windows/build_verification.yml`
+
 All Windows playbooks use `hosts: windows_hosts`. Launch with an explicit AAP
 Limit. Effective hosts are `windows_hosts` ∩ Limit.
+
+## Windows build verification
+
+Job template name: `Windows - Build Verification`.
+
+| Setting | Value |
+| --- | --- |
+| Playbook | `playbooks/windows/build_verification.yml` |
+| Inventory | Existing LAB, IST, UAT, or PROD Windows inventory |
+| Credential | Existing Windows WinRM credential |
+| Execution environment | Windows patching EE |
+| Limit | Required at launch. Hosts or an inventory group. Blank, `all`, and `*` fail. |
+
+The job reads the current OS caption, version, and `BuildNumber.UBR`. It does
+not install updates, reboot, change WSUS, or call ServiceNow. Location comes
+from inventory `patch_location`. The environment label comes from inventory
+`patch_environment`.
+
+Email is disabled unless the job sets `report_email_enabled: true`. The same
+SMTP variable names as patch reporting are used. This job does not call
+`roles/report_email`.
+
+```yaml
+report_email_enabled: false
+report_email_smtp_host: ""
+report_email_smtp_port: 25
+report_email_smtp_secure: never
+report_email_from: ""
+report_email_to: []
+report_email_attach_csv: true
+report_email_fail_on_error: true
+```
+
+AAP artifacts: `windows_build_verification_report` and
+`windows_build_verification_csv`. The CSV is UTF-8 with a byte order mark so
+Microsoft Excel opens it as text. Missing collected facts are `not_available`.
+A missing `patch_location` is an empty location, not a fabricated site.
 
 ## Full Patch lifecycle
 
@@ -61,7 +102,7 @@ discovery or remediation but does not assign or configure WSUS servers.
 ```
 README.md
 docs/
-playbooks/windows/            # full_patch.yml and precheck.yml
+playbooks/windows/            # full_patch, precheck, and build verification
 roles/
 surveys/                     # Full Patch and Precheck operator surveys
 controller_cac/              # Project and Job Template declarations

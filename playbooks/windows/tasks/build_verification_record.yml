@@ -1,0 +1,152 @@
+---
+# Turn one Windows OS query into a build-verification row.
+# Caller sets windows_build_query. This file does not contact Windows.
+
+- name: Record an unreachable Windows build query
+  ansible.builtin.set_fact:
+    windows_build_record:
+      inventory_hostname: "{{ inventory_hostname }}"
+      hostname: "{{ inventory_hostname }}"
+      fqdn: not_available
+      os_release: not_available
+      os_version: not_available
+      current_build: not_available
+      location: "{{ patch_location | default('') | string | trim }}"
+      patch_environment: "{{ patch_environment | default('') | string | trim }}"
+      collection_status: unreachable
+      collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+      diagnostic: >-
+        {{
+          (
+            'Host unreachable. '
+            ~ (windows_build_query.msg | default('WinRM connection failed') | string)
+          ) | truncate(180, true, '')
+        }}
+  when: (windows_build_query.unreachable | default(false)) == true
+  changed_when: false
+
+- name: Record a failed Windows build query
+  ansible.builtin.set_fact:
+    windows_build_record:
+      inventory_hostname: "{{ inventory_hostname }}"
+      hostname: "{{ inventory_hostname }}"
+      fqdn: not_available
+      os_release: not_available
+      os_version: not_available
+      current_build: not_available
+      location: "{{ patch_location | default('') | string | trim }}"
+      patch_environment: "{{ patch_environment | default('') | string | trim }}"
+      collection_status: failed
+      collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+      diagnostic: >-
+        {{
+          (
+            'OS query failed. '
+            ~ (windows_build_query.msg | default('No OS information was returned') | string)
+          ) | truncate(180, true, '')
+        }}
+  when:
+    - (windows_build_query.unreachable | default(false)) != true
+    - (windows_build_query.rc | default(1) | int) != 0 or (windows_build_query.failed | default(false)) == true
+  changed_when: false
+
+- name: Parse a successful Windows OS query
+  when:
+    - windows_build_record is not defined
+    - (windows_build_query.rc | default(1) | int) == 0
+    - (windows_build_query.failed | default(false)) != true
+  block:
+    - name: Decode the OS query JSON
+      ansible.builtin.set_fact:
+        windows_build_parsed: "{{ windows_build_query.stdout | trim | from_json }}"
+      changed_when: false
+
+    - name: Record the current Windows build
+      ansible.builtin.set_fact:
+        windows_build_record:
+          inventory_hostname: "{{ inventory_hostname }}"
+          hostname: "{{ _build_hostname }}"
+          fqdn: "{{ _build_fqdn }}"
+          os_release: "{{ _build_caption }}"
+          os_version: "{{ _build_version }}"
+          current_build: "{{ _build_current }}"
+          location: "{{ patch_location | default('') | string | trim }}"
+          patch_environment: "{{ patch_environment | default('') | string | trim }}"
+          collection_status: success
+          collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+          diagnostic: "{{ _build_diagnostic }}"
+      vars:
+        _build_name: "{{ windows_build_parsed.CSName | default('') | string | trim }}"
+        _build_hostname: "{{ _build_name if (_build_name | length > 0) else inventory_hostname }}"
+        _build_fqdn_raw: "{{ windows_build_parsed.FQDN | default('') | string | trim }}"
+        _build_fqdn: "{{ _build_fqdn_raw if (_build_fqdn_raw | length > 0) else 'not_available' }}"
+        _build_caption_raw: "{{ windows_build_parsed.Caption | default('') | string | trim }}"
+        _build_caption: "{{ _build_caption_raw if (_build_caption_raw | length > 0) else 'not_available' }}"
+        _build_version_raw: "{{ windows_build_parsed.Version | default('') | string | trim }}"
+        _build_version: "{{ _build_version_raw if (_build_version_raw | length > 0) else 'not_available' }}"
+        _build_base: "{{ windows_build_parsed.BuildNumber | default('') | string | trim }}"
+        _build_full: "{{ windows_build_parsed.FullBuild | default('') | string | trim }}"
+        _build_ubr_raw: "{{ windows_build_parsed.UBR | default('') | string | trim }}"
+        _build_ubr_ok: >-
+          {{
+            (windows_build_parsed.UbrAvailable | default(false)) == true
+            or (
+              (_build_ubr_raw | length) > 0
+              and _build_ubr_raw != 'None'
+              and _build_full is match('^[0-9]+[.][0-9]+$')
+            )
+          }}
+        _build_current: >-
+          {{
+            _build_full
+            if (_build_ubr_ok | bool and _build_full is match('^[0-9]+[.][0-9]+$'))
+            else (
+              (_build_base ~ ' (revision unavailable)')
+              if (_build_base is match('^[0-9]+$'))
+              else 'not_available'
+            )
+          }}
+        _build_diagnostic: >-
+          {{
+            'UBR registry value was not available. Current Build shows the base build only.'
+            if (_build_current is match('^[0-9]+ [(]revision unavailable[)]$'))
+            else (
+              'Windows hostname was empty. Hostname is the inventory name.'
+              if (_build_name | length == 0)
+              else ''
+            )
+          }}
+      changed_when: false
+  rescue:
+    - name: Record an unreadable OS query
+      ansible.builtin.set_fact:
+        windows_build_record:
+          inventory_hostname: "{{ inventory_hostname }}"
+          hostname: "{{ inventory_hostname }}"
+          fqdn: not_available
+          os_release: not_available
+          os_version: not_available
+          current_build: not_available
+          location: "{{ patch_location | default('') | string | trim }}"
+          patch_environment: "{{ patch_environment | default('') | string | trim }}"
+          collection_status: failed
+          collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+          diagnostic: OS query output was not valid JSON.
+      changed_when: false
+
+- name: Record a Windows build query that returned no result
+  ansible.builtin.set_fact:
+    windows_build_record:
+      inventory_hostname: "{{ inventory_hostname }}"
+      hostname: "{{ inventory_hostname }}"
+      fqdn: not_available
+      os_release: not_available
+      os_version: not_available
+      current_build: not_available
+      location: "{{ patch_location | default('') | string | trim }}"
+      patch_environment: "{{ patch_environment | default('') | string | trim }}"
+      collection_status: failed
+      collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+      diagnostic: OS query did not return a result.
+  when: windows_build_record is not defined
+  changed_when: false
