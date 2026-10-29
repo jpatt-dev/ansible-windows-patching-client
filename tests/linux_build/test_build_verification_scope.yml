@@ -1,0 +1,20 @@
+---
+# Confirms the Linux build verification hosts pattern honors every Limit form.
+# The production play is not executed, so nothing contacts Linux.
+#   ansible-playbook -i tests/linux_build/inventory.ini \
+#     tests/linux_build/test_build_verification_scope.yml \
+#     -e build_scope_expected=2
+
+- name: Count linux_hosts selected by the current Limit
+  hosts: linux_hosts
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Assert the Limit selection size
+      ansible.builtin.assert:
+        that:
+          - (ansible_play_hosts_all | length) == (build_scope_expected | int)
+        fail_msg: >-
+          Expected {{ build_scope_expected }} linux_hosts,
+          selected {{ ansible_play_hosts_all | join(', ') }}.
+      run_once: true

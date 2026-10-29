@@ -10,8 +10,8 @@
     - name: Read the build verification files
       ansible.builtin.set_fact:
         build_verify_playbook_text: "{{ lookup('file', playbook_dir ~ '/../../playbooks/windows/build_verification.yml') }}"
-        build_verify_report_text: "{{ lookup('file', playbook_dir ~ '/../../playbooks/windows/tasks/build_verification_report.yml') }}"
-        build_verify_email_text: "{{ lookup('file', playbook_dir ~ '/../../playbooks/windows/tasks/build_verification_email.yml') }}"
+        build_verify_report_text: "{{ lookup('file', playbook_dir ~ '/../../playbooks/build_verification/tasks/report.yml') }}"
+        build_verify_email_text: "{{ lookup('file', playbook_dir ~ '/../../playbooks/build_verification/tasks/email.yml') }}"
         build_verify_record_text: "{{ lookup('file', playbook_dir ~ '/../../playbooks/windows/tasks/build_verification_record.yml') }}"
       changed_when: false
 
@@ -30,10 +30,12 @@
           - "'win_updates' not in build_verify_playbook_text"
           - "'win_reboot' not in build_verify_playbook_text"
           - "'servicenow' not in build_verify_playbook_text"
+          - "'build_verification/tasks/report.yml' in build_verify_playbook_text"
           - "'community.general' not in build_verify_playbook_text"
           - "'community.general' not in build_verify_report_text"
           - "\"'extract', hostvars\" in build_verify_report_text"
-          - "'windows_build_hosts | default([]) +' not in build_verify_report_text"
+          - "'build_verification_hosts | default([]) +' not in build_verify_report_text"
+          - "'schema_version: \"2\"' in build_verify_report_text"
           - "'community.general.mail' in build_verify_email_text"
           - "'is mapping' in build_verify_record_text"
         fail_msg: Build verification no longer matches the read-only reporting contract.
@@ -85,10 +87,14 @@
         groups: build_verify_cases
         patch_environment: LAB
         patch_location: São Paulo
+        cmdb_fqdn: win-2016.cmdb.example
+        cmdb_os_release: Windows Server 2016
+        sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
         build_expected_status: success
         build_expected_build: "14393.7699"
-        build_expected_host: WIN-2016-FULL
-        build_expected_os: Microsoft Windows Server 2016 Standard
+        build_expected_version: "10.0.14393"
+        build_expected_fqdn: win-2016.cmdb.example
+        build_expected_os: Windows Server 2016
         build_expected_diagnostic: ""
         windows_build_query:
           failed: false
@@ -102,10 +108,14 @@
         groups: build_verify_cases
         patch_environment: LAB
         patch_location: Azure-East
+        cmdb_fqdn: win-2019.cmdb.example
+        cmdb_os_release: Windows Server 2019
+        sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
         build_expected_status: success
         build_expected_build: "17763.6530"
-        build_expected_host: WIN-2019
-        build_expected_os: Microsoft Windows Server 2019 Standard
+        build_expected_version: "10.0.17763"
+        build_expected_fqdn: win-2019.cmdb.example
+        build_expected_os: Windows Server 2019
         build_expected_diagnostic: ""
         windows_build_query:
           failed: false
@@ -128,10 +138,14 @@
         groups: build_verify_cases
         patch_environment: LAB
         patch_location: "East \"1\""
+        cmdb_fqdn: win-2022.cmdb.example
+        cmdb_os_release: Windows Server 2022
+        sys_id: cccccccccccccccccccccccccccccccc
         build_expected_status: success
         build_expected_build: "20348.2849"
-        build_expected_host: WIN-2022
-        build_expected_os: "Microsoft Windows Server 2022 Datacenter, Core"
+        build_expected_version: "10.0.20348"
+        build_expected_fqdn: win-2022.cmdb.example
+        build_expected_os: Windows Server 2022
         build_expected_diagnostic: ""
         windows_build_query:
           failed: false
@@ -144,11 +158,15 @@
         name: win-2025
         groups: build_verify_cases
         patch_environment: LAB
-        patch_location: Datacenter-West
+        patch_location: "Datacenter, West"
+        cmdb_fqdn: win-2025.cmdb.example
+        cmdb_os_release: Windows Server 2025
+        sys_id: dddddddddddddddddddddddddddddddd
         build_expected_status: success
         build_expected_build: "26100.2033"
-        build_expected_host: WIN-2025
-        build_expected_os: Microsoft Windows Server 2025 Datacenter
+        build_expected_version: "10.0.26100"
+        build_expected_fqdn: win-2025.cmdb.example
+        build_expected_os: Windows Server 2025
         build_expected_diagnostic: ""
         windows_build_query:
           failed: false
@@ -162,11 +180,15 @@
         groups: build_verify_cases
         patch_environment: LAB
         patch_location: London
+        cmdb_fqdn: win-noubr.cmdb.example
+        cmdb_os_release: Windows Server 2016
+        sys_id: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         build_expected_status: success
         build_expected_build: "14393 (revision unavailable)"
-        build_expected_host: WIN-NOUBR
-        build_expected_os: Microsoft Windows Server 2016 Datacenter
-        build_expected_diagnostic: revision unavailable
+        build_expected_version: "10.0.14393"
+        build_expected_fqdn: win-noubr.cmdb.example
+        build_expected_os: Windows Server 2016
+        build_expected_diagnostic: "revision unavailable."
         windows_build_query:
           failed: false
           unreachable: false
@@ -179,9 +201,12 @@
         groups: build_verify_cases
         patch_environment: LAB
         patch_location: Datacenter-West
+        cmdb_fqdn: "  "
+        cmdb_os_release: ""
         build_expected_status: unreachable
         build_expected_build: not_available
-        build_expected_host: win-down
+        build_expected_version: not_available
+        build_expected_fqdn: not_available
         build_expected_os: not_available
         build_expected_diagnostic: "Host unreachable."
         windows_build_query:
@@ -196,7 +221,8 @@
         patch_location: Physical
         build_expected_status: failed
         build_expected_build: not_available
-        build_expected_host: win-osfail
+        build_expected_version: not_available
+        build_expected_fqdn: not_available
         build_expected_os: not_available
         build_expected_diagnostic: "OS query failed."
         windows_build_query:
@@ -213,7 +239,8 @@
         patch_location: London
         build_expected_status: failed
         build_expected_build: not_available
-        build_expected_host: win-timeout
+        build_expected_version: not_available
+        build_expected_fqdn: not_available
         build_expected_os: not_available
         build_expected_diagnostic: "WinRM query timed out."
         windows_build_query:
@@ -228,10 +255,12 @@
         groups: build_verify_cases
         patch_environment: LAB
         patch_location: Datacenter-East
+        cmdb_os_release: Windows Server 2022
         build_expected_status: failed
         build_expected_build: not_available
-        build_expected_host: WIN-PARTIAL
-        build_expected_os: Microsoft Windows Server 2022 Datacenter
+        build_expected_version: "10.0.20348"
+        build_expected_fqdn: not_available
+        build_expected_os: Windows Server 2022
         build_expected_diagnostic: "OS information incomplete."
         windows_build_query:
           failed: false
@@ -246,9 +275,12 @@
         patch_environment: LAB
         build_expected_status: success
         build_expected_build: "17763.6530"
-        build_expected_host: WIN-NOLOC
-        build_expected_os: Microsoft Windows Server 2019 Standard
-        build_expected_diagnostic: ""
+        build_expected_version: "10.0.17763"
+        build_expected_fqdn: not_available
+        build_expected_os: not_available
+        build_expected_diagnostic: >-
+          Inventory FQDN was not available. Inventory OS release was not available.
+          Inventory CI sys_id was not available.
         windows_build_query:
           failed: false
           unreachable: false
@@ -263,23 +295,37 @@
     - name: Include the production build record task
       ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/build_verification_record.yml"
 
-    - name: Assert the recorded build, status, OS, and diagnostic
+    - name: Assert the recorded build comes from inventory plus the live query
       ansible.builtin.assert:
         that:
-          - windows_build_record.collection_status == build_expected_status
-          - windows_build_record.current_build == build_expected_build
-          - windows_build_record.hostname == build_expected_host
-          - windows_build_record.os_release == build_expected_os
-          - build_expected_diagnostic in windows_build_record.diagnostic
-          - windows_build_record.patched is not defined
-          - windows_build_record.collection_time_utc is match('^[0-9]{4}-')
+          - build_verification_record.collection_status == build_expected_status
+          - build_verification_record.current_build == build_expected_build
+          - build_verification_record.os_version == build_expected_version
+          - build_verification_record.hostname == inventory_hostname
+          - build_verification_record.fqdn == build_expected_fqdn
+          - build_verification_record.os_release == build_expected_os
+          - "'Microsoft Windows' not in build_verification_record.os_release"
+          - build_verification_record.platform == 'windows'
+          - build_verification_record.current_build_kind == 'windows_build'
+          - >-
+            build_verification_record.snow_ci_sys_id == 'not_available'
+            or build_verification_record.snow_ci_sys_id == (sys_id | default(''))
+          - build_expected_diagnostic in build_verification_record.diagnostic
+          - >-
+            build_expected_status != 'success'
+            or build_verification_record.diagnostic == build_expected_diagnostic
+          - >-
+            (sys_id | default('') | length == 0)
+            or 'Inventory CI sys_id was not available.' not in build_verification_record.diagnostic
+          - build_verification_record.patched is not defined
+          - build_verification_record.collection_time_utc is match('^[0-9]{4}-')
         fail_msg: "{{ inventory_hostname }} build record did not match the fictional query."
 
     - name: Add one row whose fields could be Excel formulas
       ansible.builtin.add_host:
         name: win-formula
         groups: build_verify_cases
-        windows_build_record:
+        build_verification_record:
           inventory_hostname: win-formula
           hostname: "=cmd|'/c calc'!A0"
           fqdn: +plus.example
@@ -300,10 +346,10 @@
   vars:
     report_email_enabled: false
     build_verify_output_dir: /tmp/aap-build-verification-test
-    build_verify_email_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/build_verification_email.yml"
+    build_verify_email_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/email.yml"
   tasks:
     - name: Include the production report task
-      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/build_verification_report.yml"
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/report.yml"
       run_once: true
 
     - name: Remember dangerous CSV fragments
@@ -321,38 +367,47 @@
     - name: Assert totals, escaping, formulas, and that email was not loaded
       ansible.builtin.assert:
         that:
-          - (windows_build_verification_report.total_systems | int) == 11
-          - (windows_build_verification_report.systems_succeeded | int) == 7
-          - (windows_build_verification_report.systems_failed | int) == 3
-          - (windows_build_verification_report.systems_unreachable | int) == 1
-          - windows_build_verification_report.patch_environment == 'LAB'
-          - windows_build_verification_report.schema_version == '1'
-          - windows_build_verification_report.email_delivery == 'skipped'
-          - windows_build_email_result is not defined
-          - "'AAP Windows Build Verification | LAB |' in windows_build_email_subject"
-          - "'Total systems targeted: 11' in windows_build_email_body"
-          - "'Systems successfully queried: 7' in windows_build_email_body"
-          - "'Systems failed or unreachable: 4' in windows_build_email_body"
+          - (build_verification_report.total_systems | int) == 11
+          - (build_verification_report.systems_succeeded | int) == 7
+          - (build_verification_report.systems_failed | int) == 3
+          - (build_verification_report.systems_unreachable | int) == 1
+          - build_verification_report.patch_environment == 'LAB'
+          - build_verification_report.schema_version == '2'
+          - build_verification_report.email_delivery == 'skipped'
+          - "'windows_build_verification_report' in build_verify_published"
+          - "'windows_build_verification_csv' in build_verify_published"
+          - build_verification_email_result is not defined
+          - "'AAP Windows Build Verification | LAB |' in build_verification_email_subject"
+          - "'Current Build / Kernel is the Windows build number.' in build_verification_email_body"
+          - "'Total systems targeted: 11' in build_verification_email_body"
+          - "'Systems successfully queried: 7' in build_verification_email_body"
+          - "'Systems failed or unreachable: 4' in build_verification_email_body"
           - >-
-            windows_build_verification_csv.startswith(
-            ('%c' | format(65279)) ~ '"Hostname","FQDN","OS Release"')
-          - ('"' ~ 'Diagnostic' ~ '"') in windows_build_verification_csv
-          - "'14393.7699' in windows_build_verification_csv"
-          - "'17763.6530' in windows_build_verification_csv"
-          - "'20348.2849' in windows_build_verification_csv"
-          - "'26100.2033' in windows_build_verification_csv"
-          - "'14393 (revision unavailable)' in windows_build_verification_csv"
-          - "'São Paulo' in windows_build_verification_csv"
-          - ('"' ~ 'Microsoft Windows Server 2022 Datacenter, Core' ~ '"') in windows_build_verification_csv
-          - ('East ""1""') in windows_build_verification_csv
-          - build_formula_equals in windows_build_verification_csv
-          - build_formula_plus in windows_build_verification_csv
-          - build_formula_minus in windows_build_verification_csv
-          - build_formula_at in windows_build_verification_csv
-          - build_formula_cr in windows_build_verification_csv
-          - build_formula_tab in windows_build_verification_csv
-          - build_formula_diag in windows_build_verification_csv
-          - (windows_build_verification_csv.splitlines() | length) == 12
+            build_verification_csv.startswith(
+            ('%c' | format(65279)) ~ '"Hostname","FQDN","Platform","OS Release","OS Version","Current Build / Kernel"')
+          - ('"' ~ 'Diagnostic' ~ '"') in build_verification_csv
+          - ('"' ~ 'Environment' ~ '"') in build_verification_csv
+          - "'14393.7699' in build_verification_csv"
+          - "'17763.6530' in build_verification_csv"
+          - "'20348.2849' in build_verification_csv"
+          - "'26100.2033' in build_verification_csv"
+          - "'14393 (revision unavailable)' in build_verification_csv"
+          - "'São Paulo' in build_verification_csv"
+          - "'win-2016.cmdb.example' in build_verification_csv"
+          - "'Windows Server 2016' in build_verification_csv"
+          - "'win-2016.lab.example.internal' not in build_verification_csv"
+          - "'Microsoft Windows Server 2016 Standard' not in build_verification_csv"
+          - "'Microsoft Windows Server 2022 Datacenter, Core' not in build_verification_csv"
+          - ('"' ~ 'Datacenter, West' ~ '"') in build_verification_csv
+          - ('East ""1""') in build_verification_csv
+          - build_formula_equals in build_verification_csv
+          - build_formula_plus in build_verification_csv
+          - build_formula_minus in build_verification_csv
+          - build_formula_at in build_verification_csv
+          - build_formula_cr in build_verification_csv
+          - build_formula_tab in build_verification_csv
+          - build_formula_diag in build_verification_csv
+          - (build_verification_csv.splitlines() | length) == 12
         fail_msg: Build verification CSV or totals did not match the fictional hosts.
       run_once: true
 
@@ -371,19 +426,19 @@
     report_email_fail_on_error: true
     build_verify_email_expect_invalid: true
     build_verify_output_dir: /tmp/aap-build-verification-test
-    build_verify_email_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/build_verification_email.yml"
+    build_verify_email_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/email.yml"
   tasks:
     - name: Include the production report task with email enabled
-      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/build_verification_report.yml"
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/report.yml"
       run_once: true
 
     - name: Assert validation failed before community.general.mail
       ansible.builtin.assert:
         that:
-          - windows_build_email_validation is failed
-          - "'report_email_smtp_host' in (windows_build_email_validation.msg | default(''))"
-          - windows_build_email_result is skipped
-          - windows_build_verification_csv is defined
+          - build_verification_email_validation is failed
+          - "'report_email_smtp_host' in (build_verification_email_validation.msg | default(''))"
+          - build_verification_email_result is skipped
+          - build_verification_csv is defined
         fail_msg: Email-enabled build verification did not fail closed before sending mail.
       run_once: true
 
@@ -396,7 +451,7 @@
       ansible.builtin.add_host:
         name: "win-failed-{{ item }}"
         groups: build_verify_all_failed
-        windows_build_record:
+        build_verification_record:
           inventory_hostname: "win-failed-{{ item }}"
           hostname: "win-failed-{{ item }}"
           fqdn: not_available
@@ -420,20 +475,20 @@
   vars:
     report_email_enabled: false
     build_verify_output_dir: /tmp/aap-build-verification-test
-    build_verify_email_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/build_verification_email.yml"
+    build_verify_email_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/email.yml"
   tasks:
     - name: Include the production report task
-      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/build_verification_report.yml"
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/report.yml"
       run_once: true
 
     - name: Assert the report still contains every failed host
       ansible.builtin.assert:
         that:
-          - (windows_build_verification_report.total_systems | int) == 3
-          - (windows_build_verification_report.systems_succeeded | int) == 0
-          - (windows_build_verification_report.systems_failed | int) == 3
-          - (windows_build_verification_csv.splitlines() | length) == 4
-          - windows_build_verification_report.patch_environment == 'UAT'
+          - (build_verification_report.total_systems | int) == 3
+          - (build_verification_report.systems_succeeded | int) == 0
+          - (build_verification_report.systems_failed | int) == 3
+          - (build_verification_csv.splitlines() | length) == 4
+          - build_verification_report.patch_environment == 'UAT'
         fail_msg: A fully failed collection must still produce the CSV.
       run_once: true
 
@@ -456,18 +511,18 @@
   vars:
     report_email_enabled: false
     build_verify_output_dir: /tmp/aap-build-verification-test
-    build_verify_email_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/build_verification_email.yml"
+    build_verify_email_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/email.yml"
   tasks:
     - name: Include the production report task
-      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/build_verification_report.yml"
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/report.yml"
       run_once: true
 
     - name: Assert the missing host is still in the report
       ansible.builtin.assert:
         that:
-          - (windows_build_verification_report.total_systems | int) == 1
-          - (windows_build_verification_report.systems_failed | int) == 1
-          - "'Build record was not produced' in windows_build_verification_csv"
+          - (build_verification_report.total_systems | int) == 1
+          - (build_verification_report.systems_failed | int) == 1
+          - "'Build record was not produced' in build_verification_csv"
         fail_msg: A host with no collection record must still appear in the CSV.
       run_once: true
 
@@ -480,7 +535,7 @@
       ansible.builtin.add_host:
         name: "win-scale-{{ '%03d' | format(item) }}"
         groups: build_verify_scale
-        windows_build_record: "{{ scale_row }}"
+        build_verification_record: "{{ scale_row }}"
       vars:
         scale_row:
           inventory_hostname: "win-scale-{{ '%03d' | format(item) }}"
@@ -505,19 +560,19 @@
   vars:
     report_email_enabled: false
     build_verify_output_dir: /tmp/aap-build-verification-test
-    build_verify_email_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/build_verification_email.yml"
+    build_verify_email_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/email.yml"
   tasks:
     - name: Include the production report task
-      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/build_verification_report.yml"
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/report.yml"
       run_once: true
 
     - name: Assert the large population reconciles
       ansible.builtin.assert:
         that:
-          - (windows_build_verification_report.total_systems | int) == 500
-          - (windows_build_verification_report.systems_succeeded | int) == 500
-          - (windows_build_hosts | length) == 500
-          - (windows_build_verification_csv.splitlines() | length) == 501
-          - "'20348.2849' in windows_build_verification_csv"
+          - (build_verification_report.total_systems | int) == 500
+          - (build_verification_report.systems_succeeded | int) == 500
+          - (build_verification_hosts | length) == 500
+          - (build_verification_csv.splitlines() | length) == 501
+          - "'20348.2849' in build_verification_csv"
         fail_msg: The 500-host build report did not reconcile.
       run_once: true

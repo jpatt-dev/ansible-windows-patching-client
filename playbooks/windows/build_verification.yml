@@ -1,6 +1,9 @@
 ---
 # Read-only Windows build snapshot for AAP 2.7.
-# Collects hostname, FQDN, OS caption, OS version, and BuildNumber.UBR.
+# Live data is OS version and BuildNumber.UBR. Native facts do not include UBR.
+# Inventory fields are inventory_hostname, cmdb_fqdn, cmdb_os_release,
+# patch_location, patch_environment, and sys_id. Blank CMDB values stay
+# not_available. Location stays an empty string. Live names do not fill them.
 # It does not install updates, reboot, change WSUS, or call ServiceNow.
 #
 # Both plays use hosts: windows_hosts, so a Limit only narrows that group.
@@ -110,9 +113,20 @@
     report_email_attach_csv: true
     report_email_fail_on_error: true
     build_verify_output_dir: /tmp/aap-build-verification
-    build_verify_email_tasks: "{{ playbook_dir }}/tasks/build_verification_email.yml"
+    build_verify_platform: windows
+    build_verify_build_kind: windows_build
+    build_verify_report_name: windows_build_verification_report
+    build_verify_csv_name: windows_build_verification_csv
+    build_verify_filename_prefix: windows-build-verification
+    build_verify_subject_name: Windows
+    build_verify_report_source: windows_build_verification
+    build_verify_email_scope: |
+      Windows build verification collected the current OS build from the selected servers.
+      Current Build / Kernel is the Windows build number.
+      No updates were installed and no servers were rebooted.
+    build_verify_email_tasks: "{{ playbook_dir }}/../build_verification/tasks/email.yml"
 
   tasks:
     - name: Aggregate and publish the build verification report
-      ansible.builtin.include_tasks: tasks/build_verification_report.yml
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../build_verification/tasks/report.yml"
       run_once: true

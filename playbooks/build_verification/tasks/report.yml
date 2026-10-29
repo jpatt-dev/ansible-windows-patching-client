@@ -1,0 +1,300 @@
+---
+# Aggregate build rows and write one CSV.
+# Include once, with run_once, from a non-serial connection:local play
+# whose hosts are the same platform group selected in play 1.
+# Each host provides build_verification_record.
+# Email tasks load only when report_email_enabled is true.
+#
+# The calling play sets:
+#   build_verify_platform          windows or linux
+#   build_verify_build_kind        windows_build or running_kernel
+#   build_verify_report_name       set_stats key for the JSON report
+#   build_verify_csv_name          set_stats key for the CSV text
+#   build_verify_filename_prefix   CSV filename prefix
+#   build_verify_subject_name      Windows or Linux
+#   build_verify_report_source     report_source value
+#   build_verify_email_scope       opening lines of the email body
+#   build_verify_email_tasks       path to email.yml
+
+- name: Collect existing build records in inventory order
+  ansible.builtin.set_fact:
+    build_verification_present: >-
+      {{
+        ansible_play_hosts_all
+        | map('extract', hostvars)
+        | selectattr('build_verification_record', 'defined')
+        | map(attribute='build_verification_record')
+        | list
+      }}
+    build_verification_generated_at: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+  run_once: true
+  changed_when: false
+
+- name: Find targeted hosts that never produced a build record
+  ansible.builtin.set_fact:
+    build_verification_missing_names: >-
+      {{
+        ansible_play_hosts_all
+        | difference(build_verification_present | map(attribute='inventory_hostname') | list)
+      }}
+  run_once: true
+  changed_when: false
+
+- name: Build fallback rows for hosts missing a collection result
+  ansible.builtin.set_fact:
+    build_verification_fallbacks: "{{ build_verification_fallbacks_json | from_json }}"
+  vars:
+    build_verification_fallbacks_json: |
+      {%- set ns = namespace(rows=[]) -%}
+      {%- for name in build_verification_missing_names -%}
+      {%- set raw_sys_id = hostvars[name].sys_id | default('') | string | trim -%}
+      {%- set row = {
+        'inventory_hostname': name,
+        'hostname': name,
+        'fqdn': 'not_available',
+        'platform': build_verify_platform | default('windows'),
+        'os_release': 'not_available',
+        'os_version': 'not_available',
+        'current_build': 'not_available',
+        'current_build_kind': build_verify_build_kind | default('windows_build'),
+        'location': hostvars[name].patch_location | default('') | string | trim,
+        'patch_environment': hostvars[name].patch_environment | default('') | string | trim,
+        'snow_ci_sys_id': raw_sys_id if (raw_sys_id | length > 0) else 'not_available',
+        'collection_status': 'failed',
+        'collection_time_utc': build_verification_generated_at,
+        'diagnostic': 'Build record was not produced for this host.'
+      } -%}
+      {%- set _ = ns.rows.append(row) -%}
+      {%- endfor -%}
+      {{- ns.rows | to_json -}}
+  run_once: true
+  changed_when: false
+
+- name: Combine collected and fallback build rows
+  ansible.builtin.set_fact:
+    build_verification_hosts: "{{ build_verification_present + build_verification_fallbacks }}"
+  run_once: true
+  changed_when: false
+
+- name: Summarize the build verification
+  ansible.builtin.set_fact:
+    build_verification_environments: >-
+      {{
+        build_verification_hosts
+        | map(attribute='patch_environment')
+        | map('string')
+        | map('trim')
+        | reject('equalto', '')
+        | unique
+        | sort
+      }}
+    build_verification_succeeded: >-
+      {{
+        build_verification_hosts
+        | selectattr('collection_status', 'equalto', 'success')
+        | list
+        | length
+      }}
+    build_verification_failed: >-
+      {{
+        build_verification_hosts
+        | selectattr('collection_status', 'equalto', 'failed')
+        | list
+        | length
+      }}
+    build_verification_unreachable: >-
+      {{
+        build_verification_hosts
+        | selectattr('collection_status', 'equalto', 'unreachable')
+        | list
+        | length
+      }}
+  run_once: true
+  changed_when: false
+
+- name: Name the inventory environment for this job
+  ansible.builtin.set_fact:
+    build_verification_environment: >-
+      {{
+        'unspecified'
+        if ((build_verification_environments | length) == 0)
+        else (
+          build_verification_environments[0]
+          if ((build_verification_environments | length) == 1)
+          else 'inconsistent'
+        )
+      }}
+    build_verification_not_queried: >-
+      {{ (build_verification_failed | int) + (build_verification_unreachable | int) }}
+  run_once: true
+  changed_when: false
+
+- name: Build the build verification report
+  ansible.builtin.set_fact:
+    build_verification_report:
+      schema_version: "2"
+      report_source: "{{ build_verify_report_source | default('windows_build_verification') }}"
+      platform: "{{ build_verify_platform | default('windows') }}"
+      generated_at_utc: "{{ build_verification_generated_at }}"
+      patch_environment: "{{ build_verification_environment }}"
+      patch_environments: "{{ build_verification_environments }}"
+      aap_limit: "{{ ansible_limit | default('') | string | trim }}"
+      aap_job_id: "{{ tower_job_id | default(awx_job_id | default('')) }}"
+      total_systems: "{{ ansible_play_hosts_all | length }}"
+      systems_succeeded: "{{ build_verification_succeeded }}"
+      systems_failed: "{{ build_verification_failed }}"
+      systems_unreachable: "{{ build_verification_unreachable }}"
+      email_delivery: "{{ 'skipped' if not (report_email_enabled | default(false) | bool) else 'pending' }}"
+      hosts: "{{ build_verification_hosts }}"
+  run_once: true
+  changed_when: false
+
+- name: Require build verification totals to reconcile
+  ansible.builtin.assert:
+    that:
+      - (build_verification_report.total_systems | int) == (build_verification_hosts | length)
+      - >-
+        (build_verification_report.systems_succeeded | int)
+        + (build_verification_report.systems_failed | int)
+        + (build_verification_report.systems_unreachable | int)
+        == (build_verification_report.total_systems | int)
+    fail_msg: Build verification totals do not match the targeted hosts.
+  run_once: true
+
+- name: Render the Excel CSV in one pass
+  ansible.builtin.set_fact:
+    build_verification_csv: >-
+      {{
+        build_verification_csv_text[:-1]
+        if (
+          build_verification_csv_text[-3:]
+          == (
+            ('%c' | format(13))
+            ~ ('%c' | format(10))
+            ~ ('%c' | format(10))
+          )
+        )
+        else build_verification_csv_text
+      }}
+    build_verification_csv_filename: >-
+      {{ build_verify_filename_prefix | default('windows-build-verification') }}-{{
+      now(utc=true, fmt='%Y-%m-%dT%H-%M-%SZ') }}.csv
+    build_verification_email_subject: >-
+      AAP {{ build_verify_subject_name | default('Windows') }} Build Verification |
+      {{ build_verification_environment }} |
+      {{ build_verification_generated_at }}
+    build_verification_email_body: |
+      {{
+        build_verify_email_scope | default(
+          'Windows build verification collected the current OS build. '
+          ~ 'Current Build / Kernel is the Windows build number. '
+          ~ 'No updates were installed and no servers were rebooted.'
+        )
+      }}
+
+      Total systems targeted: {{ build_verification_report.total_systems }}
+      Systems successfully queried: {{ build_verification_report.systems_succeeded }}
+      Systems failed or unreachable: {{ build_verification_not_queried }}
+      Collection timestamp (UTC): {{ build_verification_generated_at }}
+
+      The attached CSV is a current-state inventory snapshot for Microsoft Excel.
+      It is not a patch installation history or a compliance result.
+  vars:
+    build_verification_csv_text: |
+      {%- set cr = '%c' | format(13) -%}
+      {%- set lf = '%c' | format(10) -%}
+      {%- set bom = '%c' | format(65279) -%}
+      {%- macro cell(value) -%}
+      {%- set cr = '%c' | format(13) -%}
+      {%- set lf = '%c' | format(10) -%}
+      {%- set tab = '%c' | format(9) -%}
+      {%- set text = '' if value is none else (value | string) -%}
+      {%- if text[:1] in ['=', '+', '-', '@', tab, cr] -%}
+      {%- set text = "'" ~ text -%}
+      {%- endif -%}
+      {%- set text = text | replace(cr ~ lf, ' ') -%}
+      {%- set text = text | replace(lf, ' ') | replace(cr, ' ') -%}
+      "{{ text | replace('"', '""') }}"
+      {%- endmacro %}
+      {%- set ns = namespace(lines=[]) -%}
+      {%- set header = [
+        'Hostname', 'FQDN', 'Platform', 'OS Release', 'OS Version',
+        'Current Build / Kernel', 'Location', 'Environment',
+        'Collection Status', 'Collection Time', 'Diagnostic'
+      ] -%}
+      {%- set quoted = namespace(cols=[]) -%}
+      {%- for name in header -%}
+      {%- set _ = quoted.cols.append('"' ~ (name | replace('"', '""')) ~ '"') -%}
+      {%- endfor -%}
+      {%- set _ = ns.lines.append(quoted.cols | join(',')) -%}
+      {%- for item in build_verification_hosts -%}
+      {%- set row = [
+        cell(item.hostname | default('not_available')),
+        cell(item.fqdn | default('not_available')),
+        cell(item.platform | default('')),
+        cell(item.os_release | default('not_available')),
+        cell(item.os_version | default('not_available')),
+        cell(item.current_build | default('not_available')),
+        cell(item.location | default('')),
+        cell(item.patch_environment | default('')),
+        cell(item.collection_status | default('failed')),
+        cell(item.collection_time_utc | default('not_available')),
+        cell(item.diagnostic | default(''))
+      ] -%}
+      {%- set _ = ns.lines.append(row | join(',')) -%}
+      {%- endfor -%}
+      {{- bom ~ (ns.lines | join(cr ~ lf)) ~ cr ~ lf -}}
+  run_once: true
+  changed_when: false
+
+- name: Ensure the build verification output directory exists
+  ansible.builtin.file:
+    path: "{{ build_verify_output_dir | default('/tmp/aap-build-verification') }}"
+    state: directory
+    mode: "0750"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Write the build verification CSV on the Execution Environment
+  ansible.builtin.copy:
+    content: "{{ build_verification_csv }}"
+    dest: "{{ build_verify_output_dir | default('/tmp/aap-build-verification') }}/{{ build_verification_csv_filename }}"
+    mode: "0640"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: build_verification_csv_write
+
+- name: Record the CSV path on the report
+  ansible.builtin.set_fact:
+    build_verification_report: >-
+      {{
+        build_verification_report
+        | combine({'csv_path': build_verification_csv_write.dest | default('')})
+      }}
+  run_once: true
+  changed_when: false
+
+- name: Name the AAP artifact keys for this platform
+  ansible.builtin.set_fact:
+    build_verify_published: >-
+      {{
+        {
+          (build_verify_report_name | default('windows_build_verification_report')): build_verification_report,
+          (build_verify_csv_name | default('windows_build_verification_csv')): build_verification_csv
+        }
+      }}
+  run_once: true
+  changed_when: false
+
+- name: Publish the build verification artifacts
+  ansible.builtin.set_stats:
+    data: "{{ build_verify_published }}"
+    per_host: false
+  run_once: true
+
+- name: Send the build verification email when requested
+  ansible.builtin.include_tasks: "{{ build_verify_email_tasks }}"
+  when: report_email_enabled | default(false) | bool
+  run_once: true

@@ -1,0 +1,100 @@
+---
+# Read-only Linux distribution and kernel snapshot for AAP 2.7.
+# Live data is ansible_distribution_version and ansible_kernel from minimal facts.
+# Hostname, location, environment, and sys_id come from inventory.
+# FQDN and OS release stay not_available until those inventory names exist.
+# It does not update packages, reboot, or call ServiceNow.
+#
+# Both plays use hosts: linux_hosts, so a Limit only narrows that group.
+# Blank Limit, all, and * are allowed.
+#
+# A failed fact gather is rescued on that host so the other hosts and the
+# report still run. The job is not successful when a query fails.
+# Unreachable hosts stay in the play. The report is still written when every
+# host fails.
+#
+# Job template: Linux - Build Verification
+#   Inventory: the LAB, IST, UAT, or PROD inventory that contains linux_hosts
+#   Credential: existing Linux SSH credential
+#   Execution environment: an EE that can SSH to Linux
+#   Limit: optional. Blank, all, *, hosts, or an inventory group.
+#   Playbook: playbooks/linux/build_verification.yml
+#
+# Email is off unless the job template sets report_email_enabled=true.
+# SMTP tasks are loaded only then.
+# Example extra variables:
+#   report_email_enabled: true
+#   report_email_smtp_host: smtp.example.internal
+#   report_email_smtp_port: 25
+#   report_email_smtp_secure: never
+#   report_email_from: patching@example.internal
+#   report_email_to:
+#     - ops@example.internal
+#   report_email_attach_csv: true
+#   report_email_fail_on_error: true
+
+- name: Collect the Linux distribution version and running kernel
+  hosts: linux_hosts
+  gather_facts: false
+  ignore_unreachable: true
+  vars:
+    report_email_enabled: false
+    report_email_smtp_host: ""
+    report_email_smtp_port: 25
+    report_email_smtp_secure: "never"
+    report_email_from: ""
+    report_email_to: []
+    report_email_attach_csv: true
+    report_email_fail_on_error: true
+    build_verify_output_dir: /tmp/aap-build-verification
+
+  tasks:
+    - name: Read minimal Linux facts
+      block:
+        - name: Gather distribution version and running kernel
+          ansible.builtin.setup:
+            gather_subset:
+              - min
+          register: linux_build_query
+          timeout: 120
+          changed_when: false
+      rescue:
+        - name: Keep the failed fact gather for the host report row
+          ansible.builtin.set_fact:
+            linux_build_query: "{{ ansible_failed_result }}"
+          changed_when: false
+      always:
+        - name: Record the Linux distribution and kernel
+          ansible.builtin.include_tasks: tasks/build_verification_record.yml
+
+- name: Report the Linux distribution and kernel
+  hosts: linux_hosts
+  connection: local
+  gather_facts: false
+  vars:
+    report_email_enabled: false
+    report_email_smtp_host: ""
+    report_email_smtp_port: 25
+    report_email_smtp_secure: "never"
+    report_email_from: ""
+    report_email_to: []
+    report_email_attach_csv: true
+    report_email_fail_on_error: true
+    build_verify_output_dir: /tmp/aap-build-verification
+    build_verify_platform: linux
+    build_verify_build_kind: running_kernel
+    build_verify_report_name: linux_build_verification_report
+    build_verify_csv_name: linux_build_verification_csv
+    build_verify_filename_prefix: linux-build-verification
+    build_verify_subject_name: Linux
+    build_verify_report_source: linux_build_verification
+    build_verify_email_scope: |
+      Linux build verification collected the distribution version and the running kernel.
+      Current Build / Kernel is the running kernel.
+      No packages were updated and no servers were rebooted.
+    build_verify_email_tasks: "{{ playbook_dir }}/../build_verification/tasks/email.yml"
+
+  tasks:
+    - name: Aggregate and publish the build verification report
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../build_verification/tasks/report.yml"
+      run_once: true

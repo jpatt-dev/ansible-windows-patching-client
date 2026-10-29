@@ -29,14 +29,45 @@ Read-only current-build snapshot, independent of the patch lifecycle:
 
 `playbooks/windows/build_verification.yml`
 
-All Windows playbooks use `hosts: windows_hosts`. Effective hosts are
+Read-only Linux distribution and running-kernel snapshot:
+
+`playbooks/linux/build_verification.yml`
+
+All Windows patching playbooks use `hosts: windows_hosts`. Effective hosts are
 `windows_hosts` ∩ Limit. Full Patch and Precheck still reject a blank Limit,
 `all`, and `*`. Build Verification allows those Limits because it is read-only
-and never leaves the `windows_hosts` group.
+and never leaves its platform group (`windows_hosts` or `linux_hosts`).
 
-## Windows build verification
+## Build verification
 
-Job template name: `Windows - Build Verification`.
+Windows and Linux each have a collection playbook. Both include
+`playbooks/build_verification/tasks/` for one CSV, the AAP artifacts, and
+optional email. There is no separate reporting role.
+
+The job does not query ServiceNow. The reporting contract is
+`docs/build-verification-contract.md`. Windows reads `inventory_hostname`,
+`cmdb_fqdn`, `cmdb_os_release`, `patch_location`, `patch_environment`, and
+`sys_id`. A missing CMDB value does not stop the live build query, and the
+live OS caption or DNS name does not fill that value. The current build is
+not a compliance result.
+
+| Field | Source |
+| --- | --- |
+| Hostname | `inventory_hostname` |
+| FQDN | `cmdb_fqdn` |
+| Platform | `windows` |
+| OS Release | `cmdb_os_release` |
+| OS Version | Live Windows version |
+| Current Build / Kernel | Live `BuildNumber.UBR` |
+| Location | `patch_location` (empty when unset) |
+| Environment | `patch_environment` |
+| Collection Status | `success`, `failed`, or `unreachable` |
+| Collection Time | Ansible |
+| Diagnostic | Ansible |
+
+`sys_id` is copied to `snow_ci_sys_id` in the JSON artifact only.
+
+### Windows - Build Verification
 
 | Setting | Value |
 | --- | --- |
@@ -45,15 +76,38 @@ Job template name: `Windows - Build Verification`.
 | Credential | Existing Windows WinRM credential |
 | Execution environment | Windows patching EE |
 | Limit | Optional. Blank, `all`, `*`, hosts, or an inventory group. |
+| Job slicing | `1`. Slicing would send more than one CSV and email. |
 
-The job reads the current OS caption, version, and `BuildNumber.UBR`. It does
-not install updates, reboot, change WSUS, or call ServiceNow. Location comes
-from inventory `patch_location`. The environment label comes from inventory
-`patch_environment`.
+The Windows play keeps its PowerShell query for OS version and
+`BuildNumber.UBR`. Native Windows facts do not include UBR. The job does not
+install updates, reboot, change WSUS, or call ServiceNow.
+
+AAP artifacts: `windows_build_verification_report` and
+`windows_build_verification_csv`.
+
+### Linux - Build Verification
+
+| Setting | Value |
+| --- | --- |
+| Playbook | `playbooks/linux/build_verification.yml` |
+| Inventory | LAB, IST, UAT, or PROD inventory that contains `linux_hosts` |
+| Credential | Existing Linux SSH credential |
+| Execution environment | An EE that can SSH to Linux. The Windows patching EE is sufficient when SSH is allowed. |
+| Limit | Optional. Blank, `all`, `*`, hosts, or an inventory group. |
+| Job slicing | `1` |
+
+The Linux play gathers minimal facts (`gather_subset: min`) and records
+`ansible_distribution_version` and `ansible_kernel`. Current Build / Kernel is
+the running kernel. The job does not update packages or reboot.
+
+AAP artifacts: `linux_build_verification_report` and
+`linux_build_verification_csv`.
+
+### Report behavior
 
 Email is disabled unless the job sets `report_email_enabled: true`. The same
-SMTP variable names as patch reporting are used. This job does not call
-`roles/report_email`.
+SMTP variable names as patch reporting are used. Neither build-verification
+play calls `roles/report_email`. SMTP tasks load only when email is enabled.
 
 ```yaml
 report_email_enabled: false
@@ -66,14 +120,34 @@ report_email_attach_csv: true
 report_email_fail_on_error: true
 ```
 
-AAP artifacts: `windows_build_verification_report` and
-`windows_build_verification_csv`. The CSV is UTF-8 with a byte order mark and
-CRLF so Microsoft Excel opens it as text. A `Diagnostic` column is blank after
-a complete collection. Values that start with `=`, `+`, `-`, `@`, a tab, or a
+The CSV is UTF-8 with a byte order mark and CRLF. Schema version is `2`.
+Column names and the per-host JSON are in `docs/build-verification-contract.md`.
+A successful collection with a full build still names any missing CMDB field
+in `Diagnostic`. Values that start with `=`, `+`, `-`, `@`, a tab, or a
 carriage return are prefixed with an apostrophe so Excel does not treat them
 as formulas. Missing collected facts are `not_available`. A missing
-`patch_location` is an empty location, not a fabricated site. Per-host rows
-stay in the JSON artifact for later operational reporting.
+`patch_location` is an empty location. Per-host rows stay in the JSON
+artifact. One run produces one CSV and, when email is enabled, one message.
+
+AAP LAB, after the inventory variables exist on the Windows inventory:
+
+1. Job template `Windows - Build Verification`, playbook
+   `playbooks/windows/build_verification.yml`, Windows patching EE, existing
+   WinRM credential, LAB inventory, `job_slice_count: 1`.
+2. Run with a blank Limit and again with a small host Limit. Confirm the job
+   stays inside `windows_hosts` and does not install updates or reboot.
+3. Confirm hostname, FQDN, OS release, location, environment, and sys_id match
+   inventory, and that OS version and `BuildNumber.UBR` came from the host.
+4. Include one unreachable or failed host and confirm its row is still in the
+   CSV. Open the CSV in Excel and confirm a formula-like value is text.
+5. Enable email only with the internal relay variables and confirm one message.
+
+Client configuration still required: map the ServiceNow CMDB columns onto
+`cmdb_fqdn`, `cmdb_os_release`, `patch_location`, `patch_environment`, and
+`sys_id` without rebuilding wave or exemption data. Set the SMTP extra
+variables only when email is wanted. Create the AAP job template if it is
+not already present. This repository does not declare that template in
+controller CaC.
 
 ## Full Patch lifecycle
 

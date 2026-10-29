@@ -1,0 +1,187 @@
+---
+# Local checks for Linux build verification. No SSH and no SMTP.
+#   ansible-playbook tests/linux_build/test_build_verification.yml
+
+- name: Check the Linux build verification playbook stays read-only
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Read the Linux build verification playbook
+      ansible.builtin.set_fact:
+        linux_build_playbook_text: "{{ lookup('file', playbook_dir ~ '/../../playbooks/linux/build_verification.yml') }}"
+      changed_when: false
+
+    - name: Require minimal fact gathering and the shared report
+      ansible.builtin.assert:
+        that:
+          - "linux_build_playbook_text | regex_findall('(?m)^  hosts: linux_hosts$') | length == 2"
+          - "'gather_facts: false' in linux_build_playbook_text"
+          - "'gather_subset:' in linux_build_playbook_text"
+          - "'ansible.builtin.setup:' in linux_build_playbook_text"
+          - "'timeout: 120' in linux_build_playbook_text"
+          - "'build_verification/tasks/report.yml' in linux_build_playbook_text"
+          - "'community.general' not in linux_build_playbook_text"
+          - "'win_shell' not in linux_build_playbook_text"
+          - "'win_updates' not in linux_build_playbook_text"
+          - "'ansible.builtin.reboot' not in linux_build_playbook_text"
+          - "'package:' not in linux_build_playbook_text"
+        fail_msg: Linux build verification no longer matches the read-only contract.
+
+- name: Register fictional Linux fact gathers
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add a host with a distribution version and running kernel
+      ansible.builtin.add_host:
+        name: lin-ok
+        groups: linux_build_cases
+        patch_environment: LAB
+        patch_location: "London, UK"
+        sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        ansible_distribution: RedHat
+        ansible_distribution_version: "9.5"
+        ansible_kernel: 5.14.0-503.14.1.el9_5.x86_64
+        linux_build_query:
+          failed: false
+          unreachable: false
+          rc: 0
+
+    - name: Add a host whose kernel fact is missing
+      ansible.builtin.add_host:
+        name: lin-partial
+        groups: linux_build_cases
+        patch_environment: LAB
+        patch_location: Datacenter-East
+        ansible_distribution: RedHat
+        ansible_distribution_version: "9.5"
+        ansible_kernel: ""
+        linux_build_query:
+          failed: false
+          unreachable: false
+          rc: 0
+
+    - name: Add an unreachable Linux host
+      ansible.builtin.add_host:
+        name: lin-down
+        groups: linux_build_cases
+        patch_environment: LAB
+        patch_location: Datacenter-East
+        linux_build_query:
+          unreachable: true
+          msg: SSH connection timed out
+
+    - name: Add a host whose fact gather failed
+      ansible.builtin.add_host:
+        name: lin-fail
+        groups: linux_build_cases
+        patch_environment: LAB
+        patch_location: Datacenter-East
+        linux_build_query:
+          failed: true
+          rc: 1
+          msg: module setup failed
+
+- name: Convert fictional Linux facts into build records
+  hosts: linux_build_cases
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Include the Linux build record task
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/linux/tasks/build_verification_record.yml"
+
+    - name: Assert inventory identity and the live kernel
+      ansible.builtin.assert:
+        that:
+          - build_verification_record.hostname == inventory_hostname
+          - build_verification_record.fqdn == 'not_available'
+          - build_verification_record.os_release == 'not_available'
+          - build_verification_record.platform == 'linux'
+          - build_verification_record.current_build_kind == 'running_kernel'
+          - build_verification_record.patched is not defined
+          - build_verification_record.os_release != 'RedHat'
+        fail_msg: "{{ inventory_hostname }} used live facts for an inventory field."
+
+    - name: Assert the successful Linux host
+      ansible.builtin.assert:
+        that:
+          - build_verification_record.collection_status == 'success'
+          - build_verification_record.os_version == '9.5'
+          - build_verification_record.current_build == '5.14.0-503.14.1.el9_5.x86_64'
+          - build_verification_record.snow_ci_sys_id == sys_id
+          - "'Inventory FQDN was not available.' in build_verification_record.diagnostic"
+          - "'Inventory CI sys_id was not available.' not in build_verification_record.diagnostic"
+      when: inventory_hostname == 'lin-ok'
+
+    - name: Assert an incomplete fact gather
+      ansible.builtin.assert:
+        that:
+          - build_verification_record.collection_status == 'failed'
+          - build_verification_record.current_build == 'not_available'
+          - build_verification_record.diagnostic == 'OS information incomplete.'
+      when: inventory_hostname == 'lin-partial'
+
+    - name: Assert an unreachable Linux host
+      ansible.builtin.assert:
+        that:
+          - build_verification_record.collection_status == 'unreachable'
+          - "'Host unreachable.' in build_verification_record.diagnostic"
+      when: inventory_hostname == 'lin-down'
+
+    - name: Assert a failed fact gather
+      ansible.builtin.assert:
+        that:
+          - build_verification_record.collection_status == 'failed'
+          - "'OS query failed.' in build_verification_record.diagnostic"
+      when: inventory_hostname == 'lin-fail'
+
+- name: Aggregate the fictional Linux build verification
+  hosts: linux_build_cases
+  connection: local
+  gather_facts: false
+  vars:
+    report_email_enabled: false
+    build_verify_output_dir: /tmp/aap-build-verification-test
+    build_verify_platform: linux
+    build_verify_build_kind: running_kernel
+    build_verify_report_name: linux_build_verification_report
+    build_verify_csv_name: linux_build_verification_csv
+    build_verify_filename_prefix: linux-build-verification
+    build_verify_subject_name: Linux
+    build_verify_report_source: linux_build_verification
+    build_verify_email_scope: |
+      Linux build verification collected the distribution version and the running kernel.
+      Current Build / Kernel is the running kernel.
+      No packages were updated and no servers were rebooted.
+    build_verify_email_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/email.yml"
+  tasks:
+    - name: Include the shared report task
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/report.yml"
+      run_once: true
+
+    - name: Assert the shared Linux CSV
+      ansible.builtin.assert:
+        that:
+          - (build_verification_report.total_systems | int) == 4
+          - (build_verification_report.systems_succeeded | int) == 1
+          - (build_verification_report.systems_failed | int) == 2
+          - (build_verification_report.systems_unreachable | int) == 1
+          - build_verification_report.schema_version == '2'
+          - build_verification_report.platform == 'linux'
+          - build_verification_report.report_source == 'linux_build_verification'
+          - "'linux_build_verification_report' in build_verify_published"
+          - "'linux_build_verification_csv' in build_verify_published"
+          - "'AAP Linux Build Verification | LAB |' in build_verification_email_subject"
+          - "'Current Build / Kernel is the running kernel.' in build_verification_email_body"
+          - build_verification_email_result is not defined
+          - >-
+            build_verification_csv.startswith(
+            ('%c' | format(65279)) ~ '"Hostname","FQDN","Platform","OS Release","OS Version","Current Build / Kernel"')
+          - "'5.14.0-503.14.1.el9_5.x86_64' in build_verification_csv"
+          - "'9.5' in build_verification_csv"
+          - ('"' ~ 'London, UK' ~ '"') in build_verification_csv
+          - "'RedHat' not in build_verification_csv"
+          - (build_verification_csv.splitlines() | length) == 5
+        fail_msg: The Linux build verification CSV did not match the fictional hosts.
+      run_once: true

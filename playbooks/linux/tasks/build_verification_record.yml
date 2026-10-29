@@ -1,0 +1,195 @@
+---
+# Turn minimal Linux facts into a build-verification row.
+# Caller sets linux_build_query. This file does not contact Linux.
+# Hostname, FQDN, OS release, location, environment, and sys_id come from
+# inventory. Distribution version and the running kernel are the live fields.
+# A row is success only when both live values are present.
+
+- name: Read build verification identity from inventory
+  ansible.builtin.set_fact:
+    build_verify_identity_hostname: "{{ inventory_hostname }}"
+    build_verify_identity_fqdn: not_available
+    build_verify_identity_os_release: not_available
+    build_verify_identity_location: "{{ patch_location | default('') | string | trim }}"
+    build_verify_identity_environment: "{{ patch_environment | default('') | string | trim }}"
+    build_verify_identity_sys_id: >-
+      {{
+        (sys_id | default('') | string | trim)
+        if ((sys_id | default('') | string | trim | length) > 0)
+        else 'not_available'
+      }}
+    build_verify_identity_diagnostic: >-
+      {{
+        'Inventory FQDN was not available. Inventory OS release was not available.'
+        ~ (
+          ' Inventory CI sys_id was not available.'
+          if ((sys_id | default('') | string | trim | length) == 0)
+          else ''
+        )
+      }}
+  changed_when: false
+
+- name: Record an unreachable Linux fact gather
+  ansible.builtin.set_fact:
+    build_verification_record:
+      inventory_hostname: "{{ inventory_hostname }}"
+      hostname: "{{ build_verify_identity_hostname }}"
+      fqdn: "{{ build_verify_identity_fqdn }}"
+      platform: linux
+      os_release: "{{ build_verify_identity_os_release }}"
+      os_version: not_available
+      current_build: not_available
+      current_build_kind: running_kernel
+      location: "{{ build_verify_identity_location }}"
+      patch_environment: "{{ build_verify_identity_environment }}"
+      snow_ci_sys_id: "{{ build_verify_identity_sys_id }}"
+      collection_status: unreachable
+      collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+      diagnostic: "{{ build_verify_unreachable_diagnostic }}"
+  vars:
+    build_verify_unreachable_diagnostic: >-
+      {{
+        (
+          'Host unreachable. '
+          ~ (
+            'redacted'
+            if ('password' in (linux_build_query.msg | default('') | string | lower))
+            else (linux_build_query.msg | default('SSH connection failed') | string)
+          )
+        )
+        | replace(('%c' | format(13)) ~ ('%c' | format(10)), ' ')
+        | replace(('%c' | format(10)), ' ')
+        | replace(('%c' | format(13)), ' ')
+        | trim | truncate(160, true, '')
+      }}
+  when: (linux_build_query.unreachable | default(false)) == true
+  changed_when: false
+
+- name: Record a failed Linux fact gather
+  ansible.builtin.set_fact:
+    build_verification_record:
+      inventory_hostname: "{{ inventory_hostname }}"
+      hostname: "{{ build_verify_identity_hostname }}"
+      fqdn: "{{ build_verify_identity_fqdn }}"
+      platform: linux
+      os_release: "{{ build_verify_identity_os_release }}"
+      os_version: not_available
+      current_build: not_available
+      current_build_kind: running_kernel
+      location: "{{ build_verify_identity_location }}"
+      patch_environment: "{{ build_verify_identity_environment }}"
+      snow_ci_sys_id: "{{ build_verify_identity_sys_id }}"
+      collection_status: failed
+      collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+      diagnostic: "{{ build_verify_failed_diagnostic }}"
+  vars:
+    build_verify_failed_diagnostic: >-
+      {{
+        'Fact gathering timed out.'
+        if ('timed out' in (linux_build_query.msg | default('') | string | lower))
+        else (
+          'OS query failed. '
+          ~ (
+            (
+              'redacted'
+              if ('password' in (linux_build_query.msg | default('') | string | lower))
+              else (linux_build_query.msg | default('No OS information was returned') | string)
+            )
+            | replace(('%c' | format(13)) ~ ('%c' | format(10)), ' ')
+            | replace(('%c' | format(10)), ' ')
+            | replace(('%c' | format(13)), ' ')
+            | trim | truncate(120, true, '')
+          )
+        )
+      }}
+  when:
+    - build_verification_record is not defined
+    - (linux_build_query.unreachable | default(false)) != true
+    - >-
+      (linux_build_query.failed | default(false)) == true
+      or (linux_build_query.rc | default(0) | int) != 0
+  changed_when: false
+
+- name: Read the distribution version and running kernel
+  ansible.builtin.set_fact:
+    build_verify_version: "{{ ansible_distribution_version | default('') | string | trim }}"
+    build_verify_kernel: "{{ ansible_kernel | default('') | string | trim }}"
+  when:
+    - build_verification_record is not defined
+    - (linux_build_query.unreachable | default(false)) != true
+    - (linux_build_query.failed | default(false)) != true
+    - (linux_build_query.rc | default(0) | int) == 0
+  changed_when: false
+
+- name: Require both the distribution version and the running kernel
+  ansible.builtin.set_fact:
+    build_verify_complete: >-
+      {{
+        (build_verify_version | default('') | length > 0)
+        and (build_verify_kernel | default('') | length > 0)
+      }}
+  when:
+    - build_verification_record is not defined
+    - build_verify_version is defined
+  changed_when: false
+
+- name: Record the Linux distribution and kernel
+  ansible.builtin.set_fact:
+    build_verification_record:
+      inventory_hostname: "{{ inventory_hostname }}"
+      hostname: "{{ build_verify_identity_hostname }}"
+      fqdn: "{{ build_verify_identity_fqdn }}"
+      platform: linux
+      os_release: "{{ build_verify_identity_os_release }}"
+      os_version: "{{ build_verify_os_version }}"
+      current_build: "{{ build_verify_current }}"
+      current_build_kind: running_kernel
+      location: "{{ build_verify_identity_location }}"
+      patch_environment: "{{ build_verify_identity_environment }}"
+      snow_ci_sys_id: "{{ build_verify_identity_sys_id }}"
+      collection_status: "{{ 'success' if (build_verify_complete | bool) else 'failed' }}"
+      collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+      diagnostic: "{{ build_verify_diagnostic }}"
+  vars:
+    build_verify_os_version: >-
+      {{
+        build_verify_version
+        if (build_verify_version | default('') | length > 0)
+        else 'not_available'
+      }}
+    build_verify_current: >-
+      {{
+        build_verify_kernel
+        if (build_verify_complete | bool)
+        else 'not_available'
+      }}
+    build_verify_diagnostic: >-
+      {{
+        'OS information incomplete.'
+        if not (build_verify_complete | bool)
+        else build_verify_identity_diagnostic
+      }}
+  when:
+    - build_verification_record is not defined
+    - build_verify_complete is defined
+  changed_when: false
+
+- name: Record a Linux fact gather that returned no result
+  ansible.builtin.set_fact:
+    build_verification_record:
+      inventory_hostname: "{{ inventory_hostname }}"
+      hostname: "{{ build_verify_identity_hostname }}"
+      fqdn: "{{ build_verify_identity_fqdn }}"
+      platform: linux
+      os_release: "{{ build_verify_identity_os_release }}"
+      os_version: not_available
+      current_build: not_available
+      current_build_kind: running_kernel
+      location: "{{ build_verify_identity_location }}"
+      patch_environment: "{{ build_verify_identity_environment }}"
+      snow_ci_sys_id: "{{ build_verify_identity_sys_id }}"
+      collection_status: failed
+      collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+      diagnostic: OS query did not return a result.
+  when: build_verification_record is not defined
+  changed_when: false

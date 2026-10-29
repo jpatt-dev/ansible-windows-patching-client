@@ -1,20 +1,67 @@
 ---
 # Turn one Windows OS query into a build-verification row.
 # Caller sets windows_build_query. This file does not contact Windows.
-# A row is success only when caption, version, and base build are present.
+# Hostname, FQDN, OS release, location, environment, and sys_id come from
+# inventory: inventory_hostname, cmdb_fqdn, cmdb_os_release, patch_location,
+# patch_environment, and sys_id. A blank value stays not_available, except
+# location, which stays an empty string.
+# A row is success only when OS version and base build are present.
 # Missing UBR keeps the base build and says the revision is unavailable.
+# Live caption and DNS names are not copied into the inventory fields.
+
+- name: Read build verification identity from inventory
+  ansible.builtin.set_fact:
+    build_verify_identity_hostname: "{{ inventory_hostname }}"
+    build_verify_identity_fqdn: >-
+      {{
+        (cmdb_fqdn | default('') | string | trim)
+        if ((cmdb_fqdn | default('') | string | trim | length) > 0)
+        else 'not_available'
+      }}
+    build_verify_identity_os_release: >-
+      {{
+        (cmdb_os_release | default('') | string | trim)
+        if ((cmdb_os_release | default('') | string | trim | length) > 0)
+        else 'not_available'
+      }}
+    build_verify_identity_location: "{{ patch_location | default('') | string | trim }}"
+    build_verify_identity_environment: "{{ patch_environment | default('') | string | trim }}"
+    build_verify_identity_sys_id: >-
+      {{
+        (sys_id | default('') | string | trim)
+        if ((sys_id | default('') | string | trim | length) > 0)
+        else 'not_available'
+      }}
+    build_verify_identity_diagnostic: >-
+      {{
+        [
+          'Inventory FQDN was not available.'
+          if ((cmdb_fqdn | default('') | string | trim | length) == 0)
+          else '',
+          'Inventory OS release was not available.'
+          if ((cmdb_os_release | default('') | string | trim | length) == 0)
+          else '',
+          'Inventory CI sys_id was not available.'
+          if ((sys_id | default('') | string | trim | length) == 0)
+          else ''
+        ] | reject('equalto', '') | list | join(' ')
+      }}
+  changed_when: false
 
 - name: Record an unreachable Windows build query
   ansible.builtin.set_fact:
-    windows_build_record:
+    build_verification_record:
       inventory_hostname: "{{ inventory_hostname }}"
-      hostname: "{{ inventory_hostname }}"
-      fqdn: not_available
-      os_release: not_available
+      hostname: "{{ build_verify_identity_hostname }}"
+      fqdn: "{{ build_verify_identity_fqdn }}"
+      platform: windows
+      os_release: "{{ build_verify_identity_os_release }}"
       os_version: not_available
       current_build: not_available
-      location: "{{ patch_location | default('') | string | trim }}"
-      patch_environment: "{{ patch_environment | default('') | string | trim }}"
+      current_build_kind: windows_build
+      location: "{{ build_verify_identity_location }}"
+      patch_environment: "{{ build_verify_identity_environment }}"
+      snow_ci_sys_id: "{{ build_verify_identity_sys_id }}"
       collection_status: unreachable
       collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
       diagnostic: "{{ build_verify_unreachable_diagnostic }}"
@@ -39,15 +86,18 @@
 
 - name: Record a failed Windows build query
   ansible.builtin.set_fact:
-    windows_build_record:
+    build_verification_record:
       inventory_hostname: "{{ inventory_hostname }}"
-      hostname: "{{ inventory_hostname }}"
-      fqdn: not_available
-      os_release: not_available
+      hostname: "{{ build_verify_identity_hostname }}"
+      fqdn: "{{ build_verify_identity_fqdn }}"
+      platform: windows
+      os_release: "{{ build_verify_identity_os_release }}"
       os_version: not_available
       current_build: not_available
-      location: "{{ patch_location | default('') | string | trim }}"
-      patch_environment: "{{ patch_environment | default('') | string | trim }}"
+      current_build_kind: windows_build
+      location: "{{ build_verify_identity_location }}"
+      patch_environment: "{{ build_verify_identity_environment }}"
+      snow_ci_sys_id: "{{ build_verify_identity_sys_id }}"
       collection_status: failed
       collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
       diagnostic: "{{ build_verify_failed_diagnostic }}"
@@ -72,7 +122,7 @@
         )
       }}
   when:
-    - windows_build_record is not defined
+    - build_verification_record is not defined
     - (windows_build_query.unreachable | default(false)) != true
     - >-
       (windows_build_query.rc | default(1) | int) != 0
@@ -81,7 +131,7 @@
 
 - name: Decode a completed OS query
   when:
-    - windows_build_record is not defined
+    - build_verification_record is not defined
     - (windows_build_query.rc | default(1) | int) == 0
     - (windows_build_query.failed | default(false)) != true
   block:
@@ -95,45 +145,43 @@
           }}
       changed_when: false
 
-    - name: Read OS fields from the decoded query
+    - name: Read the live OS version and build
       ansible.builtin.set_fact:
-        build_verify_caption: "{{ windows_build_parsed.Caption | default('') | string | trim }}"
         build_verify_version: "{{ windows_build_parsed.Version | default('') | string | trim }}"
         build_verify_base: "{{ windows_build_parsed.BuildNumber | default('') | string | trim }}"
         build_verify_full: "{{ windows_build_parsed.FullBuild | default('') | string | trim }}"
         build_verify_ubr: "{{ windows_build_parsed.UBR | default('') | string | trim }}"
         build_verify_ubr_flag: "{{ (windows_build_parsed.UbrAvailable | default(false)) == true }}"
-        build_verify_dns: "{{ windows_build_parsed.DNSHostName | default('') | string | trim }}"
-        build_verify_csname: "{{ windows_build_parsed.CSName | default('') | string | trim }}"
-        build_verify_fqdn_raw: "{{ windows_build_parsed.FQDN | default('') | string | trim }}"
       when: windows_build_parsed is mapping
       changed_when: false
 
     - name: Reject an OS query that is not a JSON object
       ansible.builtin.set_fact:
-        windows_build_record: "{{ build_verify_incomplete_record }}"
+        build_verification_record: "{{ build_verify_incomplete_record }}"
       vars:
         build_verify_incomplete_record:
           inventory_hostname: "{{ inventory_hostname }}"
-          hostname: "{{ inventory_hostname }}"
-          fqdn: not_available
-          os_release: not_available
+          hostname: "{{ build_verify_identity_hostname }}"
+          fqdn: "{{ build_verify_identity_fqdn }}"
+          platform: windows
+          os_release: "{{ build_verify_identity_os_release }}"
           os_version: not_available
           current_build: not_available
-          location: "{{ patch_location | default('') | string | trim }}"
-          patch_environment: "{{ patch_environment | default('') | string | trim }}"
+          current_build_kind: windows_build
+          location: "{{ build_verify_identity_location }}"
+          patch_environment: "{{ build_verify_identity_environment }}"
+          snow_ci_sys_id: "{{ build_verify_identity_sys_id }}"
           collection_status: failed
           collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
           diagnostic: OS information incomplete.
       when: windows_build_parsed is not mapping
       changed_when: false
 
-    - name: Classify the decoded OS information
+    - name: Classify the decoded OS version and build
       ansible.builtin.set_fact:
         build_verify_complete: >-
           {{
-            (build_verify_caption | default('') | length > 0)
-            and (build_verify_version | default('') | length > 0)
+            (build_verify_version | default('') | length > 0)
             and (build_verify_base | default('') is match('^[0-9]+$'))
           }}
         build_verify_ubr_ok: >-
@@ -146,47 +194,28 @@
             )
           }}
       when:
-        - windows_build_record is not defined
-        - build_verify_caption is defined
+        - build_verification_record is not defined
+        - build_verify_version is defined
       changed_when: false
 
     - name: Record a validated Windows build
       ansible.builtin.set_fact:
-        windows_build_record:
+        build_verification_record:
           inventory_hostname: "{{ inventory_hostname }}"
-          hostname: "{{ build_verify_hostname }}"
-          fqdn: "{{ build_verify_fqdn }}"
-          os_release: "{{ build_verify_os_release }}"
+          hostname: "{{ build_verify_identity_hostname }}"
+          fqdn: "{{ build_verify_identity_fqdn }}"
+          platform: windows
+          os_release: "{{ build_verify_identity_os_release }}"
           os_version: "{{ build_verify_os_version }}"
           current_build: "{{ build_verify_current }}"
-          location: "{{ patch_location | default('') | string | trim }}"
-          patch_environment: "{{ patch_environment | default('') | string | trim }}"
+          current_build_kind: windows_build
+          location: "{{ build_verify_identity_location }}"
+          patch_environment: "{{ build_verify_identity_environment }}"
+          snow_ci_sys_id: "{{ build_verify_identity_sys_id }}"
           collection_status: "{{ 'success' if (build_verify_complete | bool) else 'failed' }}"
           collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
           diagnostic: "{{ build_verify_diagnostic }}"
       vars:
-        build_verify_hostname: >-
-          {{
-            build_verify_dns
-            if (build_verify_dns | default('') | length > 0)
-            else (
-              build_verify_csname
-              if (build_verify_csname | default('') | length > 0)
-              else inventory_hostname
-            )
-          }}
-        build_verify_fqdn: >-
-          {{
-            build_verify_fqdn_raw
-            if (build_verify_fqdn_raw | default('') | length > 0)
-            else 'not_available'
-          }}
-        build_verify_os_release: >-
-          {{
-            build_verify_caption
-            if (build_verify_caption | default('') | length > 0)
-            else 'not_available'
-          }}
         build_verify_os_version: >-
           {{
             build_verify_version
@@ -207,39 +236,39 @@
           }}
         build_verify_diagnostic: >-
           {{
-            'OS information incomplete.' if not (build_verify_complete | bool)
-            else (
-              'revision unavailable'
-              if not (
-                (build_verify_ubr_ok | bool)
-                and (build_verify_full | default('') is match('^[0-9]+[.][0-9]+$'))
-              )
+            (
+              'OS information incomplete.' if not (build_verify_complete | bool)
               else (
-                'Windows hostname was empty. Hostname is the inventory name.'
-                if (
-                  (build_verify_dns | default('') | length == 0)
-                  and (build_verify_csname | default('') | length == 0)
-                )
-                else ''
+                (
+                  'revision unavailable. '
+                  if not (
+                    (build_verify_ubr_ok | bool)
+                    and (build_verify_full | default('') is match('^[0-9]+[.][0-9]+$'))
+                  )
+                  else ''
+                ) ~ build_verify_identity_diagnostic
               )
-            )
+            ) | trim
           }}
       when:
-        - windows_build_record is not defined
+        - build_verification_record is not defined
         - build_verify_complete is defined
       changed_when: false
   rescue:
     - name: Record an unreadable OS query
       ansible.builtin.set_fact:
-        windows_build_record:
+        build_verification_record:
           inventory_hostname: "{{ inventory_hostname }}"
-          hostname: "{{ inventory_hostname }}"
-          fqdn: not_available
-          os_release: not_available
+          hostname: "{{ build_verify_identity_hostname }}"
+          fqdn: "{{ build_verify_identity_fqdn }}"
+          platform: windows
+          os_release: "{{ build_verify_identity_os_release }}"
           os_version: not_available
           current_build: not_available
-          location: "{{ patch_location | default('') | string | trim }}"
-          patch_environment: "{{ patch_environment | default('') | string | trim }}"
+          current_build_kind: windows_build
+          location: "{{ build_verify_identity_location }}"
+          patch_environment: "{{ build_verify_identity_environment }}"
+          snow_ci_sys_id: "{{ build_verify_identity_sys_id }}"
           collection_status: failed
           collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
           diagnostic: OS query output was not valid JSON.
@@ -247,17 +276,20 @@
 
 - name: Record a Windows build query that returned no result
   ansible.builtin.set_fact:
-    windows_build_record:
+    build_verification_record:
       inventory_hostname: "{{ inventory_hostname }}"
-      hostname: "{{ inventory_hostname }}"
-      fqdn: not_available
-      os_release: not_available
+      hostname: "{{ build_verify_identity_hostname }}"
+      fqdn: "{{ build_verify_identity_fqdn }}"
+      platform: windows
+      os_release: "{{ build_verify_identity_os_release }}"
       os_version: not_available
       current_build: not_available
-      location: "{{ patch_location | default('') | string | trim }}"
-      patch_environment: "{{ patch_environment | default('') | string | trim }}"
+      current_build_kind: windows_build
+      location: "{{ build_verify_identity_location }}"
+      patch_environment: "{{ build_verify_identity_environment }}"
+      snow_ci_sys_id: "{{ build_verify_identity_sys_id }}"
       collection_status: failed
       collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
       diagnostic: OS query did not return a result.
-  when: windows_build_record is not defined
+  when: build_verification_record is not defined
   changed_when: false
