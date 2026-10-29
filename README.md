@@ -80,7 +80,9 @@ not a compliance result.
 
 The Windows play keeps its PowerShell query for OS version and
 `BuildNumber.UBR`. Native Windows facts do not include UBR. The job does not
-install updates, reboot, change WSUS, or call ServiceNow.
+install updates, reboot, change WSUS, or call ServiceNow. After the report and
+optional email, the job fails when any targeted host is `failed` or
+`unreachable`. Missing CMDB values and a missing UBR do not fail the job.
 
 AAP artifacts: `windows_build_verification_report` and
 `windows_build_verification_csv`.
@@ -139,7 +141,9 @@ AAP LAB, after the inventory variables exist on the Windows inventory:
 3. Confirm hostname, FQDN, OS release, location, environment, and sys_id match
    inventory, and that OS version and `BuildNumber.UBR` came from the host.
 4. Include one unreachable or failed host and confirm its row is still in the
-   CSV. Open the CSV in Excel and confirm a formula-like value is text.
+   CSV, then confirm the job finishes failed. Open the CSV in Excel and
+   confirm a formula-like value is text. A host that only lacks CMDB metadata
+   or UBR should leave the job successful.
 5. Enable email only with the internal relay variables and confirm one message.
 
 Client configuration still required: map the ServiceNow CMDB columns onto

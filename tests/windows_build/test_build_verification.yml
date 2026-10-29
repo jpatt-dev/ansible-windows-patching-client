@@ -13,6 +13,7 @@
         build_verify_report_text: "{{ lookup('file', playbook_dir ~ '/../../playbooks/build_verification/tasks/report.yml') }}"
         build_verify_email_text: "{{ lookup('file', playbook_dir ~ '/../../playbooks/build_verification/tasks/email.yml') }}"
         build_verify_record_text: "{{ lookup('file', playbook_dir ~ '/../../playbooks/windows/tasks/build_verification_record.yml') }}"
+        build_verify_job_status_text: "{{ lookup('file', playbook_dir ~ '/../../playbooks/windows/tasks/build_verification_job_status.yml') }}"
       changed_when: false
 
     - name: Require read-only collection, one-pass aggregation, and optional SMTP
@@ -38,6 +39,17 @@
           - "'schema_version: \"2\"' in build_verify_report_text"
           - "'community.general.mail' in build_verify_email_text"
           - "'is mapping' in build_verify_record_text"
+          - "'expected time frame' in build_verify_record_text"
+          - "'build_verification_job_status.yml' in build_verify_playbook_text"
+          - >-
+            build_verify_playbook_text.index('report.yml')
+            < build_verify_playbook_text.index('build_verification_job_status.yml')
+          - "'systems_failed' in build_verify_job_status_text"
+          - "'systems_unreachable' in build_verify_job_status_text"
+          - "'report was generated' in build_verify_job_status_text"
+          - "'Fail the Windows job' not in build_verify_report_text"
+          - "'build_verify_email_expect_invalid' not in build_verify_email_text"
+          - "build_verify_email_text.index('Validate SMTP settings') < build_verify_email_text.index('rescue:')"
         fail_msg: Build verification no longer matches the read-only reporting contract.
 
 - name: Register fictional Windows build queries
@@ -424,22 +436,34 @@
     report_email_to: []
     report_email_attach_csv: true
     report_email_fail_on_error: true
-    build_verify_email_expect_invalid: true
     build_verify_output_dir: /tmp/aap-build-verification-test
     build_verify_email_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/email.yml"
   tasks:
-    - name: Include the production report task with email enabled
-      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/report.yml"
-      run_once: true
+    - name: Include the report and expect invalid SMTP to fail after the artifact exists
+      block:
+        - name: Include the production report task with email enabled
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/report.yml"
+          run_once: true
+      rescue:
+        - name: Record the expected SMTP rejection
+          ansible.builtin.set_fact:
+            build_verify_smtp_rejected: true
+          run_once: true
 
-    - name: Assert validation failed before community.general.mail
+        - name: Clear the expected SMTP failure so this test play can finish
+          ansible.builtin.meta: clear_host_errors
+
+    - name: Assert invalid SMTP marks delivery failed and keeps the report
       ansible.builtin.assert:
         that:
+          - build_verify_smtp_rejected | default(false) | bool
+          - build_verification_report.email_delivery == 'failed'
+          - build_verification_report.schema_version == '2'
+          - build_verification_csv is defined
           - build_verification_email_validation is failed
           - "'report_email_smtp_host' in (build_verification_email_validation.msg | default(''))"
-          - build_verification_email_result is skipped
-          - build_verification_csv is defined
-        fail_msg: Email-enabled build verification did not fail closed before sending mail.
+          - build_verification_email_result is not defined
+        fail_msg: Invalid SMTP settings left email delivery pending or removed the report.
       run_once: true
 
 - name: Register an all-failed collection
@@ -575,4 +599,376 @@
           - (build_verification_csv.splitlines() | length) == 501
           - "'20348.2849' in build_verification_csv"
         fail_msg: The 500-host build report did not reconcile.
+      run_once: true
+
+- name: Register an ansible-core 2.16 query timeout
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add a host whose module exceeded the expected time frame
+      ansible.builtin.add_host:
+        name: win-timeout-216
+        groups: build_verify_timeout_216
+        patch_environment: LAB
+        windows_build_query:
+          failed: true
+          rc: 1
+          stdout: ""
+          msg: >-
+            The win_shell action failed to execute in the expected time frame (120)
+            and was terminated
+
+- name: Record the 2.16 timeout as a failed Windows collection
+  hosts: build_verify_timeout_216
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Include the production build record task
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/build_verification_record.yml"
+
+    - name: Assert the 2.16 timeout has a clear diagnostic
+      ansible.builtin.assert:
+        that:
+          - build_verification_record.collection_status == 'failed'
+          - build_verification_record.diagnostic == 'WinRM query timed out.'
+          - build_verification_record.current_build == 'not_available'
+        fail_msg: An expected-time-frame timeout did not keep the clear timeout diagnostic.
+
+- name: Register collections that must leave the Windows job successful
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add a successful host whose UBR is unavailable
+      ansible.builtin.add_host:
+        name: win-job-noubr
+        groups: build_verify_job_ok
+        patch_environment: LAB
+        patch_location: London
+        cmdb_fqdn: win-job-noubr.cmdb.example
+        cmdb_os_release: Windows Server 2016
+        sys_id: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+        windows_build_query:
+          failed: false
+          unreachable: false
+          rc: 0
+          stdout: >-
+            {"Caption":"Microsoft Windows Server 2016 Datacenter",
+            "Version":"10.0.14393","BuildNumber":"14393","UBR":null,
+            "UbrAvailable":false,"FullBuild":"14393",
+            "DNSHostName":"WIN-JOB-NOUBR","CSName":"WIN-JOB-NOUBR",
+            "FQDN":"win-job-noubr.lab.example.internal"}
+
+    - name: Add a successful host with no CMDB metadata
+      ansible.builtin.add_host:
+        name: win-job-nocmdb
+        groups: build_verify_job_ok
+        patch_environment: LAB
+        windows_build_query:
+          failed: false
+          unreachable: false
+          rc: 0
+          stdout: >-
+            {"Caption":"Microsoft Windows Server 2019 Standard",
+            "Version":"10.0.17763","BuildNumber":"17763","UBR":6530,
+            "UbrAvailable":true,"FullBuild":"17763.6530",
+            "DNSHostName":"WIN-JOB-NOCMDB","CSName":"WIN-JOB-NOCMDB",
+            "FQDN":"win-job-nocmdb.lab.example.internal"}
+
+- name: Let the Windows job succeed when every collection succeeded
+  hosts: build_verify_job_ok
+  connection: local
+  gather_facts: false
+  vars:
+    report_email_enabled: false
+    build_verify_output_dir: /tmp/aap-build-verification-test
+    build_verify_email_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/email.yml"
+  tasks:
+    - name: Include the production build record task
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/build_verification_record.yml"
+
+    - name: Include the production report task
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/report.yml"
+      run_once: true
+
+    - name: Include the Windows job status check
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/build_verification_job_status.yml"
+      run_once: true
+
+    - name: Assert missing CMDB data and a missing UBR stay successful
+      ansible.builtin.assert:
+        that:
+          - build_verification_job_status is skipped
+          - (build_verification_report.total_systems | int) == 2
+          - (build_verification_report.systems_succeeded | int) == 2
+          - (build_verification_report.systems_failed | int) == 0
+          - (build_verification_report.systems_unreachable | int) == 0
+          - build_verification_report.schema_version == '2'
+          - build_verification_csv is defined
+          - hostvars['win-job-noubr'].build_verification_record.collection_status == 'success'
+          - hostvars['win-job-noubr'].build_verification_record.current_build == '14393 (revision unavailable)'
+          - hostvars['win-job-noubr'].build_verification_record.diagnostic == 'revision unavailable.'
+          - hostvars['win-job-nocmdb'].build_verification_record.collection_status == 'success'
+          - "'Inventory FQDN was not available.' in hostvars['win-job-nocmdb'].build_verification_record.diagnostic"
+          - "'Inventory OS release was not available.' in hostvars['win-job-nocmdb'].build_verification_record.diagnostic"
+          - "'Inventory CI sys_id was not available.' in hostvars['win-job-nocmdb'].build_verification_record.diagnostic"
+        fail_msg: A successful collection was failed for missing CMDB data or a missing UBR.
+      run_once: true
+
+- name: Register one failed host beside one successful host
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add the successful host
+      ansible.builtin.add_host:
+        name: win-job-one-ok
+        groups: build_verify_job_one_failed
+        build_verification_record:
+          inventory_hostname: win-job-one-ok
+          hostname: win-job-one-ok
+          fqdn: win-job-one-ok.cmdb.example
+          platform: windows
+          os_release: Windows Server 2022
+          os_version: "10.0.20348"
+          current_build: "20348.2849"
+          current_build_kind: windows_build
+          location: London
+          patch_environment: LAB
+          snow_ci_sys_id: not_available
+          collection_status: success
+          collection_time_utc: "2026-10-29T18:20:00Z"
+          diagnostic: ""
+
+    - name: Add the failed host
+      ansible.builtin.add_host:
+        name: win-job-one-bad
+        groups: build_verify_job_one_failed
+        build_verification_record:
+          inventory_hostname: win-job-one-bad
+          hostname: win-job-one-bad
+          fqdn: not_available
+          platform: windows
+          os_release: not_available
+          os_version: not_available
+          current_build: not_available
+          current_build_kind: windows_build
+          location: ""
+          patch_environment: LAB
+          snow_ci_sys_id: not_available
+          collection_status: failed
+          collection_time_utc: "2026-10-29T18:20:00Z"
+          diagnostic: OS query failed.
+
+- name: Fail the Windows job after reporting one failed host
+  hosts: build_verify_job_one_failed
+  connection: local
+  gather_facts: false
+  vars:
+    report_email_enabled: false
+    build_verify_output_dir: /tmp/aap-build-verification-test
+    build_verify_email_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/email.yml"
+  tasks:
+    - name: Publish the report before the job status check
+      block:
+        - name: Include the production report task
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/report.yml"
+          run_once: true
+
+        - name: Include the Windows job status check
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/build_verification_job_status.yml"
+          run_once: true
+      rescue:
+        - name: Record the expected job failure
+          ansible.builtin.set_fact:
+            build_verify_job_failed: true
+          run_once: true
+
+        - name: Clear the expected job failure so this test play can finish
+          ansible.builtin.meta: clear_host_errors
+
+    - name: Assert the report exists and the job failed for one failed host
+      ansible.builtin.assert:
+        that:
+          - build_verify_job_failed | default(false) | bool
+          - build_verification_csv is defined
+          - build_verification_report.schema_version == '2'
+          - (build_verification_report.total_systems | int) == 2
+          - (build_verification_report.systems_succeeded | int) == 1
+          - (build_verification_report.systems_failed | int) == 1
+          - (build_verification_report.systems_unreachable | int) == 0
+          - "'win-job-one-bad' in build_verification_csv"
+          - build_verification_job_status is failed
+          - "'report was generated' in build_verification_job_status.msg"
+          - "'Targeted hosts: 2' in build_verification_job_status.msg"
+          - "'Successfully collected: 1' in build_verification_job_status.msg"
+          - "'Failed hosts: 1' in build_verification_job_status.msg"
+          - "'Unreachable hosts: 0' in build_verification_job_status.msg"
+        fail_msg: One failed host did not fail the job after the report was written.
+      run_once: true
+
+- name: Register one unreachable host beside one successful host
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add the successful host
+      ansible.builtin.add_host:
+        name: win-job-reach-ok
+        groups: build_verify_job_one_unreachable
+        build_verification_record:
+          inventory_hostname: win-job-reach-ok
+          hostname: win-job-reach-ok
+          fqdn: win-job-reach-ok.cmdb.example
+          platform: windows
+          os_release: Windows Server 2019
+          os_version: "10.0.17763"
+          current_build: "17763.6530"
+          current_build_kind: windows_build
+          location: London
+          patch_environment: LAB
+          snow_ci_sys_id: not_available
+          collection_status: success
+          collection_time_utc: "2026-10-29T18:21:00Z"
+          diagnostic: ""
+
+    - name: Add the unreachable host
+      ansible.builtin.add_host:
+        name: win-job-reach-down
+        groups: build_verify_job_one_unreachable
+        build_verification_record:
+          inventory_hostname: win-job-reach-down
+          hostname: win-job-reach-down
+          fqdn: not_available
+          platform: windows
+          os_release: not_available
+          os_version: not_available
+          current_build: not_available
+          current_build_kind: windows_build
+          location: ""
+          patch_environment: LAB
+          snow_ci_sys_id: not_available
+          collection_status: unreachable
+          collection_time_utc: "2026-10-29T18:21:00Z"
+          diagnostic: Host unreachable.
+
+- name: Fail the Windows job after reporting one unreachable host
+  hosts: build_verify_job_one_unreachable
+  connection: local
+  gather_facts: false
+  vars:
+    report_email_enabled: false
+    build_verify_output_dir: /tmp/aap-build-verification-test
+    build_verify_email_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/email.yml"
+  tasks:
+    - name: Publish the report before the job status check
+      block:
+        - name: Include the production report task
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/report.yml"
+          run_once: true
+
+        - name: Include the Windows job status check
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/build_verification_job_status.yml"
+          run_once: true
+      rescue:
+        - name: Record the expected job failure
+          ansible.builtin.set_fact:
+            build_verify_job_failed: true
+          run_once: true
+
+        - name: Clear the expected job failure so this test play can finish
+          ansible.builtin.meta: clear_host_errors
+
+    - name: Assert the report exists and the job failed for one unreachable host
+      ansible.builtin.assert:
+        that:
+          - build_verify_job_failed | default(false) | bool
+          - build_verification_csv is defined
+          - (build_verification_report.total_systems | int) == 2
+          - (build_verification_report.systems_succeeded | int) == 1
+          - (build_verification_report.systems_failed | int) == 0
+          - (build_verification_report.systems_unreachable | int) == 1
+          - "'win-job-reach-down' in build_verification_csv"
+          - build_verification_job_status is failed
+          - "'report was generated' in build_verification_job_status.msg"
+          - "'Targeted hosts: 2' in build_verification_job_status.msg"
+          - "'Successfully collected: 1' in build_verification_job_status.msg"
+          - "'Failed hosts: 0' in build_verification_job_status.msg"
+          - "'Unreachable hosts: 1' in build_verification_job_status.msg"
+        fail_msg: One unreachable host did not fail the job after the report was written.
+      run_once: true
+
+- name: Register a collection where every host is unreachable
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add unreachable hosts
+      ansible.builtin.add_host:
+        name: "win-job-down-{{ item }}"
+        groups: build_verify_job_all_unreachable
+        build_verification_record:
+          inventory_hostname: "win-job-down-{{ item }}"
+          hostname: "win-job-down-{{ item }}"
+          fqdn: not_available
+          platform: windows
+          os_release: not_available
+          os_version: not_available
+          current_build: not_available
+          current_build_kind: windows_build
+          location: ""
+          patch_environment: LAB
+          snow_ci_sys_id: not_available
+          collection_status: unreachable
+          collection_time_utc: "2026-10-29T18:22:00Z"
+          diagnostic: Host unreachable.
+      loop:
+        - a
+        - b
+
+- name: Fail the Windows job after reporting every host unreachable
+  hosts: build_verify_job_all_unreachable
+  connection: local
+  gather_facts: false
+  vars:
+    report_email_enabled: false
+    build_verify_output_dir: /tmp/aap-build-verification-test
+    build_verify_email_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/email.yml"
+  tasks:
+    - name: Publish the report before the job status check
+      block:
+        - name: Include the production report task
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/report.yml"
+          run_once: true
+
+        - name: Include the Windows job status check
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/windows/tasks/build_verification_job_status.yml"
+          run_once: true
+      rescue:
+        - name: Record the expected job failure
+          ansible.builtin.set_fact:
+            build_verify_job_failed: true
+          run_once: true
+
+        - name: Clear the expected job failure so this test play can finish
+          ansible.builtin.meta: clear_host_errors
+
+    - name: Assert the report exists and the job failed for every unreachable host
+      ansible.builtin.assert:
+        that:
+          - build_verify_job_failed | default(false) | bool
+          - build_verification_csv is defined
+          - (build_verification_csv.splitlines() | length) == 3
+          - (build_verification_report.total_systems | int) == 2
+          - (build_verification_report.systems_succeeded | int) == 0
+          - (build_verification_report.systems_failed | int) == 0
+          - (build_verification_report.systems_unreachable | int) == 2
+          - build_verification_job_status is failed
+          - "'report was generated' in build_verification_job_status.msg"
+          - "'Targeted hosts: 2' in build_verification_job_status.msg"
+          - "'Successfully collected: 0' in build_verification_job_status.msg"
+          - "'Failed hosts: 0' in build_verification_job_status.msg"
+          - "'Unreachable hosts: 2' in build_verification_job_status.msg"
+        fail_msg: An all-unreachable collection did not fail the job after the report was written.
       run_once: true

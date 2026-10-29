@@ -1,0 +1,18 @@
+---
+# Windows job policy. The shared report does not decide job success.
+# Counts come from the report that was just published. Missing CMDB values
+# and a missing UBR are collection_status success, so they do not match here.
+
+- name: Fail the Windows job when any targeted host was not collected
+  ansible.builtin.fail:
+    msg: >-
+      Windows build verification report was generated.
+      Targeted hosts: {{ build_verification_report.total_systems }}.
+      Successfully collected: {{ build_verification_report.systems_succeeded }}.
+      Failed hosts: {{ build_verification_report.systems_failed }}.
+      Unreachable hosts: {{ build_verification_report.systems_unreachable }}.
+  when: >-
+    (build_verification_report.systems_failed | int) > 0
+    or (build_verification_report.systems_unreachable | int) > 0
+  register: build_verification_job_status
+  run_once: true

@@ -11,8 +11,10 @@
 # A localhost play would be skipped when the Limit is a Windows group.
 #
 # A failed OS query is rescued on that host so the other hosts and the report
-# still run. The job is not successful when a query fails. Unreachable hosts
-# stay in the play. The report is still written when every host fails.
+# still run. Unreachable hosts stay in the play. The CSV and artifacts are
+# written first, including when every host fails. The job then fails when any
+# targeted host is failed or unreachable. Missing CMDB values and a missing
+# UBR stay successful and do not fail the job.
 #
 # Job template: Windows - Build Verification
 #   Inventory: the LAB, IST, UAT, or PROD Windows inventory
@@ -129,4 +131,8 @@
   tasks:
     - name: Aggregate and publish the build verification report
       ansible.builtin.include_tasks: "{{ playbook_dir }}/../build_verification/tasks/report.yml"
+      run_once: true
+
+    - name: Fail the Windows job when any targeted host was not collected
+      ansible.builtin.include_tasks: tasks/build_verification_job_status.yml
       run_once: true

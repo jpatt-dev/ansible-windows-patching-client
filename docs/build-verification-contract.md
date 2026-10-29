@@ -117,9 +117,20 @@ Play 1 does not gather facts. It runs the existing PowerShell query with a
 `HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion`. Native Windows facts do
 not include UBR, so this query stays.
 
-`success` requires a non-empty OS version and a numeric base build. A rescued
-failure still produces a row, and the AAP job stays failed. Unreachable hosts
-remain in the play. One bad host does not drop the others from the CSV.
+`success` requires a non-empty OS version and a numeric base build. A missing
+UBR stays `success` and the diagnostic starts with `revision unavailable.`
+A query that fails because the module reports `timed out` or
+`expected time frame` is `failed`, with diagnostic `WinRM query timed out.`
+The timeout stays 120 seconds.
+
+A rescued failure still produces a row. Unreachable hosts remain in the play.
+One bad host does not drop the others from the CSV. After the CSV, the JSON
+artifacts, and optional email are finished, the Windows playbook reads
+`systems_failed` and `systems_unreachable`. Any failed or unreachable targeted
+host fails the AAP job. The failure message states the targeted, collected,
+failed, and unreachable totals and that the report was generated. A fully
+successful collection lets the job succeed. Missing CMDB metadata does not
+fail the job. The shared report tasks do not apply this Windows job rule.
 
 ## What Linux needs to match this report
 
@@ -170,8 +181,9 @@ The CSV file is written on the execution environment under
 `/tmp/aap-build-verification`. It is not written on the Windows host.
 
 Email is off unless `report_email_enabled` is true. The mail tasks load only
-then. One message is sent per job. Empty SMTP settings fail that job after
-the CSV artifact exists. The variables are `report_email_smtp_host`,
+then. One message is sent per job. Invalid SMTP settings set `email_delivery`
+to `failed`, leave the CSV and JSON artifact in place, and fail the job when
+`report_email_fail_on_error` is true. The variables are `report_email_smtp_host`,
 `report_email_smtp_port` (`25`), `report_email_smtp_secure` (`never` for the
 internal relay), `report_email_from`, `report_email_to`,
 `report_email_attach_csv`, and `report_email_fail_on_error`.

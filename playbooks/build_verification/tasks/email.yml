@@ -3,35 +3,31 @@
 # Included only when report_email_enabled is true, so a report-only run
 # does not load community.general.
 
-- name: Validate SMTP settings before sending the build report
-  ansible.builtin.assert:
-    that:
-      - (report_email_smtp_host | default('') | string | trim | length) > 0
-      - (report_email_smtp_port | default(0) | int) >= 1
-      - (report_email_smtp_port | default(0) | int) <= 65535
-      - >-
-        (report_email_smtp_secure | default('never') | string | trim | lower)
-        in ['always', 'never', 'starttls', 'try']
-      - (report_email_from | default('') | string | trim | length) > 0
-      - report_email_to | default([]) is sequence
-      - report_email_to | default([]) is not string
-      - >-
-        (report_email_to | default([]) | select('string') | map('trim')
-        | reject('equalto', '') | list | length) > 0
-    fail_msg: >-
-      Build verification email requires report_email_smtp_host,
-      report_email_smtp_port, report_email_smtp_secure
-      (always, never, starttls, or try), report_email_from,
-      and a non-empty report_email_to list.
-  # Tests set this so an expected rejection can be asserted. A job leaves it false.
-  ignore_errors: "{{ build_verify_email_expect_invalid | default(false) | bool }}"
-  register: build_verification_email_validation
-  run_once: true
-
 - name: Send one build verification email
-  when: build_verification_email_validation is succeeded
   run_once: true
   block:
+    - name: Validate SMTP settings before sending the build report
+      ansible.builtin.assert:
+        that:
+          - (report_email_smtp_host | default('') | string | trim | length) > 0
+          - (report_email_smtp_port | default(0) | int) >= 1
+          - (report_email_smtp_port | default(0) | int) <= 65535
+          - >-
+            (report_email_smtp_secure | default('never') | string | trim | lower)
+            in ['always', 'never', 'starttls', 'try']
+          - (report_email_from | default('') | string | trim | length) > 0
+          - report_email_to | default([]) is sequence
+          - report_email_to | default([]) is not string
+          - >-
+            (report_email_to | default([]) | select('string') | map('trim')
+            | reject('equalto', '') | list | length) > 0
+        fail_msg: >-
+          Build verification email requires report_email_smtp_host,
+          report_email_smtp_port, report_email_smtp_secure
+          (always, never, starttls, or try), report_email_from,
+          and a non-empty report_email_to list.
+      register: build_verification_email_validation
+
     - name: Confirm the CSV attachment is a regular file
       ansible.builtin.stat:
         path: "{{ build_verification_csv_write.dest }}"
