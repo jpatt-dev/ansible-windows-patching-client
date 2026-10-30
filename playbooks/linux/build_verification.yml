@@ -1,8 +1,9 @@
 ---
 # Read-only Linux distribution and kernel snapshot for AAP 2.7.
 # Live data is ansible_distribution_version and ansible_kernel from minimal facts.
-# Hostname, location, environment, and sys_id come from inventory.
-# FQDN and OS release stay not_available until those inventory names exist.
+# Inventory fields are inventory_hostname, fqdn, os, location, environment,
+# and sys_id. Blank FQDN, OS release, and sys_id stay not_available.
+# Location and environment stay empty strings. Live facts do not fill them.
 # It does not update packages, reboot, or call ServiceNow.
 #
 # Both plays use hosts: linux_hosts, so a Limit only narrows that group.

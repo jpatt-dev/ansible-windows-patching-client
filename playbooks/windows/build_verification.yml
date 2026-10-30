@@ -1,9 +1,9 @@
 ---
 # Read-only Windows build snapshot for AAP 2.7.
 # Live data is OS version and BuildNumber.UBR. Native facts do not include UBR.
-# Inventory fields are inventory_hostname, cmdb_fqdn, cmdb_os_release,
-# patch_location, patch_environment, and sys_id. Blank CMDB values stay
-# not_available. Location stays an empty string. Live names do not fill them.
+# Inventory fields are inventory_hostname, fqdn, os, location, environment,
+# and sys_id. Blank FQDN, OS release, and sys_id stay not_available.
+# Location and environment stay empty strings. Live names do not fill them.
 # It does not install updates, reboot, change WSUS, or call ServiceNow.
 #
 # Both plays use hosts: windows_hosts, so a Limit only narrows that group.

@@ -59,11 +59,13 @@ Optional:
 Build verification does not query ServiceNow. The normalized inventory
 variables and the CSV contract are in `docs/build-verification-contract.md`.
 
-This repository reads `inventory_hostname`, `cmdb_fqdn`, `cmdb_os_release`,
-`patch_location`, `patch_environment`, and `sys_id`. It does not sync those
-values from ServiceNow. The client inventory workstream still has to map the
-CMDB columns onto these names. A missing value does not stop the live Windows
-build query. Live OS caption and DNS names are not copied into the CMDB fields.
+This repository reads `inventory_hostname`, `fqdn`, `os`, `location`,
+`environment`, and `sys_id` for both Windows and Linux build verification.
+It does not sync those values from ServiceNow. The client inventory
+workstream maps the CMDB columns onto these names. A missing value does not
+stop live OS collection. Live OS names are not copied into those fields.
+`os` is the CMDB release. The live OS version and current build stay
+collected from the host.
 
 Adding these variables must not rebuild `windows_wave_*`, exemption groups, or
 `patch_temp_*` / `reboot_temp_*` hostvars. That overwrite risk is the blocking

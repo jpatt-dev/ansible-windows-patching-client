@@ -97,10 +97,10 @@
       ansible.builtin.add_host:
         name: win-2016
         groups: build_verify_cases
-        patch_environment: LAB
-        patch_location: São Paulo
-        cmdb_fqdn: win-2016.cmdb.example
-        cmdb_os_release: Windows Server 2016
+        environment: LAB
+        location: São Paulo
+        fqdn: win-2016.cmdb.example
+        os: Windows Server 2016
         sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
         build_expected_status: success
         build_expected_build: "14393.7699"
@@ -118,10 +118,10 @@
       ansible.builtin.add_host:
         name: win-2019
         groups: build_verify_cases
-        patch_environment: LAB
-        patch_location: Azure-East
-        cmdb_fqdn: win-2019.cmdb.example
-        cmdb_os_release: Windows Server 2019
+        environment: LAB
+        location: Azure-East
+        fqdn: win-2019.cmdb.example
+        os: Windows Server 2019
         sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
         build_expected_status: success
         build_expected_build: "17763.6530"
@@ -148,10 +148,10 @@
       ansible.builtin.add_host:
         name: win-2022
         groups: build_verify_cases
-        patch_environment: LAB
-        patch_location: "East \"1\""
-        cmdb_fqdn: win-2022.cmdb.example
-        cmdb_os_release: Windows Server 2022
+        environment: LAB
+        location: "East \"1\""
+        fqdn: win-2022.cmdb.example
+        os: Windows Server 2022
         sys_id: cccccccccccccccccccccccccccccccc
         build_expected_status: success
         build_expected_build: "20348.2849"
@@ -169,10 +169,10 @@
       ansible.builtin.add_host:
         name: win-2025
         groups: build_verify_cases
-        patch_environment: LAB
-        patch_location: "Datacenter, West"
-        cmdb_fqdn: win-2025.cmdb.example
-        cmdb_os_release: Windows Server 2025
+        environment: LAB
+        location: "Datacenter, West"
+        fqdn: win-2025.cmdb.example
+        os: Windows Server 2025
         sys_id: dddddddddddddddddddddddddddddddd
         build_expected_status: success
         build_expected_build: "26100.2033"
@@ -190,10 +190,10 @@
       ansible.builtin.add_host:
         name: win-noubr
         groups: build_verify_cases
-        patch_environment: LAB
-        patch_location: London
-        cmdb_fqdn: win-noubr.cmdb.example
-        cmdb_os_release: Windows Server 2016
+        environment: LAB
+        location: London
+        fqdn: win-noubr.cmdb.example
+        os: Windows Server 2016
         sys_id: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         build_expected_status: success
         build_expected_build: "14393 (revision unavailable)"
@@ -211,10 +211,10 @@
       ansible.builtin.add_host:
         name: win-down
         groups: build_verify_cases
-        patch_environment: LAB
-        patch_location: Datacenter-West
-        cmdb_fqdn: "  "
-        cmdb_os_release: ""
+        environment: LAB
+        location: Datacenter-West
+        fqdn: "  "
+        os: ""
         build_expected_status: unreachable
         build_expected_build: not_available
         build_expected_version: not_available
@@ -229,8 +229,8 @@
       ansible.builtin.add_host:
         name: win-osfail
         groups: build_verify_cases
-        patch_environment: LAB
-        patch_location: Physical
+        environment: LAB
+        location: Physical
         build_expected_status: failed
         build_expected_build: not_available
         build_expected_version: not_available
@@ -247,8 +247,8 @@
       ansible.builtin.add_host:
         name: win-timeout
         groups: build_verify_cases
-        patch_environment: LAB
-        patch_location: London
+        environment: LAB
+        location: London
         build_expected_status: failed
         build_expected_build: not_available
         build_expected_version: not_available
@@ -265,9 +265,9 @@
       ansible.builtin.add_host:
         name: win-partial
         groups: build_verify_cases
-        patch_environment: LAB
-        patch_location: Datacenter-East
-        cmdb_os_release: Windows Server 2022
+        environment: LAB
+        location: Datacenter-East
+        os: Windows Server 2022
         build_expected_status: failed
         build_expected_build: not_available
         build_expected_version: "10.0.20348"
@@ -284,7 +284,7 @@
       ansible.builtin.add_host:
         name: win-noloc
         groups: build_verify_cases
-        patch_environment: LAB
+        environment: LAB
         build_expected_status: success
         build_expected_build: "17763.6530"
         build_expected_version: "10.0.17763"
@@ -316,6 +316,10 @@
           - build_verification_record.hostname == inventory_hostname
           - build_verification_record.fqdn == build_expected_fqdn
           - build_verification_record.os_release == build_expected_os
+          - build_verification_record.location == (location | default('') | string | trim)
+          - >-
+            build_verification_record.patch_environment
+            == (hostvars[inventory_hostname]['environment'] | default('') | string | trim)
           - "'Microsoft Windows' not in build_verification_record.os_release"
           - build_verification_record.platform == 'windows'
           - build_verification_record.current_build_kind == 'windows_build'
@@ -386,6 +390,38 @@
           - build_verification_report.patch_environment == 'LAB'
           - build_verification_report.schema_version == '2'
           - build_verification_report.email_delivery == 'skipped'
+          - "'snow_ci_sys_id' not in build_verification_csv"
+          - "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' not in build_verification_csv"
+          - >-
+            (build_verification_report.hosts
+            | selectattr('inventory_hostname', 'equalto', 'win-2016')
+            | map(attribute='snow_ci_sys_id') | first)
+            == 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+          - >-
+            (build_verification_report.hosts
+            | selectattr('inventory_hostname', 'equalto', 'win-2016')
+            | map(attribute='os_version') | first)
+            == '10.0.14393'
+          - >-
+            (build_verification_report.hosts
+            | selectattr('inventory_hostname', 'equalto', 'win-2016')
+            | map(attribute='current_build') | first)
+            == '14393.7699'
+          - >-
+            (build_verification_report.hosts
+            | selectattr('inventory_hostname', 'equalto', 'win-down')
+            | map(attribute='collection_status') | first)
+            == 'unreachable'
+          - >-
+            (build_verification_report.hosts
+            | selectattr('inventory_hostname', 'equalto', 'win-down')
+            | map(attribute='location') | first)
+            == 'Datacenter-West'
+          - >-
+            (build_verification_report.hosts
+            | selectattr('inventory_hostname', 'equalto', 'win-down')
+            | map(attribute='os_version') | first)
+            == 'not_available'
           - "'windows_build_verification_report' in build_verify_published"
           - "'windows_build_verification_csv' in build_verify_published"
           - build_verification_email_result is not defined
@@ -525,8 +561,11 @@
       ansible.builtin.add_host:
         name: win-missing
         groups: build_verify_missing
-        patch_environment: IST
-        patch_location: London
+        fqdn: win-missing.cmdb.example
+        os: Windows Server 2019
+        location: London
+        environment: IST
+        sys_id: ffffffffffffffffffffffffffffffff
 
 - name: Synthesize a row when collection produced nothing
   hosts: build_verify_missing
@@ -546,7 +585,24 @@
         that:
           - (build_verification_report.total_systems | int) == 1
           - (build_verification_report.systems_failed | int) == 1
+          - build_verification_report.schema_version == '2'
+          - build_verification_report.patch_environment == 'IST'
           - "'Build record was not produced' in build_verification_csv"
+          - "'win-missing.cmdb.example' in build_verification_csv"
+          - "'Windows Server 2019' in build_verification_csv"
+          - "'London' in build_verification_csv"
+          - "'ffffffffffffffffffffffffffffffff' not in build_verification_csv"
+          - >-
+            (build_verification_report.hosts | first).fqdn
+            == 'win-missing.cmdb.example'
+          - (build_verification_report.hosts | first).os_release == 'Windows Server 2019'
+          - (build_verification_report.hosts | first).location == 'London'
+          - (build_verification_report.hosts | first).patch_environment == 'IST'
+          - >-
+            (build_verification_report.hosts | first).snow_ci_sys_id
+            == 'ffffffffffffffffffffffffffffffff'
+          - (build_verification_report.hosts | first).os_version == 'not_available'
+          - (build_verification_report.hosts | first).current_build == 'not_available'
         fail_msg: A host with no collection record must still appear in the CSV.
       run_once: true
 
@@ -610,7 +666,7 @@
       ansible.builtin.add_host:
         name: win-timeout-216
         groups: build_verify_timeout_216
-        patch_environment: LAB
+        environment: LAB
         windows_build_query:
           failed: true
           rc: 1
@@ -644,10 +700,10 @@
       ansible.builtin.add_host:
         name: win-job-noubr
         groups: build_verify_job_ok
-        patch_environment: LAB
-        patch_location: London
-        cmdb_fqdn: win-job-noubr.cmdb.example
-        cmdb_os_release: Windows Server 2016
+        environment: LAB
+        location: London
+        fqdn: win-job-noubr.cmdb.example
+        os: Windows Server 2016
         sys_id: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         windows_build_query:
           failed: false
@@ -664,7 +720,7 @@
       ansible.builtin.add_host:
         name: win-job-nocmdb
         groups: build_verify_job_ok
-        patch_environment: LAB
+        environment: LAB
         windows_build_query:
           failed: false
           unreachable: false

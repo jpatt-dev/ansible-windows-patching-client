@@ -15,29 +15,31 @@ sync must not rebuild `windows_wave_*`, exemption groups, or `patch_temp_*` /
 | Variable | Required for a complete row | When missing |
 | --- | --- | --- |
 | `inventory_hostname` | Yes. This is the report hostname. | AAP always supplies it. |
-| `cmdb_fqdn` | Yes | `not_available`, plus a diagnostic |
-| `cmdb_os_release` | Yes | `not_available`, plus a diagnostic |
-| `patch_location` | Yes | Empty string. No site is invented. |
-| `patch_environment` | Yes. `LAB`, `IST`, `UAT`, or `PROD`. | Empty. The job label becomes `unspecified` when no host has a value, or `inconsistent` when hosts disagree. |
+| `fqdn` | Yes | `not_available`, plus a diagnostic |
+| `os` | Yes. CMDB operating system release. | `not_available`, plus a diagnostic |
+| `location` | Yes | Empty string. No site is invented. |
+| `environment` | Yes. `LAB`, `IST`, `UAT`, or `PROD`. | Empty. The job label becomes `unspecified` when no host has a value, or `inconsistent` when hosts disagree. |
 | `sys_id` | Yes. CMDB CI sys_id. | JSON `snow_ci_sys_id` is `not_available`, plus a diagnostic. |
 
-A value that is only whitespace is treated as missing. A missing CMDB field
-does not fail the live Windows build query. The live OS caption, DNS name,
-and FQDN are never copied into `cmdb_fqdn`, `cmdb_os_release`, location, or
-`sys_id`.
+Windows and Linux read the same six variables. A value that is only whitespace
+is treated as missing. A missing value does not fail a successful live OS
+collection. `os` is not the live OS version. The live OS caption, DNS name,
+and FQDN are never copied into `fqdn`, `os`, `location`, or `sys_id`.
+Ansible reserves the bare name `environment`, so the playbooks read that
+inventory value from hostvars.
 
 ## Reporting fields
 
 | Report field | Source |
 | --- | --- |
 | Hostname | `inventory_hostname` |
-| FQDN | `cmdb_fqdn` |
-| Platform | `windows` for this playbook |
-| OS Release | `cmdb_os_release` |
-| OS Version | Live Windows `Version`, for example `10.0.20348` |
-| Current Build / Kernel | Live `BuildNumber.UBR`, for example `20348.2849` |
-| Location | `patch_location` |
-| Environment | `patch_environment` |
+| FQDN | `fqdn` |
+| Platform | `windows` or `linux` |
+| OS Release | `os` |
+| OS Version | Live collected value. Windows `Version`, or Linux `ansible_distribution_version`. |
+| Current Build / Kernel | Live collected value. Windows `BuildNumber.UBR`, or Linux `ansible_kernel`. |
+| Location | `location` |
+| Environment | `environment`. The JSON field name remains `patch_environment`. |
 | Collection Status | `success`, `failed`, or `unreachable` |
 | Collection Time | UTC timestamp |
 | Diagnostic | Blank when the live build and the CMDB fields above are present |
@@ -134,11 +136,10 @@ fail the job. The shared report tasks do not apply this Windows job rule.
 
 ## What Linux needs to match this report
 
-Linux collection is owned by another consultant. This repository already has
-a Linux playbook that includes the shared report tasks. Its record task does
-not yet read `cmdb_fqdn` or `cmdb_os_release`. To produce the same CSV, a
-Linux run needs one `build_verification_record` per host and then the same
-include:
+Linux collection uses the same inventory variables and the same CSV. Its
+record task reads `fqdn`, `os`, `location`, `environment`, and `sys_id`. To
+produce the same CSV, a Linux run needs one `build_verification_record` per
+host and then the same include:
 
 `playbooks/build_verification/tasks/report.yml`
 

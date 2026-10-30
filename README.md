@@ -45,22 +45,23 @@ Windows and Linux each have a collection playbook. Both include
 optional email. There is no separate reporting role.
 
 The job does not query ServiceNow. The reporting contract is
-`docs/build-verification-contract.md`. Windows reads `inventory_hostname`,
-`cmdb_fqdn`, `cmdb_os_release`, `patch_location`, `patch_environment`, and
-`sys_id`. A missing CMDB value does not stop the live build query, and the
-live OS caption or DNS name does not fill that value. The current build is
-not a compliance result.
+`docs/build-verification-contract.md`. Windows and Linux read
+`inventory_hostname`, `fqdn`, `os`, `location`, `environment`, and `sys_id`.
+A missing inventory value does not stop the live OS collection, and live OS
+names do not fill those values. `os` is the CMDB release. The live OS version
+and current build stay collected from the host. The current build is not a
+compliance result.
 
 | Field | Source |
 | --- | --- |
 | Hostname | `inventory_hostname` |
-| FQDN | `cmdb_fqdn` |
-| Platform | `windows` |
-| OS Release | `cmdb_os_release` |
-| OS Version | Live Windows version |
-| Current Build / Kernel | Live `BuildNumber.UBR` |
-| Location | `patch_location` (empty when unset) |
-| Environment | `patch_environment` |
+| FQDN | `fqdn` |
+| Platform | `windows` or `linux` |
+| OS Release | `os` |
+| OS Version | Live OS version |
+| Current Build / Kernel | Live Windows build or Linux kernel |
+| Location | `location` (empty when unset) |
+| Environment | `environment` |
 | Collection Status | `success`, `failed`, or `unreachable` |
 | Collection Time | Ansible |
 | Diagnostic | Ansible |
@@ -128,7 +129,7 @@ A successful collection with a full build still names any missing CMDB field
 in `Diagnostic`. Values that start with `=`, `+`, `-`, `@`, a tab, or a
 carriage return are prefixed with an apostrophe so Excel does not treat them
 as formulas. Missing collected facts are `not_available`. A missing
-`patch_location` is an empty location. Per-host rows stay in the JSON
+`location` is an empty location. Per-host rows stay in the JSON
 artifact. One run produces one CSV and, when email is enabled, one message.
 
 AAP LAB, after the inventory variables exist on the Windows inventory:
@@ -147,8 +148,8 @@ AAP LAB, after the inventory variables exist on the Windows inventory:
 5. Enable email only with the internal relay variables and confirm one message.
 
 Client configuration still required: map the ServiceNow CMDB columns onto
-`cmdb_fqdn`, `cmdb_os_release`, `patch_location`, `patch_environment`, and
-`sys_id` without rebuilding wave or exemption data. Set the SMTP extra
+`fqdn`, `os`, `location`, `environment`, and `sys_id` without rebuilding wave
+or exemption data. Set the SMTP extra
 variables only when email is wanted. Create the AAP job template if it is
 not already present. This repository does not declare that template in
 controller CaC.

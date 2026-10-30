@@ -2,9 +2,10 @@
 # Turn one Windows OS query into a build-verification row.
 # Caller sets windows_build_query. This file does not contact Windows.
 # Hostname, FQDN, OS release, location, environment, and sys_id come from
-# inventory: inventory_hostname, cmdb_fqdn, cmdb_os_release, patch_location,
-# patch_environment, and sys_id. A blank value stays not_available, except
-# location, which stays an empty string.
+# inventory: inventory_hostname, fqdn, os, location, environment, and sys_id.
+# A blank FQDN, OS release, or sys_id stays not_available. Location and
+# environment stay empty strings. The JSON field patch_environment is filled
+# from inventory environment.
 # A row is success only when OS version and base build are present.
 # Missing UBR keeps the base build and says the revision is unavailable.
 # Live caption and DNS names are not copied into the inventory fields.
@@ -14,18 +15,19 @@
     build_verify_identity_hostname: "{{ inventory_hostname }}"
     build_verify_identity_fqdn: >-
       {{
-        (cmdb_fqdn | default('') | string | trim)
-        if ((cmdb_fqdn | default('') | string | trim | length) > 0)
+        (fqdn | default('') | string | trim)
+        if ((fqdn | default('') | string | trim | length) > 0)
         else 'not_available'
       }}
     build_verify_identity_os_release: >-
       {{
-        (cmdb_os_release | default('') | string | trim)
-        if ((cmdb_os_release | default('') | string | trim | length) > 0)
+        (os | default('') | string | trim)
+        if ((os | default('') | string | trim | length) > 0)
         else 'not_available'
       }}
-    build_verify_identity_location: "{{ patch_location | default('') | string | trim }}"
-    build_verify_identity_environment: "{{ patch_environment | default('') | string | trim }}"
+    build_verify_identity_location: "{{ location | default('') | string | trim }}"
+    # Ansible reserves the name environment. The inventory value is on hostvars.
+    build_verify_identity_environment: "{{ hostvars[inventory_hostname]['environment'] | default('') | string | trim }}"
     build_verify_identity_sys_id: >-
       {{
         (sys_id | default('') | string | trim)
@@ -36,10 +38,10 @@
       {{
         [
           'Inventory FQDN was not available.'
-          if ((cmdb_fqdn | default('') | string | trim | length) == 0)
+          if ((fqdn | default('') | string | trim | length) == 0)
           else '',
           'Inventory OS release was not available.'
-          if ((cmdb_os_release | default('') | string | trim | length) == 0)
+          if ((os | default('') | string | trim | length) == 0)
           else '',
           'Inventory CI sys_id was not available.'
           if ((sys_id | default('') | string | trim | length) == 0)

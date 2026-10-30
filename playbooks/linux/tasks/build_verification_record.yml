@@ -2,16 +2,28 @@
 # Turn minimal Linux facts into a build-verification row.
 # Caller sets linux_build_query. This file does not contact Linux.
 # Hostname, FQDN, OS release, location, environment, and sys_id come from
-# inventory. Distribution version and the running kernel are the live fields.
+# inventory: inventory_hostname, fqdn, os, location, environment, and sys_id.
+# Distribution version and the running kernel stay the live fields.
 # A row is success only when both live values are present.
 
 - name: Read build verification identity from inventory
   ansible.builtin.set_fact:
     build_verify_identity_hostname: "{{ inventory_hostname }}"
-    build_verify_identity_fqdn: not_available
-    build_verify_identity_os_release: not_available
-    build_verify_identity_location: "{{ patch_location | default('') | string | trim }}"
-    build_verify_identity_environment: "{{ patch_environment | default('') | string | trim }}"
+    build_verify_identity_fqdn: >-
+      {{
+        (fqdn | default('') | string | trim)
+        if ((fqdn | default('') | string | trim | length) > 0)
+        else 'not_available'
+      }}
+    build_verify_identity_os_release: >-
+      {{
+        (os | default('') | string | trim)
+        if ((os | default('') | string | trim | length) > 0)
+        else 'not_available'
+      }}
+    build_verify_identity_location: "{{ location | default('') | string | trim }}"
+    # Ansible reserves the name environment. The inventory value is on hostvars.
+    build_verify_identity_environment: "{{ hostvars[inventory_hostname]['environment'] | default('') | string | trim }}"
     build_verify_identity_sys_id: >-
       {{
         (sys_id | default('') | string | trim)
@@ -20,12 +32,17 @@
       }}
     build_verify_identity_diagnostic: >-
       {{
-        'Inventory FQDN was not available. Inventory OS release was not available.'
-        ~ (
-          ' Inventory CI sys_id was not available.'
+        [
+          'Inventory FQDN was not available.'
+          if ((fqdn | default('') | string | trim | length) == 0)
+          else '',
+          'Inventory OS release was not available.'
+          if ((os | default('') | string | trim | length) == 0)
+          else '',
+          'Inventory CI sys_id was not available.'
           if ((sys_id | default('') | string | trim | length) == 0)
           else ''
-        )
+        ] | reject('equalto', '') | list | join(' ')
       }}
   changed_when: false
 

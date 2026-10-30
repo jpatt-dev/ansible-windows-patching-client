@@ -47,18 +47,22 @@
     build_verification_fallbacks_json: |
       {%- set ns = namespace(rows=[]) -%}
       {%- for name in build_verification_missing_names -%}
+      {%- set raw_fqdn = hostvars[name].fqdn | default('') | string | trim -%}
+      {%- set raw_os = hostvars[name].os | default('') | string | trim -%}
+      {%- set raw_location = hostvars[name].location | default('') | string | trim -%}
+      {%- set raw_environment = hostvars[name]['environment'] | default('') | string | trim -%}
       {%- set raw_sys_id = hostvars[name].sys_id | default('') | string | trim -%}
       {%- set row = {
         'inventory_hostname': name,
         'hostname': name,
-        'fqdn': 'not_available',
+        'fqdn': raw_fqdn if (raw_fqdn | length > 0) else 'not_available',
         'platform': build_verify_platform | default('windows'),
-        'os_release': 'not_available',
+        'os_release': raw_os if (raw_os | length > 0) else 'not_available',
         'os_version': 'not_available',
         'current_build': 'not_available',
         'current_build_kind': build_verify_build_kind | default('windows_build'),
-        'location': hostvars[name].patch_location | default('') | string | trim,
-        'patch_environment': hostvars[name].patch_environment | default('') | string | trim,
+        'location': raw_location,
+        'patch_environment': raw_environment,
         'snow_ci_sys_id': raw_sys_id if (raw_sys_id | length > 0) else 'not_available',
         'collection_status': 'failed',
         'collection_time_utc': build_verification_generated_at,

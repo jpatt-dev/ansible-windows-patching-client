@@ -37,8 +37,10 @@
       ansible.builtin.add_host:
         name: lin-ok
         groups: linux_build_cases
-        patch_environment: LAB
-        patch_location: "London, UK"
+        fqdn: lin-ok.cmdb.example
+        os: Red Hat Enterprise Linux 9
+        location: "London, UK"
+        environment: LAB
         sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
         ansible_distribution: RedHat
         ansible_distribution_version: "9.5"
@@ -48,12 +50,24 @@
           unreachable: false
           rc: 0
 
+    - name: Add a successful host with no inventory metadata
+      ansible.builtin.add_host:
+        name: lin-nometa
+        groups: linux_build_cases
+        ansible_distribution: RedHat
+        ansible_distribution_version: "8.10"
+        ansible_kernel: 4.18.0-553.el8_10.x86_64
+        linux_build_query:
+          failed: false
+          unreachable: false
+          rc: 0
+
     - name: Add a host whose kernel fact is missing
       ansible.builtin.add_host:
         name: lin-partial
         groups: linux_build_cases
-        patch_environment: LAB
-        patch_location: Datacenter-East
+        location: Datacenter-East
+        environment: LAB
         ansible_distribution: RedHat
         ansible_distribution_version: "9.5"
         ansible_kernel: ""
@@ -66,8 +80,11 @@
       ansible.builtin.add_host:
         name: lin-down
         groups: linux_build_cases
-        patch_environment: LAB
-        patch_location: Datacenter-East
+        fqdn: lin-down.cmdb.example
+        os: Red Hat Enterprise Linux 8
+        location: Datacenter-East
+        environment: LAB
+        sys_id: cccccccccccccccccccccccccccccccc
         linux_build_query:
           unreachable: true
           msg: SSH connection timed out
@@ -76,8 +93,8 @@
       ansible.builtin.add_host:
         name: lin-fail
         groups: linux_build_cases
-        patch_environment: LAB
-        patch_location: Datacenter-East
+        location: Datacenter-East
+        environment: LAB
         linux_build_query:
           failed: true
           rc: 1
@@ -95,24 +112,43 @@
       ansible.builtin.assert:
         that:
           - build_verification_record.hostname == inventory_hostname
-          - build_verification_record.fqdn == 'not_available'
-          - build_verification_record.os_release == 'not_available'
           - build_verification_record.platform == 'linux'
           - build_verification_record.current_build_kind == 'running_kernel'
           - build_verification_record.patched is not defined
           - build_verification_record.os_release != 'RedHat'
+          - build_verification_record.location == (location | default('') | string | trim)
+          - >-
+            build_verification_record.patch_environment
+            == (hostvars[inventory_hostname]['environment'] | default('') | string | trim)
         fail_msg: "{{ inventory_hostname }} used live facts for an inventory field."
 
     - name: Assert the successful Linux host
       ansible.builtin.assert:
         that:
           - build_verification_record.collection_status == 'success'
+          - build_verification_record.fqdn == 'lin-ok.cmdb.example'
+          - build_verification_record.os_release == 'Red Hat Enterprise Linux 9'
           - build_verification_record.os_version == '9.5'
           - build_verification_record.current_build == '5.14.0-503.14.1.el9_5.x86_64'
           - build_verification_record.snow_ci_sys_id == sys_id
-          - "'Inventory FQDN was not available.' in build_verification_record.diagnostic"
-          - "'Inventory CI sys_id was not available.' not in build_verification_record.diagnostic"
+          - build_verification_record.diagnostic == ''
       when: inventory_hostname == 'lin-ok'
+
+    - name: Assert missing inventory metadata leaves the live collection successful
+      ansible.builtin.assert:
+        that:
+          - build_verification_record.collection_status == 'success'
+          - build_verification_record.fqdn == 'not_available'
+          - build_verification_record.os_release == 'not_available'
+          - build_verification_record.os_version == '8.10'
+          - build_verification_record.current_build == '4.18.0-553.el8_10.x86_64'
+          - build_verification_record.snow_ci_sys_id == 'not_available'
+          - build_verification_record.location == ''
+          - build_verification_record.patch_environment == ''
+          - >-
+            build_verification_record.diagnostic
+            == 'Inventory FQDN was not available. Inventory OS release was not available. Inventory CI sys_id was not available.'
+      when: inventory_hostname == 'lin-nometa'
 
     - name: Assert an incomplete fact gather
       ansible.builtin.assert:
@@ -126,6 +162,13 @@
       ansible.builtin.assert:
         that:
           - build_verification_record.collection_status == 'unreachable'
+          - build_verification_record.fqdn == 'lin-down.cmdb.example'
+          - build_verification_record.os_release == 'Red Hat Enterprise Linux 8'
+          - build_verification_record.os_version == 'not_available'
+          - build_verification_record.current_build == 'not_available'
+          - build_verification_record.location == 'Datacenter-East'
+          - build_verification_record.patch_environment == 'LAB'
+          - build_verification_record.snow_ci_sys_id == 'cccccccccccccccccccccccccccccccc'
           - "'Host unreachable.' in build_verification_record.diagnostic"
       when: inventory_hostname == 'lin-down'
 
@@ -163,8 +206,8 @@
     - name: Assert the shared Linux CSV
       ansible.builtin.assert:
         that:
-          - (build_verification_report.total_systems | int) == 4
-          - (build_verification_report.systems_succeeded | int) == 1
+          - (build_verification_report.total_systems | int) == 5
+          - (build_verification_report.systems_succeeded | int) == 2
           - (build_verification_report.systems_failed | int) == 2
           - (build_verification_report.systems_unreachable | int) == 1
           - build_verification_report.schema_version == '2'
@@ -180,8 +223,20 @@
             ('%c' | format(65279)) ~ '"Hostname","FQDN","Platform","OS Release","OS Version","Current Build / Kernel"')
           - "'5.14.0-503.14.1.el9_5.x86_64' in build_verification_csv"
           - "'9.5' in build_verification_csv"
+          - "'4.18.0-553.el8_10.x86_64' in build_verification_csv"
+          - "'8.10' in build_verification_csv"
+          - "'lin-ok.cmdb.example' in build_verification_csv"
+          - "'lin-down.cmdb.example' in build_verification_csv"
+          - "'Red Hat Enterprise Linux 9' in build_verification_csv"
           - ('"' ~ 'London, UK' ~ '"') in build_verification_csv
           - "'RedHat' not in build_verification_csv"
-          - (build_verification_csv.splitlines() | length) == 5
+          - "'snow_ci_sys_id' not in build_verification_csv"
+          - "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' not in build_verification_csv"
+          - >-
+            (build_verification_report.hosts
+            | selectattr('inventory_hostname', 'equalto', 'lin-ok')
+            | map(attribute='snow_ci_sys_id') | first)
+            == 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+          - (build_verification_csv.splitlines() | length) == 6
         fail_msg: The Linux build verification CSV did not match the fictional hosts.
       run_once: true
