@@ -143,12 +143,25 @@ fail the job. The shared report tasks do not apply this Windows job rule.
 
 Linux collection uses the same inventory variables. Its record task reads
 `fqdn`, `os`, `location`, `environment`, and `sys_id`. The running kernel
-stays `ansible_kernel` in `current_build`. The playbook also reads the newest installed `kernel` or `kernel-core` RPM
-with `rpm.vercmp`, and `/proc/uptime` when minimal facts have no uptime. A failed RPM query leaves the host successful, sets the
-installed kernel to `not_available`, and sets activation to `Unknown`.
-Activation is `Yes` only when a newer standard kernel is installed and is not
-running, `No` when the running kernel matches that package, and `Unknown`
-when the comparison is not reliable. It is not a reboot result. Set
+stays `ansible_kernel` in `current_build`. The playbook also reads the newest installed `kernel` or `kernel-core` RPM.
+Duplicate versions are skipped. It compares the rest with `rpm.vercmp` when
+that RPM Lua function exists, and otherwise with `rpm.labelCompare` through
+`/usr/libexec/platform-python` when that interpreter can import `rpm`.
+Version strings are arguments, not shell text inside the comparison code.
+If neither comparison is available, the installed kernel is `not_available`
+and activation is `Unknown`. `/proc/uptime` supplies uptime when minimal
+facts have none. A failed RPM query, or optional output that is not a JSON
+object, leaves the host successful. Real-time kernels (`.rt` followed by a
+number) and debug kernels (`+`) stay `Unknown` for activation even when a
+different standard kernel is installed. Activation is `Yes` only when a newer
+standard kernel is installed and is not running, `No` when the running kernel
+matches that package, and `Unknown` when the comparison is not reliable.
+`Yes`, `No`, and `Unknown` stay strings. A fact gather that reports
+`timed out` or `expected time frame` is `failed`, with diagnostic
+`Fact gathering timed out.` The optional query does not run when the host
+was unreachable. The Linux play records failed and unreachable hosts and
+still writes the report. It does not apply the Windows job-failure rule.
+It is not a reboot result. Set
 `build_verify_schema_version: "3"` and `build_verify_linux_columns: true`.
 To produce the report, a Linux run needs one `build_verification_record` per
 host and then the same include:

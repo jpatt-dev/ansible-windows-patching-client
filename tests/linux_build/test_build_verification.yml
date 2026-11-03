@@ -27,6 +27,16 @@
           - "'ansible.builtin.reboot' not in linux_build_playbook_text"
           - "'package:' not in linux_build_playbook_text"
           - "'rpm.vercmp' in linux_build_playbook_text"
+          - "'rpm.labelCompare' in linux_build_playbook_text"
+          - "'sys.argv' in linux_build_playbook_text"
+          - "'/usr/libexec/platform-python' in linux_build_playbook_text"
+          - "'macros.kvleft' in linux_build_playbook_text"
+          - "'*.rt[0-9]*' in linux_build_playbook_text"
+          - "'(linux_build_query.unreachable | default(false)) == false' in linux_build_playbook_text"
+          - "'(linux_build_query.failed | default(false)) == false' in linux_build_playbook_text"
+          - "'(linux_build_query.rc | default(1) | int) == 0' in linux_build_playbook_text"
+          - "'The job is not successful' not in linux_build_playbook_text"
+          - "'build_verification_job_status' not in linux_build_playbook_text"
           - "'/proc/uptime' in linux_build_playbook_text"
           - "'sort -V' not in linux_build_playbook_text"
           - "'dnf' not in linux_build_playbook_text"
@@ -34,6 +44,22 @@
           - "'build_verify_linux_columns: true' in linux_build_playbook_text"
           - "'failed_when: false' in linux_build_playbook_text"
         fail_msg: Linux build verification no longer matches the read-only contract.
+
+    - name: Read the Linux build record task
+      ansible.builtin.set_fact:
+        linux_build_record_text: "{{ lookup('file', playbook_dir ~ '/../../playbooks/linux/tasks/build_verification_record.yml') }}"
+      changed_when: false
+
+    - name: Require safe optional output and string activation
+      ansible.builtin.assert:
+        that:
+          - "'split((' in linux_build_record_text"
+          - "'from_json' in linux_build_record_text"
+          - "'expected time frame' in linux_build_record_text"
+          - "'Fact gathering timed out.' in linux_build_record_text"
+          - "'build_verify_activation:' not in linux_build_record_text"
+          - "'build_verify_optional_fields' in linux_build_record_text"
+        fail_msg: The Linux record task no longer protects optional kernel output.
 
 - name: Register fictional Linux fact gathers
   hosts: localhost
@@ -179,6 +205,76 @@
             {"latest_installed_kernel":"5.14.0-503.40.1.el9_5.x86_64",
             "kernel_activation_pending":"No","uptime":""}
 
+    - name: Add a host whose kernel output has a banner before the JSON
+      ansible.builtin.add_host:
+        name: lin-banner
+        groups: linux_build_cases
+        fqdn: lin-banner.cmdb.example
+        os: Red Hat Enterprise Linux 8
+        location: London
+        environment: LAB
+        ansible_distribution_version: "8.10"
+        ansible_kernel: 4.18.0-553.el8_10.x86_64
+        linux_build_query:
+          failed: false
+          unreachable: false
+          rc: 0
+        linux_kernel_query:
+          failed: false
+          unreachable: false
+          rc: 0
+          stdout: |
+            Notice: extra collector output
+            {"latest_installed_kernel":"4.18.0-553.el8_10.x86_64","kernel_activation_pending":"No","uptime":"3 hours, 4 minutes"}
+
+    - name: Add a host whose kernel output is malformed JSON
+      ansible.builtin.add_host:
+        name: lin-badjson
+        groups: linux_build_cases
+        fqdn: lin-badjson.cmdb.example
+        os: Red Hat Enterprise Linux 8
+        location: London
+        environment: LAB
+        ansible_distribution_version: "8.10"
+        ansible_kernel: 4.18.0-513.5.1.el8_9.x86_64
+        ansible_uptime_seconds: 1231200
+        linux_build_query:
+          failed: false
+          unreachable: false
+          rc: 0
+        linux_kernel_query:
+          failed: false
+          unreachable: false
+          rc: 0
+          stdout: |
+            {not-json}
+
+    - name: Add a host whose fact gather exceeded the expected time frame
+      ansible.builtin.add_host:
+        name: lin-timeframe
+        groups: linux_build_cases
+        fqdn: lin-timeframe.cmdb.example
+        os: Red Hat Enterprise Linux 9
+        location: London
+        environment: LAB
+        linux_build_query:
+          failed: true
+          rc: 1
+          msg: The command did not complete within the expected time frame
+
+    - name: Add a host whose fact gather timed out
+      ansible.builtin.add_host:
+        name: lin-timedout
+        groups: linux_build_cases
+        fqdn: lin-timedout.cmdb.example
+        os: Red Hat Enterprise Linux 9
+        location: London
+        environment: LAB
+        linux_build_query:
+          failed: true
+          rc: 1
+          msg: Connection timed out
+
 - name: Convert fictional Linux facts into build records
   hosts: linux_build_cases
   connection: local
@@ -213,6 +309,7 @@
           - build_verification_record.diagnostic == ''
           - build_verification_record.latest_installed_kernel == '5.14.0-503.14.1.el9_5.x86_64'
           - build_verification_record.kernel_activation_pending == 'No'
+          - build_verification_record.kernel_activation_pending is string
           - build_verification_record.uptime == '14 days, 6 hours'
       when: inventory_hostname == 'lin-ok'
 
@@ -223,6 +320,7 @@
           - build_verification_record.current_build == '5.14.0-503.35.1.el9_5.x86_64'
           - build_verification_record.latest_installed_kernel == '5.14.0-503.40.1.el9_5.x86_64'
           - build_verification_record.kernel_activation_pending == 'Yes'
+          - build_verification_record.kernel_activation_pending is string
           - build_verification_record.uptime == '2 days, 3 hours'
       when: inventory_hostname == 'lin-newer'
 
@@ -234,6 +332,7 @@
           - build_verification_record.os_version == '8.10'
           - build_verification_record.latest_installed_kernel == 'not_available'
           - build_verification_record.kernel_activation_pending == 'Unknown'
+          - build_verification_record.kernel_activation_pending is string
           - build_verification_record.uptime == '14 days, 6 hours'
       when: inventory_hostname == 'lin-kfail'
 
@@ -297,6 +396,39 @@
           - "'OS query failed.' in build_verification_record.diagnostic"
       when: inventory_hostname == 'lin-fail'
 
+    - name: Assert a banner before JSON does not hide the kernel result
+      ansible.builtin.assert:
+        that:
+          - build_verification_record.collection_status == 'success'
+          - build_verification_record.os_version == '8.10'
+          - build_verification_record.current_build == '4.18.0-553.el8_10.x86_64'
+          - build_verification_record.latest_installed_kernel == '4.18.0-553.el8_10.x86_64'
+          - build_verification_record.kernel_activation_pending == 'No'
+          - build_verification_record.kernel_activation_pending is string
+          - build_verification_record.uptime == '3 hours, 4 minutes'
+      when: inventory_hostname == 'lin-banner'
+
+    - name: Assert malformed kernel JSON keeps the OS collection and fact uptime
+      ansible.builtin.assert:
+        that:
+          - build_verification_record.collection_status == 'success'
+          - build_verification_record.os_version == '8.10'
+          - build_verification_record.current_build == '4.18.0-513.5.1.el8_9.x86_64'
+          - build_verification_record.latest_installed_kernel == 'not_available'
+          - build_verification_record.kernel_activation_pending == 'Unknown'
+          - build_verification_record.kernel_activation_pending is string
+          - build_verification_record.uptime == '14 days, 6 hours'
+      when: inventory_hostname == 'lin-badjson'
+
+    - name: Assert both fact-gather timeout phrases
+      ansible.builtin.assert:
+        that:
+          - build_verification_record.collection_status == 'failed'
+          - build_verification_record.diagnostic == 'Fact gathering timed out.'
+          - build_verification_record.kernel_activation_pending == 'Unknown'
+          - build_verification_record.kernel_activation_pending is string
+      when: inventory_hostname in ['lin-timeframe', 'lin-timedout']
+
 - name: Aggregate the fictional Linux build verification
   hosts: linux_build_cases
   connection: local
@@ -328,9 +460,9 @@
     - name: Assert the shared Linux CSV
       ansible.builtin.assert:
         that:
-          - (build_verification_report.total_systems | int) == 8
-          - (build_verification_report.systems_succeeded | int) == 5
-          - (build_verification_report.systems_failed | int) == 2
+          - (build_verification_report.total_systems | int) == 12
+          - (build_verification_report.systems_succeeded | int) == 7
+          - (build_verification_report.systems_failed | int) == 4
           - (build_verification_report.systems_unreachable | int) == 1
           - build_verification_report.schema_version == '3'
           - build_verification_report.platform == 'linux'
@@ -369,7 +501,14 @@
           - "'14 days, 6 hours' in build_verification_csv"
           - "'5.14.0-503.40.1.el9_5.x86_64' in build_verification_csv"
           - "'5.14.0-503.35.1.el9_5.x86_64' in build_verification_csv"
-          - (build_verification_csv.splitlines() | length) == 9
+          - (build_verification_csv.splitlines() | length) == 13
+          - >-
+            (
+              build_verification_csv.splitlines() | first
+              | regex_replace('^' ~ ('%c' | format(65279)), '')
+              | split(',')
+              | length
+            ) == 14
         fail_msg: The Linux build verification CSV did not match the fictional hosts.
       run_once: true
 
@@ -378,9 +517,15 @@
   connection: local
   gather_facts: false
   tasks:
-    - name: See whether rpm can compare versions on this controller
+    - name: See whether this controller has rpm
       ansible.builtin.command: rpm --version
       register: linux_rpm_local
+      changed_when: false
+      failed_when: false
+
+    - name: See whether this controller has platform-python
+      ansible.builtin.command: test -x /usr/libexec/platform-python
+      register: linux_py_local
       changed_when: false
       failed_when: false
 
@@ -388,39 +533,241 @@
       ansible.builtin.assert:
         that:
           - "'5.14.0-503.9.1.el9_5' > '5.14.0-503.40.1.el9_5'"
+          - "'4.18.0-513.9.1.el8_9' > '4.18.0-513.40.1.el8_9'"
         fail_msg: The sample kernel versions no longer demonstrate a text-sort trap.
 
-    - name: Choose the newest of three kernel releases with rpm.vercmp
-      when: (linux_rpm_local.rc | default(1) | int) == 0
+    - name: Run the kernel script with stand-in RPM tools
       ansible.builtin.shell: |
-        best=
-        best_evr=
-        for evr in \
-          '5.14.0-503.9.1.el9_5' \
-          '5.14.0-503.40.1.el9_5' \
-          '5.14.0-503.35.1.el9_5'
-        do
-          if [ -z "$best_evr" ]; then
-            best=$evr
-            best_evr=$evr
-            continue
-          fi
-          cmp=$(rpm --eval "%{lua:print(rpm.vercmp('${evr}', '${best_evr}'))}")
-          if [ "$cmp" = 1 ]; then
-            best=$evr
-            best_evr=$evr
+        python3 -c 'import pathlib,textwrap,sys; pathlib.Path("/tmp/bv-run.py").write_text(textwrap.dedent(sys.stdin.read()))' << 'PY'
+        import json, os, shutil, subprocess, textwrap
+        from pathlib import Path
+
+        playbook = Path(os.environ["BV_PLAYBOOK"])
+        text = playbook.read_text()
+        marker = text.index("# bv-kernel-script\n")
+        start = text.rfind("\n", 0, marker) + 1
+        end = text.index("# bv-kernel-script-end\n")
+        body = text[start:end]
+        raw = body.splitlines()
+        cut = min(len(line) - len(line.lstrip(" ")) for line in raw if line.strip())
+        script = []
+        for line in raw:
+            if line.strip():
+                line = line[cut:]
+            if line.startswith("running="):
+                line = 'running="$BV_RUNNING"'
+            elif line.startswith("pybin="):
+                line = 'pybin="${BV_PY}"'
+            script.append(line)
+        if "labelCompare" not in "\n".join(script) or "*.rt[0-9]*" not in "\n".join(script):
+            raise SystemExit("kernel script markers did not capture the comparison")
+        root = Path("/tmp/bv-kernel-test")
+        if root.exists():
+            shutil.rmtree(root)
+        (root / "bin").mkdir(parents=True)
+        (root / "pylib").mkdir()
+        (root / "kernel.sh").write_text("\n".join(script) + "\n")
+        (root / "cmp.py").write_text(textwrap.dedent(r'''
+        import sys
+        def segments(value):
+            out, current, kind = [], "", ""
+            for ch in value:
+                if ch.isdigit():
+                    this = "n"
+                elif ch.isalpha():
+                    this = "a"
+                else:
+                    if current:
+                        out.append((kind, current))
+                    current, kind = "", ""
+                    continue
+                if kind == this:
+                    current += ch
+                else:
+                    if current:
+                        out.append((kind, current))
+                    current, kind = ch, this
+            if current:
+                out.append((kind, current))
+            return out
+        def cmp_text(left, right):
+            a, b = segments(left), segments(right)
+            for (ka, va), (kb, vb) in zip(a, b):
+                if ka != kb:
+                    return 1 if ka == "n" else -1
+                if ka == "n" and int(va) != int(vb):
+                    return 1 if int(va) > int(vb) else -1
+                if ka != "n" and va != vb:
+                    return 1 if va > vb else -1
+            if len(a) == len(b):
+                return 0
+            return 1 if len(a) > len(b) else -1
+        def cmp_evr(left, right):
+            lv, lr = left.split("-", 1)
+            rv, rr = right.split("-", 1)
+            for one, two in ((lv, rv), (lr, rr)):
+                found = cmp_text(one, two)
+                if found:
+                    return found
+            return 0
+        if __name__ == "__main__":
+            print(cmp_evr(sys.argv[1], sys.argv[2]))
+        '''))
+        (root / "pylib" / "rpm.py").write_text(textwrap.dedent(r'''
+        import os, sys
+        sys.path.insert(0, "/tmp/bv-kernel-test")
+        from cmp import cmp_evr
+        def labelCompare(left, right):
+            if (left, right) != (("0", "1", "1"), ("0", "1", "1")):
+                with open(os.environ["BV_PYCALLS"], "a", encoding="utf-8") as handle:
+                    handle.write(repr(left) + "\t" + repr(right) + "\n")
+            if left[0] != right[0]:
+                return 1 if str(left[0]) > str(right[0]) else -1
+            return cmp_evr(left[1] + "-" + left[2], right[1] + "-" + right[2])
+        '''))
+        (root / "bin" / "platform-python").write_text(
+            "#!/bin/sh\nexport PYTHONPATH=/tmp/bv-kernel-test/pylib\nexec /usr/bin/python3 \"$@\"\n"
+        )
+        (root / "bin" / "rpm").write_text(textwrap.dedent(r'''
+        #!/bin/sh
+        is_query=no
+        for arg in "$@"; do
+          if [ "$arg" = -q ]; then
+            is_query=yes
           fi
         done
-        printf '%s\n' "$best"
-      register: linux_rpm_choice
+        if [ "$is_query" = yes ]; then
+          printf '%s\n' "$BV_PACKAGES"
+          exit 0
+        fi
+        case "$*" in
+          *'vercmp("1","1")'*)
+            if [ "$BV_LUA" = yes ]; then
+              printf '0\n'
+              exit 0
+            fi
+            exit 1
+            ;;
+        esac
+        left=
+        right=
+        prev=
+        for arg in "$@"; do
+          if [ "$prev" = --define ]; then
+            name=${arg%% *}
+            value=${arg#* }
+            if [ "$name" = kvleft ]; then left=$value; fi
+            if [ "$name" = kvright ]; then right=$value; fi
+          fi
+          prev=$arg
+        done
+        if [ -z "$left" ] || [ -z "$right" ]; then
+          exit 1
+        fi
+        printf '%s %s\n' "$left" "$right" >> "$BV_LOG"
+        python3 /tmp/bv-kernel-test/cmp.py "$left" "$right"
+        ''').lstrip("\n"))
+        os.chmod(root / "bin" / "platform-python", 0o755)
+        os.chmod(root / "bin" / "rpm", 0o755)
+
+        def run(name, running, packages, lua, use_py):
+            log = root / (name + ".log")
+            calls = root / (name + ".pycalls")
+            log.write_text("")
+            calls.write_text("")
+            env = os.environ.copy()
+            env.update({
+                "PATH": str(root / "bin") + ":/usr/bin:/bin",
+                "BV_RUNNING": running,
+                "BV_PACKAGES": packages,
+                "BV_LUA": "yes" if lua else "no",
+                "BV_LOG": str(log),
+                "BV_PYCALLS": str(calls),
+                "BV_PY": str(root / "bin" / "platform-python") if use_py else "/no/such/platform-python",
+            })
+            proc = subprocess.run(
+                ["sh", str(root / "kernel.sh")],
+                env=env, text=True, capture_output=True, check=False,
+            )
+            if not proc.stdout.strip():
+                raise SystemExit(proc.stderr or "kernel script produced no JSON")
+            payload = json.loads(proc.stdout.strip().splitlines()[-1])
+            return proc.returncode, payload, log.read_text().splitlines(), calls.read_text().splitlines()
+
+        el9 = "\n".join([
+            "5.14.0-503.9.1.el9_5.x86_64",
+            "5.14.0-503.40.1.el9_5.x86_64",
+            "5.14.0-503.40.1.el9_5.x86_64",
+            "5.14.0-503.35.1.el9_5.x86_64",
+        ])
+        el8 = "\n".join([
+            "4.18.0-513.9.1.el8_9.x86_64",
+            "4.18.0-513.40.1.el8_9.x86_64",
+            "4.18.0-513.40.1.el8_9.x86_64",
+            "4.18.0-513.35.1.el8_9.x86_64",
+        ])
+        rc, row, compares, _calls = run(
+            "rhel9", "5.14.0-503.35.1.el9_5.x86_64", el9, True, False,
+        )
+        print("rhel9_rc=%s" % rc)
+        print("rhel9_latest=%s" % row["latest_installed_kernel"])
+        print("rhel9_activation=%s" % row["kernel_activation_pending"])
+        print("rhel9_compares=%s" % len([line for line in compares if line.strip()]))
+        rc, row, _compares, calls = run(
+            "rhel8", "4.18.0-513.35.1.el8_9.x86_64", el8, False, True,
+        )
+        print("rhel8_rc=%s" % rc)
+        print("rhel8_latest=%s" % row["latest_installed_kernel"])
+        print("rhel8_activation=%s" % row["kernel_activation_pending"])
+        print("rhel8_compares=%s" % len([line for line in calls if line.strip()]))
+        print("rhel8_split=%s" % ("yes" if calls and "('0', '4.18.0', '513.40.1.el8_9')" in calls[0] else "no"))
+        rc, row, _compares, _calls = run(
+            "missing", "4.18.0-513.35.1.el8_9.x86_64", el8, False, False,
+        )
+        print("missing_rc=%s" % rc)
+        print("missing_latest=%s" % row["latest_installed_kernel"])
+        print("missing_activation=%s" % row["kernel_activation_pending"])
+        rc, row, _compares, _calls = run(
+            "rt", "4.18.0-513.24.1.rt7.252.el8_9.x86_64",
+            "4.18.0-513.40.1.el8_9.x86_64", True, False,
+        )
+        print("rt_rc=%s" % rc)
+        print("rt_latest=%s" % row["latest_installed_kernel"])
+        print("rt_activation=%s" % row["kernel_activation_pending"])
+        rc, row, _compares, _calls = run(
+            "debug", "5.14.0-503.14.1.el9_5.x86_64+debug",
+            "5.14.0-503.40.1.el9_5.x86_64", True, False,
+        )
+        print("debug_rc=%s" % rc)
+        print("debug_latest=%s" % row["latest_installed_kernel"])
+        print("debug_activation=%s" % row["kernel_activation_pending"])
+        PY
+        python3 /tmp/bv-run.py
+      environment:
+        BV_PLAYBOOK: "{{ playbook_dir }}/../../playbooks/linux/build_verification.yml"
+      register: linux_kernel_script
       changed_when: false
 
-    - name: Assert rpm.vercmp selects 503.40 rather than 503.9
-      when: (linux_rpm_local.rc | default(1) | int) == 0
+    - name: Assert kernel selection, duplicates, fallback, and special variants
       ansible.builtin.assert:
         that:
-          - linux_rpm_choice.stdout == '5.14.0-503.40.1.el9_5'
-        fail_msg: rpm.vercmp did not select the newest installed kernel release.
+          - "'rhel9_rc=0' in linux_kernel_script.stdout"
+          - "'rhel9_latest=5.14.0-503.40.1.el9_5.x86_64' in linux_kernel_script.stdout"
+          - "'rhel9_activation=Yes' in linux_kernel_script.stdout"
+          - "'rhel9_compares=3' in linux_kernel_script.stdout"
+          - "'rhel8_rc=0' in linux_kernel_script.stdout"
+          - "'rhel8_latest=4.18.0-513.40.1.el8_9.x86_64' in linux_kernel_script.stdout"
+          - "'rhel8_activation=Yes' in linux_kernel_script.stdout"
+          - "'rhel8_compares=3' in linux_kernel_script.stdout"
+          - "'rhel8_split=yes' in linux_kernel_script.stdout"
+          - "'missing_rc=0' in linux_kernel_script.stdout"
+          - "'missing_latest=' in linux_kernel_script.stdout"
+          - "'missing_activation=Unknown' in linux_kernel_script.stdout"
+          - "'rt_latest=4.18.0-513.40.1.el8_9.x86_64' in linux_kernel_script.stdout"
+          - "'rt_activation=Unknown' in linux_kernel_script.stdout"
+          - "'debug_latest=5.14.0-503.40.1.el9_5.x86_64' in linux_kernel_script.stdout"
+          - "'debug_activation=Unknown' in linux_kernel_script.stdout"
+        fail_msg: "{{ linux_kernel_script.stdout }} {{ linux_kernel_script.stderr }}"
 
 - name: Keep the CSV attached when Linux email settings are rejected
   hosts: linux_build_cases
@@ -465,6 +812,13 @@
           - build_verification_csv is defined
           - >-
             ('"' ~ 'Latest Installed Kernel' ~ '"') in build_verification_csv
+          - >-
+            (
+              build_verification_csv.splitlines() | first
+              | regex_replace('^' ~ ('%c' | format(65279)), '')
+              | split(',')
+              | length
+            ) == 14
           - build_verification_email_result is not defined
           - "'attach:' in lookup('file', build_verify_email_tasks)"
         fail_msg: Invalid SMTP settings dropped the Linux CSV attachment.

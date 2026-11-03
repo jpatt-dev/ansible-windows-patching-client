@@ -104,6 +104,8 @@ The Linux play gathers minimal facts (`gather_subset: min`) and records
 the running kernel. It also records the newest installed kernel, whether that
 kernel is not yet running, and system uptime. Linux schema version is `3`.
 Windows schema version stays `2`. The job does not update packages or reboot.
+Failed and unreachable hosts are recorded. This play does not fail the job
+for collection status.
 
 AAP artifacts: `linux_build_verification_report` and
 `linux_build_verification_csv`.
