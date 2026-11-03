@@ -1,6 +1,9 @@
 ---
 # Read-only Linux distribution and kernel snapshot for AAP 2.7.
 # Live data is ansible_distribution_version and ansible_kernel from minimal facts.
+# An optional local RPM query adds the newest installed kernel. /proc/uptime
+# adds a readable uptime when minimal facts do not include it. Neither query
+# updates packages, refreshes repositories, or needs sudo.
 # Inventory fields are inventory_hostname, fqdn, os, location, environment,
 # and sys_id. Blank FQDN, OS release, and sys_id stay not_available.
 # Location and environment stay empty strings. Live facts do not fill them.
@@ -59,10 +62,116 @@
           register: linux_build_query
           timeout: 120
           changed_when: false
+
+        - name: Read the newest installed kernel and the system uptime
+          ansible.builtin.shell: |
+            running={{ ansible_kernel | default('') | quote }}
+            uptime_text=
+            latest=
+            activation=Unknown
+            secs=
+            if [ -r /proc/uptime ]; then
+              read -r up_raw _ < /proc/uptime || true
+              secs=${up_raw%%.*}
+              case "$secs" in
+                ''|*[!0-9]*) secs= ;;
+              esac
+            fi
+            if [ -n "$secs" ]; then
+              days=$((secs / 86400))
+              hours=$(((secs % 86400) / 3600))
+              minutes=$(((secs % 3600) / 60))
+              if [ "$days" -ge 1 ]; then
+                if [ "$days" -eq 1 ]; then dunit=day; else dunit=days; fi
+                if [ "$hours" -eq 1 ]; then hunit=hour; else hunit=hours; fi
+                uptime_text="$days $dunit, $hours $hunit"
+              elif [ "$hours" -ge 1 ]; then
+                if [ "$hours" -eq 1 ]; then hunit=hour; else hunit=hours; fi
+                if [ "$minutes" -eq 1 ]; then munit=minute; else munit=minutes; fi
+                uptime_text="$hours $hunit, $minutes $munit"
+              else
+                if [ "$minutes" -eq 1 ]; then munit=minute; else munit=minutes; fi
+                uptime_text="$minutes $munit"
+              fi
+            fi
+            variant=special
+            case "$running" in
+              *+*) ;;
+              [0-9]*)
+                run_arch=${running##*.}
+                case "$run_arch" in
+                  x86_64|aarch64|ppc64le|s390x) variant=standard ;;
+                esac
+                ;;
+            esac
+            rpm_out=$(rpm -q kernel kernel-core --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' 2>/dev/null || true)
+            best=
+            best_evr=
+            reliable=true
+            while IFS= read -r line || [ -n "$line" ]; do
+              case "$line" in
+                ''|*'not installed'*) continue ;;
+              esac
+              arch=${line##*.}
+              evr=${line%.*}
+              case "$arch" in
+                x86_64|aarch64|ppc64le|s390x) ;;
+                *) continue ;;
+              esac
+              case "$evr" in
+                [0-9]*-[0-9]*) ;;
+                *) continue ;;
+              esac
+              case "$evr" in
+                *[!0-9A-Za-z._~^+-]*) reliable=false; break ;;
+              esac
+              if [ -z "$best" ]; then
+                best=$line
+                best_evr=$evr
+                continue
+              fi
+              cmp=$(rpm --eval "%{lua:print(rpm.vercmp('${evr}', '${best_evr}'))}" 2>/dev/null || true)
+              case "$cmp" in
+                1) best=$line; best_evr=$evr ;;
+                0|-1) ;;
+                *) reliable=false; break ;;
+              esac
+            done <<EOF
+            $rpm_out
+            EOF
+            if [ "$reliable" = true ] && [ -n "$best" ]; then
+              latest=$best
+              if [ "$variant" = standard ] && [ "$running" = "$best" ]; then
+                activation=No
+              elif [ "$variant" = standard ] && [ "${running##*.}" = "${best##*.}" ]; then
+                run_evr=${running%.*}
+                case "$run_evr" in
+                  *[!0-9A-Za-z._~^+-]*) activation=Unknown ;;
+                  *)
+                    cmp=$(rpm --eval "%{lua:print(rpm.vercmp('${best_evr}', '${run_evr}'))}" 2>/dev/null || true)
+                    case "$cmp" in
+                      1) activation=Yes ;;
+                      *) activation=Unknown ;;
+                    esac
+                    ;;
+                esac
+              fi
+            fi
+            printf '{"latest_installed_kernel":"%s","kernel_activation_pending":"%s","uptime":"%s"}\n' \
+              "$latest" "$activation" "$uptime_text"
+          register: linux_kernel_query
+          changed_when: false
+          failed_when: false
+          timeout: 60
       rescue:
         - name: Keep the failed fact gather for the host report row
           ansible.builtin.set_fact:
             linux_build_query: "{{ ansible_failed_result }}"
+          when: >-
+            linux_build_query is not defined
+            or (linux_build_query.failed | default(false)) == true
+            or (linux_build_query.unreachable | default(false)) == true
+            or (linux_build_query.rc | default(0) | int) != 0
           changed_when: false
       always:
         - name: Record the Linux distribution and kernel
@@ -89,9 +198,13 @@
     build_verify_filename_prefix: linux-build-verification
     build_verify_subject_name: Linux
     build_verify_report_source: linux_build_verification
+    build_verify_schema_version: "3"
+    build_verify_linux_columns: true
     build_verify_email_scope: |
-      Linux build verification collected the distribution version and the running kernel.
+      Linux build verification collected the distribution version, the running kernel,
+      the newest installed kernel, and system uptime.
       Current Build / Kernel is the running kernel.
+      Kernel Activation Pending is not a reboot or compliance result.
       No packages were updated and no servers were rebooted.
     build_verify_email_tasks: "{{ playbook_dir }}/../build_verification/tasks/email.yml"
 

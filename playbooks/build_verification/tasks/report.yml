@@ -15,6 +15,8 @@
 #   build_verify_report_source     report_source value
 #   build_verify_email_scope       opening lines of the email body
 #   build_verify_email_tasks       path to email.yml
+#   build_verify_schema_version    defaults to 2; Linux sets 3
+#   build_verify_linux_columns     true appends the Linux kernel and uptime columns
 
 - name: Collect existing build records in inventory order
   ansible.builtin.set_fact:
@@ -136,7 +138,7 @@
 - name: Build the build verification report
   ansible.builtin.set_fact:
     build_verification_report:
-      schema_version: "2"
+      schema_version: "{{ build_verify_schema_version | default('2') }}"
       report_source: "{{ build_verify_report_source | default('windows_build_verification') }}"
       platform: "{{ build_verify_platform | default('windows') }}"
       generated_at_utc: "{{ build_verification_generated_at }}"
@@ -221,18 +223,23 @@
       "{{ text | replace('"', '""') }}"
       {%- endmacro %}
       {%- set ns = namespace(lines=[]) -%}
-      {%- set header = [
+      {%- set header = namespace(cols=[
         'Hostname', 'FQDN', 'Platform', 'OS Release', 'OS Version',
         'Current Build / Kernel', 'Location', 'Environment',
         'Collection Status', 'Collection Time', 'Diagnostic'
-      ] -%}
+      ]) -%}
+      {%- if build_verify_linux_columns | default(false) | bool -%}
+      {%- set _ = header.cols.append('Latest Installed Kernel') -%}
+      {%- set _ = header.cols.append('Kernel Activation Pending') -%}
+      {%- set _ = header.cols.append('Uptime') -%}
+      {%- endif -%}
       {%- set quoted = namespace(cols=[]) -%}
-      {%- for name in header -%}
+      {%- for name in header.cols -%}
       {%- set _ = quoted.cols.append('"' ~ (name | replace('"', '""')) ~ '"') -%}
       {%- endfor -%}
       {%- set _ = ns.lines.append(quoted.cols | join(',')) -%}
       {%- for item in build_verification_hosts -%}
-      {%- set row = [
+      {%- set row = namespace(cols=[
         cell(item.hostname | default('not_available')),
         cell(item.fqdn | default('not_available')),
         cell(item.platform | default('')),
@@ -244,8 +251,13 @@
         cell(item.collection_status | default('failed')),
         cell(item.collection_time_utc | default('not_available')),
         cell(item.diagnostic | default(''))
-      ] -%}
-      {%- set _ = ns.lines.append(row | join(',')) -%}
+      ]) -%}
+      {%- if build_verify_linux_columns | default(false) | bool -%}
+      {%- set _ = row.cols.append(cell(item.latest_installed_kernel | default('not_available'))) -%}
+      {%- set _ = row.cols.append(cell(item.kernel_activation_pending | default('Unknown'))) -%}
+      {%- set _ = row.cols.append(cell(item.uptime | default('not_available'))) -%}
+      {%- endif -%}
+      {%- set _ = ns.lines.append(row.cols | join(',')) -%}
       {%- endfor -%}
       {{- bom ~ (ns.lines | join(cr ~ lf)) ~ cr ~ lf -}}
   run_once: true

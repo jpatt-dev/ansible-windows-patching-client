@@ -26,6 +26,13 @@
           - "'win_updates' not in linux_build_playbook_text"
           - "'ansible.builtin.reboot' not in linux_build_playbook_text"
           - "'package:' not in linux_build_playbook_text"
+          - "'rpm.vercmp' in linux_build_playbook_text"
+          - "'/proc/uptime' in linux_build_playbook_text"
+          - "'sort -V' not in linux_build_playbook_text"
+          - "'dnf' not in linux_build_playbook_text"
+          - "'build_verify_schema_version: \"3\"' in linux_build_playbook_text"
+          - "'build_verify_linux_columns: true' in linux_build_playbook_text"
+          - "'failed_when: false' in linux_build_playbook_text"
         fail_msg: Linux build verification no longer matches the read-only contract.
 
 - name: Register fictional Linux fact gathers
@@ -49,6 +56,13 @@
           failed: false
           unreachable: false
           rc: 0
+        linux_kernel_query:
+          failed: false
+          unreachable: false
+          rc: 0
+          stdout: >-
+            {"latest_installed_kernel":"5.14.0-503.14.1.el9_5.x86_64",
+            "kernel_activation_pending":"No","uptime":"14 days, 6 hours"}
 
     - name: Add a successful host with no inventory metadata
       ansible.builtin.add_host:
@@ -100,6 +114,71 @@
           rc: 1
           msg: module setup failed
 
+    - name: Add a host whose installed kernel is newer than the running kernel
+      ansible.builtin.add_host:
+        name: lin-newer
+        groups: linux_build_cases
+        fqdn: lin-newer.cmdb.example
+        os: Red Hat Enterprise Linux 9
+        location: London
+        environment: LAB
+        ansible_distribution_version: "9.5"
+        ansible_kernel: 5.14.0-503.35.1.el9_5.x86_64
+        linux_build_query:
+          failed: false
+          unreachable: false
+          rc: 0
+        linux_kernel_query:
+          failed: false
+          unreachable: false
+          rc: 0
+          stdout: >-
+            {"latest_installed_kernel":"5.14.0-503.40.1.el9_5.x86_64",
+            "kernel_activation_pending":"Yes","uptime":"2 days, 3 hours"}
+
+    - name: Add a host whose installed-kernel query failed
+      ansible.builtin.add_host:
+        name: lin-kfail
+        groups: linux_build_cases
+        fqdn: lin-kfail.cmdb.example
+        os: Red Hat Enterprise Linux 8
+        location: London
+        environment: LAB
+        ansible_distribution_version: "8.10"
+        ansible_kernel: 4.18.0-513.5.1.el8_9.x86_64
+        ansible_uptime_seconds: 1231200
+        linux_build_query:
+          failed: false
+          unreachable: false
+          rc: 0
+        linux_kernel_query:
+          failed: true
+          rc: 1
+          stdout: ""
+          msg: rpm query failed
+
+    - name: Add a host with a matching kernel and no uptime
+      ansible.builtin.add_host:
+        name: lin-noup
+        groups: linux_build_cases
+        fqdn: lin-noup.cmdb.example
+        os: Red Hat Enterprise Linux 9
+        location: London
+        environment: LAB
+        ansible_distribution_version: "9.5"
+        ansible_kernel: 5.14.0-503.40.1.el9_5.x86_64
+        linux_build_query:
+          failed: false
+          unreachable: false
+          rc: 0
+        linux_kernel_query:
+          failed: false
+          unreachable: false
+          rc: 0
+          stdout: >-
+            {"latest_installed_kernel":"5.14.0-503.40.1.el9_5.x86_64",
+            "kernel_activation_pending":"No","uptime":""}
+
 - name: Convert fictional Linux facts into build records
   hosts: linux_build_cases
   connection: local
@@ -132,7 +211,40 @@
           - build_verification_record.current_build == '5.14.0-503.14.1.el9_5.x86_64'
           - build_verification_record.snow_ci_sys_id == sys_id
           - build_verification_record.diagnostic == ''
+          - build_verification_record.latest_installed_kernel == '5.14.0-503.14.1.el9_5.x86_64'
+          - build_verification_record.kernel_activation_pending == 'No'
+          - build_verification_record.uptime == '14 days, 6 hours'
       when: inventory_hostname == 'lin-ok'
+
+    - name: Assert a newer installed kernel stays a successful collection
+      ansible.builtin.assert:
+        that:
+          - build_verification_record.collection_status == 'success'
+          - build_verification_record.current_build == '5.14.0-503.35.1.el9_5.x86_64'
+          - build_verification_record.latest_installed_kernel == '5.14.0-503.40.1.el9_5.x86_64'
+          - build_verification_record.kernel_activation_pending == 'Yes'
+          - build_verification_record.uptime == '2 days, 3 hours'
+      when: inventory_hostname == 'lin-newer'
+
+    - name: Assert a failed kernel query does not fail the host
+      ansible.builtin.assert:
+        that:
+          - build_verification_record.collection_status == 'success'
+          - build_verification_record.current_build == '4.18.0-513.5.1.el8_9.x86_64'
+          - build_verification_record.os_version == '8.10'
+          - build_verification_record.latest_installed_kernel == 'not_available'
+          - build_verification_record.kernel_activation_pending == 'Unknown'
+          - build_verification_record.uptime == '14 days, 6 hours'
+      when: inventory_hostname == 'lin-kfail'
+
+    - name: Assert missing uptime stays not available
+      ansible.builtin.assert:
+        that:
+          - build_verification_record.collection_status == 'success'
+          - build_verification_record.kernel_activation_pending == 'No'
+          - build_verification_record.latest_installed_kernel == '5.14.0-503.40.1.el9_5.x86_64'
+          - build_verification_record.uptime == 'not_available'
+      when: inventory_hostname == 'lin-noup'
 
     - name: Assert missing inventory metadata leaves the live collection successful
       ansible.builtin.assert:
@@ -145,6 +257,9 @@
           - build_verification_record.snow_ci_sys_id == 'not_available'
           - build_verification_record.location == ''
           - build_verification_record.patch_environment == ''
+          - build_verification_record.latest_installed_kernel == 'not_available'
+          - build_verification_record.kernel_activation_pending == 'Unknown'
+          - build_verification_record.uptime == 'not_available'
           - >-
             build_verification_record.diagnostic
             == 'Inventory FQDN was not available. Inventory OS release was not available. Inventory CI sys_id was not available.'
@@ -170,6 +285,9 @@
           - build_verification_record.patch_environment == 'LAB'
           - build_verification_record.snow_ci_sys_id == 'cccccccccccccccccccccccccccccccc'
           - "'Host unreachable.' in build_verification_record.diagnostic"
+          - build_verification_record.latest_installed_kernel == 'not_available'
+          - build_verification_record.kernel_activation_pending == 'Unknown'
+          - build_verification_record.uptime == 'not_available'
       when: inventory_hostname == 'lin-down'
 
     - name: Assert a failed fact gather
@@ -193,9 +311,13 @@
     build_verify_filename_prefix: linux-build-verification
     build_verify_subject_name: Linux
     build_verify_report_source: linux_build_verification
+    build_verify_schema_version: "3"
+    build_verify_linux_columns: true
     build_verify_email_scope: |
-      Linux build verification collected the distribution version and the running kernel.
+      Linux build verification collected the distribution version, the running kernel,
+      the newest installed kernel, and system uptime.
       Current Build / Kernel is the running kernel.
+      Kernel Activation Pending is not a reboot or compliance result.
       No packages were updated and no servers were rebooted.
     build_verify_email_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/email.yml"
   tasks:
@@ -206,17 +328,18 @@
     - name: Assert the shared Linux CSV
       ansible.builtin.assert:
         that:
-          - (build_verification_report.total_systems | int) == 5
-          - (build_verification_report.systems_succeeded | int) == 2
+          - (build_verification_report.total_systems | int) == 8
+          - (build_verification_report.systems_succeeded | int) == 5
           - (build_verification_report.systems_failed | int) == 2
           - (build_verification_report.systems_unreachable | int) == 1
-          - build_verification_report.schema_version == '2'
+          - build_verification_report.schema_version == '3'
           - build_verification_report.platform == 'linux'
           - build_verification_report.report_source == 'linux_build_verification'
           - "'linux_build_verification_report' in build_verify_published"
           - "'linux_build_verification_csv' in build_verify_published"
           - "'AAP Linux Build Verification | LAB |' in build_verification_email_subject"
           - "'Current Build / Kernel is the running kernel.' in build_verification_email_body"
+          - "'Kernel Activation Pending is not a reboot' in build_verification_email_body"
           - build_verification_email_result is not defined
           - >-
             build_verification_csv.startswith(
@@ -237,6 +360,112 @@
             | selectattr('inventory_hostname', 'equalto', 'lin-ok')
             | map(attribute='snow_ci_sys_id') | first)
             == 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-          - (build_verification_csv.splitlines() | length) == 6
+          - >-
+            ('"' ~ 'Latest Installed Kernel' ~ '","Kernel Activation Pending","Uptime' ~ '"')
+            in build_verification_csv
+          - ('"' ~ 'Yes' ~ '"') in build_verification_csv
+          - ('"' ~ 'No' ~ '"') in build_verification_csv
+          - ('"' ~ 'Unknown' ~ '"') in build_verification_csv
+          - "'14 days, 6 hours' in build_verification_csv"
+          - "'5.14.0-503.40.1.el9_5.x86_64' in build_verification_csv"
+          - "'5.14.0-503.35.1.el9_5.x86_64' in build_verification_csv"
+          - (build_verification_csv.splitlines() | length) == 9
         fail_msg: The Linux build verification CSV did not match the fictional hosts.
+      run_once: true
+
+- name: Check RPM version ordering used for the installed kernel
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: See whether rpm can compare versions on this controller
+      ansible.builtin.command: rpm --version
+      register: linux_rpm_local
+      changed_when: false
+      failed_when: false
+
+    - name: Show that plain text order ranks 503.9 ahead of 503.40
+      ansible.builtin.assert:
+        that:
+          - "'5.14.0-503.9.1.el9_5' > '5.14.0-503.40.1.el9_5'"
+        fail_msg: The sample kernel versions no longer demonstrate a text-sort trap.
+
+    - name: Choose the newest of three kernel releases with rpm.vercmp
+      when: (linux_rpm_local.rc | default(1) | int) == 0
+      ansible.builtin.shell: |
+        best=
+        best_evr=
+        for evr in \
+          '5.14.0-503.9.1.el9_5' \
+          '5.14.0-503.40.1.el9_5' \
+          '5.14.0-503.35.1.el9_5'
+        do
+          if [ -z "$best_evr" ]; then
+            best=$evr
+            best_evr=$evr
+            continue
+          fi
+          cmp=$(rpm --eval "%{lua:print(rpm.vercmp('${evr}', '${best_evr}'))}")
+          if [ "$cmp" = 1 ]; then
+            best=$evr
+            best_evr=$evr
+          fi
+        done
+        printf '%s\n' "$best"
+      register: linux_rpm_choice
+      changed_when: false
+
+    - name: Assert rpm.vercmp selects 503.40 rather than 503.9
+      when: (linux_rpm_local.rc | default(1) | int) == 0
+      ansible.builtin.assert:
+        that:
+          - linux_rpm_choice.stdout == '5.14.0-503.40.1.el9_5'
+        fail_msg: rpm.vercmp did not select the newest installed kernel release.
+
+- name: Keep the CSV attached when Linux email settings are rejected
+  hosts: linux_build_cases
+  connection: local
+  gather_facts: false
+  vars:
+    report_email_enabled: true
+    report_email_smtp_host: ""
+    report_email_smtp_port: 25
+    report_email_smtp_secure: "never"
+    report_email_from: ""
+    report_email_to: []
+    report_email_attach_csv: true
+    report_email_fail_on_error: true
+    build_verify_output_dir: /tmp/aap-build-verification-test
+    build_verify_platform: linux
+    build_verify_build_kind: running_kernel
+    build_verify_schema_version: "3"
+    build_verify_linux_columns: true
+    build_verify_email_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/email.yml"
+  tasks:
+    - name: Include the report and expect invalid SMTP to fail after the CSV exists
+      block:
+        - name: Include the shared report task with email enabled
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/build_verification/tasks/report.yml"
+          run_once: true
+      rescue:
+        - name: Record the expected SMTP rejection
+          ansible.builtin.set_fact:
+            build_verify_smtp_rejected: true
+          run_once: true
+
+        - name: Clear the expected SMTP failure so this test play can finish
+          ansible.builtin.meta: clear_host_errors
+
+    - name: Assert the Linux CSV still exists for the email attachment
+      ansible.builtin.assert:
+        that:
+          - build_verify_smtp_rejected | default(false) | bool
+          - build_verification_report.email_delivery == 'failed'
+          - build_verification_report.schema_version == '3'
+          - build_verification_csv is defined
+          - >-
+            ('"' ~ 'Latest Installed Kernel' ~ '"') in build_verification_csv
+          - build_verification_email_result is not defined
+          - "'attach:' in lookup('file', build_verify_email_tasks)"
+        fail_msg: Invalid SMTP settings dropped the Linux CSV attachment.
       run_once: true

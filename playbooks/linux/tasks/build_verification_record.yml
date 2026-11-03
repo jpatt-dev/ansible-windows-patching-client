@@ -46,6 +46,91 @@
       }}
   changed_when: false
 
+- name: Read optional installed-kernel details
+  ansible.builtin.set_fact:
+    build_verify_kernel_info: "{{ build_verify_kernel_info_parsed if (build_verify_kernel_info_parsed is mapping) else {} }}"
+  vars:
+    kernel_query_ok: >-
+      {{
+        linux_kernel_query is defined
+        and linux_kernel_query is mapping
+        and not (linux_kernel_query.skipped | default(false))
+        and (linux_kernel_query.failed | default(false)) == false
+        and (linux_kernel_query.unreachable | default(false)) == false
+        and (linux_kernel_query.rc | default(1) | int) == 0
+        and (
+          linux_kernel_query.stdout is mapping
+          or (linux_kernel_query.stdout | default('') | string | trim | length) > 0
+        )
+      }}
+    build_verify_kernel_info_parsed: >-
+      {{
+        {}
+        if not (kernel_query_ok | bool)
+        else (
+          linux_kernel_query.stdout
+          if (linux_kernel_query.stdout is mapping)
+          else (linux_kernel_query.stdout | trim | from_json)
+        )
+      }}
+  changed_when: false
+
+- name: Format uptime from an Ansible fact when one was gathered
+  ansible.builtin.set_fact:
+    build_verify_fact_uptime: "{{ build_verify_fact_uptime_text | trim }}"
+  vars:
+    build_verify_fact_uptime_text: |
+      {% set secs = ansible_uptime_seconds | int %}
+      {% set days = secs // 86400 %}
+      {% set hours = (secs % 86400) // 3600 %}
+      {% set minutes = (secs % 3600) // 60 %}
+      {%- if days >= 1 -%}
+      {{- days }} day{{ '' if days == 1 else 's' }}, {{ hours }} hour{{ '' if hours == 1 else 's' }}
+      {%- elif hours >= 1 -%}
+      {{- hours }} hour{{ '' if hours == 1 else 's' }}, {{ minutes }} minute{{ '' if minutes == 1 else 's' }}
+      {%- else -%}
+      {{- minutes }} minute{{ '' if minutes == 1 else 's' }}
+      {%- endif -%}
+  when:
+    - ansible_uptime_seconds is defined
+    - (ansible_uptime_seconds | string) is match('^[0-9]+$')
+  changed_when: false
+
+- name: Leave fact uptime blank when that fact was not gathered
+  ansible.builtin.set_fact:
+    build_verify_fact_uptime: ""
+  when: build_verify_fact_uptime is not defined
+  changed_when: false
+
+- name: Normalize installed kernel, activation, and uptime
+  ansible.builtin.set_fact:
+    build_verify_latest_kernel: >-
+      {{
+        (build_verify_kernel_info.latest_installed_kernel | default('') | string | trim)
+        if ((build_verify_kernel_info.latest_installed_kernel | default('') | string | trim | length) > 0)
+        else 'not_available'
+      }}
+    build_verify_activation: >-
+      {{
+        build_verify_kernel_info.kernel_activation_pending
+        if (build_verify_kernel_info.kernel_activation_pending | default('') in ['Yes', 'No', 'Unknown'])
+        else 'Unknown'
+      }}
+    build_verify_uptime: >-
+      {{
+        build_verify_fact_uptime
+        if ((build_verify_fact_uptime | default('') | string | trim | length) > 0)
+        else (
+          (build_verify_kernel_info.uptime | default('') | string | trim)
+          if (
+            (build_verify_kernel_info.uptime | default('') | string | trim | length) > 0
+            and (build_verify_kernel_info.uptime | default('') | string | trim) != 'not_available'
+          )
+          else 'not_available'
+        )
+      }}
+  changed_when: false
+
 - name: Record an unreachable Linux fact gather
   ansible.builtin.set_fact:
     build_verification_record:
@@ -209,4 +294,16 @@
       collection_time_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
       diagnostic: OS query did not return a result.
   when: build_verification_record is not defined
+  changed_when: false
+
+- name: Add installed kernel, activation, and uptime to the Linux row
+  ansible.builtin.set_fact:
+    build_verification_record: >-
+      {{
+        build_verification_record | combine({
+          'latest_installed_kernel': build_verify_latest_kernel,
+          'kernel_activation_pending': build_verify_activation,
+          'uptime': build_verify_uptime
+        })
+      }}
   changed_when: false

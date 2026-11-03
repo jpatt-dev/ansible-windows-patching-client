@@ -101,7 +101,9 @@ AAP artifacts: `windows_build_verification_report` and
 
 The Linux play gathers minimal facts (`gather_subset: min`) and records
 `ansible_distribution_version` and `ansible_kernel`. Current Build / Kernel is
-the running kernel. The job does not update packages or reboot.
+the running kernel. It also records the newest installed kernel, whether that
+kernel is not yet running, and system uptime. Linux schema version is `3`.
+Windows schema version stays `2`. The job does not update packages or reboot.
 
 AAP artifacts: `linux_build_verification_report` and
 `linux_build_verification_csv`.
@@ -123,7 +125,8 @@ report_email_attach_csv: true
 report_email_fail_on_error: true
 ```
 
-The CSV is UTF-8 with a byte order mark and CRLF. Schema version is `2`.
+The CSV is UTF-8 with a byte order mark and CRLF. Windows schema version is
+`2`. Linux schema version is `3` and appends three columns.
 Column names and the per-host JSON are in `docs/build-verification-contract.md`.
 A successful collection with a full build still names any missing CMDB field
 in `Diagnostic`. Values that start with `=`, `+`, `-`, `@`, a tab, or a

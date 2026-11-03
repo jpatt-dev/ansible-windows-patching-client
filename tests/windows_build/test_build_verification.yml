@@ -36,7 +36,10 @@
           - "'community.general' not in build_verify_report_text"
           - "\"'extract', hostvars\" in build_verify_report_text"
           - "'build_verification_hosts | default([]) +' not in build_verify_report_text"
-          - "'schema_version: \"2\"' in build_verify_report_text"
+          - "\"default('2')\" in build_verify_report_text"
+          - "'build_verify_linux_columns' in build_verify_report_text"
+          - "'build_verify_linux_columns' not in build_verify_playbook_text"
+          - "'Latest Installed Kernel' not in build_verify_playbook_text"
           - "'community.general.mail' in build_verify_email_text"
           - "'is mapping' in build_verify_record_text"
           - "'expected time frame' in build_verify_record_text"
@@ -433,6 +436,13 @@
           - >-
             build_verification_csv.startswith(
             ('%c' | format(65279)) ~ '"Hostname","FQDN","Platform","OS Release","OS Version","Current Build / Kernel"')
+          - "'Latest Installed Kernel' not in build_verification_csv"
+          - "'Kernel Activation Pending' not in build_verification_csv"
+          - >-
+            'latest_installed_kernel' not in (
+            build_verification_report.hosts
+            | selectattr('inventory_hostname', 'equalto', 'win-2016')
+            | first)
           - ('"' ~ 'Diagnostic' ~ '"') in build_verification_csv
           - ('"' ~ 'Environment' ~ '"') in build_verification_csv
           - "'14393.7699' in build_verification_csv"

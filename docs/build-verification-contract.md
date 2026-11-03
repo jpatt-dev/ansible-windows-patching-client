@@ -50,7 +50,7 @@ It does not mean the server is patched or compliant.
 ## Per-host JSON
 
 Each host object in `windows_build_verification_report.hosts` has this shape.
-`schema_version` on the report is `"2"`.
+Windows `schema_version` is `"2"`. Linux `schema_version` is `"3"`.
 
 ```yaml
 inventory_hostname: win-2022
@@ -83,6 +83,11 @@ The header, in order, is:
 `Hostname`, `FQDN`, `Platform`, `OS Release`, `OS Version`,
 `Current Build / Kernel`, `Location`, `Environment`, `Collection Status`,
 `Collection Time`, `Diagnostic`
+
+Windows stops there. Linux schema `"3"` appends `Latest Installed Kernel`,
+`Kernel Activation Pending`, and `Uptime`. Those values are also on each
+Linux host object as `latest_installed_kernel`, `kernel_activation_pending`,
+and `uptime`. Windows host objects do not have those keys.
 
 The file is UTF-8 with a byte order mark and CRLF. Fields are quoted. A value
 that starts with `=`, `+`, `-`, `@`, tab, or carriage return is prefixed with
@@ -136,9 +141,16 @@ fail the job. The shared report tasks do not apply this Windows job rule.
 
 ## What Linux needs to match this report
 
-Linux collection uses the same inventory variables and the same CSV. Its
-record task reads `fqdn`, `os`, `location`, `environment`, and `sys_id`. To
-produce the same CSV, a Linux run needs one `build_verification_record` per
+Linux collection uses the same inventory variables. Its record task reads
+`fqdn`, `os`, `location`, `environment`, and `sys_id`. The running kernel
+stays `ansible_kernel` in `current_build`. The playbook also reads the newest installed `kernel` or `kernel-core` RPM
+with `rpm.vercmp`, and `/proc/uptime` when minimal facts have no uptime. A failed RPM query leaves the host successful, sets the
+installed kernel to `not_available`, and sets activation to `Unknown`.
+Activation is `Yes` only when a newer standard kernel is installed and is not
+running, `No` when the running kernel matches that package, and `Unknown`
+when the comparison is not reliable. It is not a reboot result. Set
+`build_verify_schema_version: "3"` and `build_verify_linux_columns: true`.
+To produce the report, a Linux run needs one `build_verification_record` per
 host and then the same include:
 
 `playbooks/build_verification/tasks/report.yml`
@@ -152,6 +164,8 @@ Set these play variables for the Linux job:
 - `build_verify_filename_prefix: linux-build-verification`
 - `build_verify_subject_name: Linux`
 - `build_verify_report_source: linux_build_verification`
+- `build_verify_schema_version: "3"`
+- `build_verify_linux_columns: true`
 
 Use the same inventory variables and the same missing-value rules. Put the
 distribution version in `os_version` and the running kernel in
