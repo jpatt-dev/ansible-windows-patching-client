@@ -129,7 +129,7 @@
               fi
               if [ "$have_lua" = true ]; then
                 result=$(rpm --define "kvleft ${left}" --define "kvright ${right}" \
-                  --eval '%{lua:print(rpm.vercmp(macros.kvleft, macros.kvright))}' 2>/dev/null || true)
+                  --eval '%{lua:print(rpm.vercmp(rpm.expand("%{kvleft}"), rpm.expand("%{kvright}")))}' 2>/dev/null || true)
                 case "$result" in
                   1|0|-1) printf '%s\n' "$result"; return 0 ;;
                 esac
@@ -219,7 +219,7 @@
             - linux_build_query is mapping
             - (linux_build_query.unreachable | default(false)) == false
             - (linux_build_query.failed | default(false)) == false
-            - (linux_build_query.rc | default(1) | int) == 0
+            - (linux_build_query.rc | default(0) | int) == 0
       rescue:
         - name: Keep the failed fact gather for the host report row
           ansible.builtin.set_fact:

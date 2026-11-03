@@ -30,11 +30,14 @@
           - "'rpm.labelCompare' in linux_build_playbook_text"
           - "'sys.argv' in linux_build_playbook_text"
           - "'/usr/libexec/platform-python' in linux_build_playbook_text"
-          - "'macros.kvleft' in linux_build_playbook_text"
+          - "'rpm.expand(\"%{kvleft}\")' in linux_build_playbook_text"
+          - "'rpm.expand(\"%{kvright}\")' in linux_build_playbook_text"
+          - "'macros.kvleft' not in linux_build_playbook_text"
           - "'*.rt[0-9]*' in linux_build_playbook_text"
           - "'(linux_build_query.unreachable | default(false)) == false' in linux_build_playbook_text"
           - "'(linux_build_query.failed | default(false)) == false' in linux_build_playbook_text"
-          - "'(linux_build_query.rc | default(1) | int) == 0' in linux_build_playbook_text"
+          - "'(linux_build_query.rc | default(0) | int) == 0' in linux_build_playbook_text"
+          - "'default(1)' not in linux_build_playbook_text"
           - "'The job is not successful' not in linux_build_playbook_text"
           - "'build_verification_job_status' not in linux_build_playbook_text"
           - "'/proc/uptime' in linux_build_playbook_text"
@@ -61,6 +64,66 @@
           - "'build_verify_optional_fields' in linux_build_record_text"
         fail_msg: The Linux record task no longer protects optional kernel output.
 
+- name: Decide whether a setup result runs the kernel query
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Use a successful setup result that has no rc
+      ansible.builtin.set_fact:
+        linux_build_query:
+          changed: false
+          failed: false
+          ansible_facts:
+            ansible_distribution: RedHat
+            ansible_distribution_version: "9.5"
+            ansible_kernel: 5.14.0-503.14.1.el9_5.x86_64
+        linux_build_failed_query:
+          changed: false
+          failed: true
+          msg: module setup failed
+        linux_build_down_query:
+          changed: false
+          unreachable: true
+          msg: SSH connection timed out
+      changed_when: false
+
+    - name: A successful setup without rc runs the optional kernel query
+      ansible.builtin.assert:
+        that:
+          - linux_build_query.rc is not defined
+          - linux_build_query.changed == false
+          - linux_build_query.failed == false
+          - linux_build_query.ansible_facts is mapping
+          - linux_build_query is defined
+          - linux_build_query is mapping
+          - (linux_build_query.unreachable | default(false)) == false
+          - (linux_build_query.failed | default(false)) == false
+          - (linux_build_query.rc | default(0) | int) == 0
+        fail_msg: A successful setup result without rc would skip the kernel query.
+
+    - name: A failed setup does not run the optional kernel query
+      ansible.builtin.assert:
+        that:
+          - linux_build_failed_query.rc is not defined
+          - not (
+              (linux_build_failed_query.unreachable | default(false)) == false
+              and (linux_build_failed_query.failed | default(false)) == false
+              and (linux_build_failed_query.rc | default(0) | int) == 0
+            )
+        fail_msg: A failed setup result would still run the kernel query.
+
+    - name: An unreachable host does not run the optional kernel query
+      ansible.builtin.assert:
+        that:
+          - linux_build_down_query.rc is not defined
+          - not (
+              (linux_build_down_query.unreachable | default(false)) == false
+              and (linux_build_down_query.failed | default(false)) == false
+              and (linux_build_down_query.rc | default(0) | int) == 0
+            )
+        fail_msg: An unreachable host would be contacted again for the kernel query.
+
 - name: Register fictional Linux fact gathers
   hosts: localhost
   connection: local
@@ -79,9 +142,10 @@
         ansible_distribution_version: "9.5"
         ansible_kernel: 5.14.0-503.14.1.el9_5.x86_64
         linux_build_query:
+          changed: false
           failed: false
-          unreachable: false
-          rc: 0
+          ansible_facts:
+            ansible_distribution: RedHat
         linux_kernel_query:
           failed: false
           unreachable: false
@@ -98,9 +162,10 @@
         ansible_distribution_version: "8.10"
         ansible_kernel: 4.18.0-553.el8_10.x86_64
         linux_build_query:
+          changed: false
           failed: false
-          unreachable: false
-          rc: 0
+          ansible_facts:
+            ansible_distribution: RedHat
 
     - name: Add a host whose kernel fact is missing
       ansible.builtin.add_host:
@@ -112,9 +177,10 @@
         ansible_distribution_version: "9.5"
         ansible_kernel: ""
         linux_build_query:
+          changed: false
           failed: false
-          unreachable: false
-          rc: 0
+          ansible_facts:
+            ansible_distribution: RedHat
 
     - name: Add an unreachable Linux host
       ansible.builtin.add_host:
@@ -151,9 +217,10 @@
         ansible_distribution_version: "9.5"
         ansible_kernel: 5.14.0-503.35.1.el9_5.x86_64
         linux_build_query:
+          changed: false
           failed: false
-          unreachable: false
-          rc: 0
+          ansible_facts:
+            ansible_distribution: RedHat
         linux_kernel_query:
           failed: false
           unreachable: false
@@ -174,9 +241,10 @@
         ansible_kernel: 4.18.0-513.5.1.el8_9.x86_64
         ansible_uptime_seconds: 1231200
         linux_build_query:
+          changed: false
           failed: false
-          unreachable: false
-          rc: 0
+          ansible_facts:
+            ansible_distribution: RedHat
         linux_kernel_query:
           failed: true
           rc: 1
@@ -194,9 +262,10 @@
         ansible_distribution_version: "9.5"
         ansible_kernel: 5.14.0-503.40.1.el9_5.x86_64
         linux_build_query:
+          changed: false
           failed: false
-          unreachable: false
-          rc: 0
+          ansible_facts:
+            ansible_distribution: RedHat
         linux_kernel_query:
           failed: false
           unreachable: false
@@ -216,9 +285,10 @@
         ansible_distribution_version: "8.10"
         ansible_kernel: 4.18.0-553.el8_10.x86_64
         linux_build_query:
+          changed: false
           failed: false
-          unreachable: false
-          rc: 0
+          ansible_facts:
+            ansible_distribution: RedHat
         linux_kernel_query:
           failed: false
           unreachable: false
@@ -239,9 +309,10 @@
         ansible_kernel: 4.18.0-513.5.1.el8_9.x86_64
         ansible_uptime_seconds: 1231200
         linux_build_query:
+          changed: false
           failed: false
-          unreachable: false
-          rc: 0
+          ansible_facts:
+            ansible_distribution: RedHat
         linux_kernel_query:
           failed: false
           unreachable: false
@@ -646,6 +717,11 @@
               printf '0\n'
               exit 0
             fi
+            exit 1
+            ;;
+          *'rpm.expand("%{kvleft}")'*'rpm.expand("%{kvright}")'*)
+            ;;
+          *)
             exit 1
             ;;
         esac
