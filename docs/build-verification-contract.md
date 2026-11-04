@@ -78,16 +78,22 @@ The report object also has `report_source: windows_build_verification`,
 
 ## CSV columns
 
-The header, in order, is:
+The Windows header, in order, is:
 
 `Hostname`, `FQDN`, `Platform`, `OS Release`, `OS Version`,
 `Current Build / Kernel`, `Location`, `Environment`, `Collection Status`,
 `Collection Time`, `Diagnostic`
 
-Windows stops there. Linux schema `"3"` appends `Latest Installed Kernel`,
-`Kernel Activation Pending`, and `Uptime`. Those values are also on each
-Linux host object as `latest_installed_kernel`, `kernel_activation_pending`,
-and `uptime`. Windows host objects do not have those keys.
+Linux schema `"3"` uses this order:
+
+`Hostname`, `FQDN`, `Environment`, `Location`, `OS Release`, `OS Version`,
+`Current Build / Kernel`, `Latest Installed Kernel`, `Kernel Activation Pending`,
+`Uptime`, `Collection Status`, `Collection Time`, `Diagnostic`, `Platform`
+
+`Current Build / Kernel` is the running kernel on Linux. The Linux-only values
+are also on each Linux host object as `latest_installed_kernel`,
+`kernel_activation_pending`, and `uptime`. Windows host objects do not have
+those keys. JSON field names and values are the same for both orders.
 
 The file is UTF-8 with a byte order mark and CRLF. Fields are quoted. A value
 that starts with `=`, `+`, `-`, `@`, tab, or carriage return is prefixed with

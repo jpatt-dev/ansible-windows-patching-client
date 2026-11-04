@@ -16,7 +16,7 @@
 #   build_verify_email_scope       opening lines of the email body
 #   build_verify_email_tasks       path to email.yml
 #   build_verify_schema_version    defaults to 2; Linux sets 3
-#   build_verify_linux_columns     true appends the Linux kernel and uptime columns
+#   build_verify_linux_columns     true uses the Linux CSV column order
 
 - name: Collect existing build records in inventory order
   ansible.builtin.set_fact:
@@ -229,9 +229,11 @@
         'Collection Status', 'Collection Time', 'Diagnostic'
       ]) -%}
       {%- if build_verify_linux_columns | default(false) | bool -%}
-      {%- set _ = header.cols.append('Latest Installed Kernel') -%}
-      {%- set _ = header.cols.append('Kernel Activation Pending') -%}
-      {%- set _ = header.cols.append('Uptime') -%}
+      {%- set header.cols = [
+        'Hostname', 'FQDN', 'Environment', 'Location', 'OS Release', 'OS Version',
+        'Current Build / Kernel', 'Latest Installed Kernel', 'Kernel Activation Pending',
+        'Uptime', 'Collection Status', 'Collection Time', 'Diagnostic', 'Platform'
+      ] -%}
       {%- endif -%}
       {%- set quoted = namespace(cols=[]) -%}
       {%- for name in header.cols -%}
@@ -239,24 +241,26 @@
       {%- endfor -%}
       {%- set _ = ns.lines.append(quoted.cols | join(',')) -%}
       {%- for item in build_verification_hosts -%}
-      {%- set row = namespace(cols=[
-        cell(item.hostname | default('not_available')),
-        cell(item.fqdn | default('not_available')),
-        cell(item.platform | default('')),
-        cell(item.os_release | default('not_available')),
-        cell(item.os_version | default('not_available')),
-        cell(item.current_build | default('not_available')),
-        cell(item.location | default('')),
-        cell(item.patch_environment | default('')),
-        cell(item.collection_status | default('failed')),
-        cell(item.collection_time_utc | default('not_available')),
-        cell(item.diagnostic | default(''))
-      ]) -%}
-      {%- if build_verify_linux_columns | default(false) | bool -%}
-      {%- set _ = row.cols.append(cell(item.latest_installed_kernel | default('not_available'))) -%}
-      {%- set _ = row.cols.append(cell(item.kernel_activation_pending | default('Unknown'))) -%}
-      {%- set _ = row.cols.append(cell(item.uptime | default('not_available'))) -%}
-      {%- endif -%}
+      {%- set fields = {
+        'Hostname': cell(item.hostname | default('not_available')),
+        'FQDN': cell(item.fqdn | default('not_available')),
+        'Platform': cell(item.platform | default('')),
+        'OS Release': cell(item.os_release | default('not_available')),
+        'OS Version': cell(item.os_version | default('not_available')),
+        'Current Build / Kernel': cell(item.current_build | default('not_available')),
+        'Location': cell(item.location | default('')),
+        'Environment': cell(item.patch_environment | default('')),
+        'Collection Status': cell(item.collection_status | default('failed')),
+        'Collection Time': cell(item.collection_time_utc | default('not_available')),
+        'Diagnostic': cell(item.diagnostic | default('')),
+        'Latest Installed Kernel': cell(item.latest_installed_kernel | default('not_available')),
+        'Kernel Activation Pending': cell(item.kernel_activation_pending | default('Unknown')),
+        'Uptime': cell(item.uptime | default('not_available'))
+      } -%}
+      {%- set row = namespace(cols=[]) -%}
+      {%- for name in header.cols -%}
+      {%- set _ = row.cols.append(fields[name]) -%}
+      {%- endfor -%}
       {%- set _ = ns.lines.append(row.cols | join(',')) -%}
       {%- endfor -%}
       {{- bom ~ (ns.lines | join(cr ~ lf)) ~ cr ~ lf -}}

@@ -128,7 +128,7 @@ report_email_fail_on_error: true
 ```
 
 The CSV is UTF-8 with a byte order mark and CRLF. Windows schema version is
-`2`. Linux schema version is `3` and appends three columns.
+`2`. Linux schema version is `3` and uses its own 14-column order.
 Column names and the per-host JSON are in `docs/build-verification-contract.md`.
 A successful collection with a full build still names any missing CMDB field
 in `Diagnostic`. Values that start with `=`, `+`, `-`, `@`, a tab, or a

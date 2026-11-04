@@ -545,8 +545,142 @@
           - "'Kernel Activation Pending is not a reboot' in build_verification_email_body"
           - build_verification_email_result is not defined
           - >-
-            build_verification_csv.startswith(
-            ('%c' | format(65279)) ~ '"Hostname","FQDN","Platform","OS Release","OS Version","Current Build / Kernel"')
+            (
+              build_verification_csv.splitlines() | first
+              | regex_replace('^' ~ ('%c' | format(65279)), '')
+            ) == (
+              '"' ~ ([
+                'Hostname', 'FQDN', 'Environment', 'Location', 'OS Release', 'OS Version',
+                'Current Build / Kernel', 'Latest Installed Kernel', 'Kernel Activation Pending',
+                'Uptime', 'Collection Status', 'Collection Time', 'Diagnostic', 'Platform'
+              ] | join('","')) ~ '"'
+            )
+          - >-
+            (
+              build_verification_csv.splitlines()
+              | select('match', '^"lin-ok",')
+              | first
+              | regex_replace('^"', '')
+              | regex_replace('"$', '')
+              | split('","')
+            )[0] == 'lin-ok'
+          - >-
+            (
+              build_verification_csv.splitlines()
+              | select('match', '^"lin-ok",')
+              | first
+              | regex_replace('^"', '')
+              | regex_replace('"$', '')
+              | split('","')
+            )[1] == 'lin-ok.cmdb.example'
+          - >-
+            (
+              build_verification_csv.splitlines()
+              | select('match', '^"lin-ok",')
+              | first
+              | regex_replace('^"', '')
+              | regex_replace('"$', '')
+              | split('","')
+            )[2] == 'LAB'
+          - >-
+            (
+              build_verification_csv.splitlines()
+              | select('match', '^"lin-ok",')
+              | first
+              | regex_replace('^"', '')
+              | regex_replace('"$', '')
+              | split('","')
+            )[3] == 'London, UK'
+          - >-
+            (
+              build_verification_csv.splitlines()
+              | select('match', '^"lin-ok",')
+              | first
+              | regex_replace('^"', '')
+              | regex_replace('"$', '')
+              | split('","')
+            )[4] == 'Red Hat Enterprise Linux 9'
+          - >-
+            (
+              build_verification_csv.splitlines()
+              | select('match', '^"lin-ok",')
+              | first
+              | regex_replace('^"', '')
+              | regex_replace('"$', '')
+              | split('","')
+            )[5] == '9.5'
+          - >-
+            (
+              build_verification_csv.splitlines()
+              | select('match', '^"lin-ok",')
+              | first
+              | regex_replace('^"', '')
+              | regex_replace('"$', '')
+              | split('","')
+            )[6] == '5.14.0-503.14.1.el9_5.x86_64'
+          - >-
+            (
+              build_verification_csv.splitlines()
+              | select('match', '^"lin-ok",')
+              | first
+              | regex_replace('^"', '')
+              | regex_replace('"$', '')
+              | split('","')
+            )[7] == '5.14.0-503.14.1.el9_5.x86_64'
+          - >-
+            (
+              build_verification_csv.splitlines()
+              | select('match', '^"lin-ok",')
+              | first
+              | regex_replace('^"', '')
+              | regex_replace('"$', '')
+              | split('","')
+            )[8] == 'No'
+          - >-
+            (
+              build_verification_csv.splitlines()
+              | select('match', '^"lin-ok",')
+              | first
+              | regex_replace('^"', '')
+              | regex_replace('"$', '')
+              | split('","')
+            )[9] == '14 days, 6 hours'
+          - >-
+            (
+              build_verification_csv.splitlines()
+              | select('match', '^"lin-ok",')
+              | first
+              | regex_replace('^"', '')
+              | regex_replace('"$', '')
+              | split('","')
+            )[10] == 'success'
+          - >-
+            (
+              build_verification_csv.splitlines()
+              | select('match', '^"lin-ok",')
+              | first
+              | regex_replace('^"', '')
+              | regex_replace('"$', '')
+              | split('","')
+            )[11] is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T')
+          - >-
+            (
+              build_verification_csv.splitlines()
+              | select('match', '^"lin-ok",')
+              | first
+              | regex_replace('^"', '')
+              | regex_replace('"$', '')
+              | split('","')
+            )[12] == ''
+          - >-
+            (
+              build_verification_csv.splitlines()
+              | select('match', '^"lin-ok",')
+              | first
+              | regex_replace('^"', '')
+              | regex_replace('"$', '')
+              | split('","')
+            )[13] == 'linux'
           - "'5.14.0-503.14.1.el9_5.x86_64' in build_verification_csv"
           - "'9.5' in build_verification_csv"
           - "'4.18.0-553.el8_10.x86_64' in build_verification_csv"
@@ -563,9 +697,6 @@
             | selectattr('inventory_hostname', 'equalto', 'lin-ok')
             | map(attribute='snow_ci_sys_id') | first)
             == 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-          - >-
-            ('"' ~ 'Latest Installed Kernel' ~ '","Kernel Activation Pending","Uptime' ~ '"')
-            in build_verification_csv
           - ('"' ~ 'Yes' ~ '"') in build_verification_csv
           - ('"' ~ 'No' ~ '"') in build_verification_csv
           - ('"' ~ 'Unknown' ~ '"') in build_verification_csv
@@ -887,7 +1018,16 @@
           - build_verification_report.schema_version == '3'
           - build_verification_csv is defined
           - >-
-            ('"' ~ 'Latest Installed Kernel' ~ '"') in build_verification_csv
+            (
+              build_verification_csv.splitlines() | first
+              | regex_replace('^' ~ ('%c' | format(65279)), '')
+            ) == (
+              '"' ~ ([
+                'Hostname', 'FQDN', 'Environment', 'Location', 'OS Release', 'OS Version',
+                'Current Build / Kernel', 'Latest Installed Kernel', 'Kernel Activation Pending',
+                'Uptime', 'Collection Status', 'Collection Time', 'Diagnostic', 'Platform'
+              ] | join('","')) ~ '"'
+            )
           - >-
             (
               build_verification_csv.splitlines() | first

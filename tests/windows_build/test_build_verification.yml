@@ -434,8 +434,16 @@
           - "'Systems successfully queried: 7' in build_verification_email_body"
           - "'Systems failed or unreachable: 4' in build_verification_email_body"
           - >-
-            build_verification_csv.startswith(
-            ('%c' | format(65279)) ~ '"Hostname","FQDN","Platform","OS Release","OS Version","Current Build / Kernel"')
+            (
+              build_verification_csv.splitlines() | first
+              | regex_replace('^' ~ ('%c' | format(65279)), '')
+            ) == (
+              '"' ~ ([
+                'Hostname', 'FQDN', 'Platform', 'OS Release', 'OS Version',
+                'Current Build / Kernel', 'Location', 'Environment',
+                'Collection Status', 'Collection Time', 'Diagnostic'
+              ] | join('","')) ~ '"'
+            )
           - "'Latest Installed Kernel' not in build_verification_csv"
           - "'Kernel Activation Pending' not in build_verification_csv"
           - >-
