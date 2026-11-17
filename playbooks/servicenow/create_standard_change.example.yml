@@ -1,0 +1,10 @@
+---
+# Example only. No secrets, hostnames, template ids, or change values.
+# Copy the values into AAP extra vars or a private vars file.
+# Leave snow_confirm_create false until the ServiceNow team confirms
+# the endpoint and the request body.
+snow_instance_url: https://nonproduction.example.invalid
+snow_nonproduction_instance_url: https://nonproduction.example.invalid
+snow_standard_change_template_id: TEMPLATE-ID-FROM-SERVICENOW
+snow_confirm_create: false
+snow_change_payload: {}

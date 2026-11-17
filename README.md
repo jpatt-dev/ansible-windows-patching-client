@@ -228,6 +228,56 @@ Normal patch operations do not require Git changes.
 - Apply fails closed when a pending reboot remains.
 - Standalone Precheck is fail-closed on `precheck_status` `blocked` or `failed`.
 
+## Standard Change creation proof of concept
+
+`playbooks/servicenow/create_standard_change.yml` sends one POST to
+`/api/sn_chg_rest/change/standard/{template_id}`. It is not part of Full
+Patch, Precheck, incident creation, or change preparation. The endpoint and
+the request body are not confirmed for the client instance.
+
+Required extra variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `snow_instance_url` | `https` host of the nonproduction instance. No user, password, or path. |
+| `snow_nonproduction_instance_url` | Must exactly match `snow_instance_url`. |
+| `snow_standard_change_template_id` | Path token supplied by ServiceNow. Not assumed to be a producer version sys_id. |
+| `snow_change_payload` | JSON object sent as the body. `{}` until the required fields are confirmed. |
+| `snow_confirm_create` | Default `false`. `true` sends one POST. |
+
+Authentication is the existing AAP custom credential: `SN_USERNAME` and
+`SN_PASSWORD`. When `SN_HOST` is set, it must match `snow_instance_url`.
+This playbook does not read the password from a playbook variable.
+
+Local syntax check, with no POST:
+
+```bash
+ansible-playbook --syntax-check playbooks/servicenow/create_standard_change.yml
+```
+
+Dry run, with no POST, using the placeholder example:
+
+```bash
+ansible-playbook playbooks/servicenow/create_standard_change.yml \
+  -e @playbooks/servicenow/create_standard_change.example.yml
+```
+
+In AAP, use inventory `localhost`, that credential, and the same extra vars.
+Set `snow_confirm_create` to `true` only for one intended nonproduction test.
+Check mode does not send the POST. The task has no retries. The job log shows
+the HTTP status, change number, and sys_id when those fields are present.
+The response body is not displayed.
+
+After a success summary, open the change number in the nonproduction
+ServiceNow instance and confirm the template, state, and fields. If the
+number is `NOT RETURNED`, do not run the playbook again until the response
+shape is confirmed.
+
+Still to confirm with the ServiceNow team: the real creation path, which
+identifier belongs in the URL, the required JSON fields, the success status
+code, where the change number and sys_id appear, and the authorized
+nonproduction instance name.
+
 ## Documentation
 
 - [AAP Controller setup](docs/aap-controller-setup.md)

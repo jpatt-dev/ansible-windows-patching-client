@@ -1,0 +1,9 @@
+---
+# Example AAP Job Template extra variables. No secrets or real field names.
+# Replace the placeholder path and payload only after the ServiceNow team
+# confirms the staging table and columns. Leave confirmation false until
+# one nonproduction POST is intended.
+snow_import_confirm_create: false
+snow_import_api_path: api/now/import/PLACEHOLDER_STAGING_TABLE
+snow_import_payload:
+  u_placeholder_field: PLACEHOLDER_VALUE

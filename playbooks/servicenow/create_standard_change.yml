@@ -1,0 +1,229 @@
+---
+# Standalone proof of concept. One POST to the candidate Standard Change API.
+# This playbook is not part of Full Patch, Precheck, or change preparation.
+#
+# Endpoint, not yet confirmed on the client instance:
+#   POST /api/sn_chg_rest/change/standard/{snow_standard_change_template_id}
+# The template id is sent as given. It is not assumed to be a producer
+# version sys_id. The body is snow_change_payload and is not filled in here.
+#
+# AAP job template:
+#   Playbook: playbooks/servicenow/create_standard_change.yml
+#   Inventory: localhost. Do not limit this job to a Windows wave.
+#   Credential: the custom credential that injects SN_HOST, SN_USERNAME,
+#               and SN_PASSWORD.
+#   Extra vars: snow_instance_url must exactly match
+#               snow_nonproduction_instance_url. snow_confirm_create
+#               stays false until the nonproduction test is intended.
+
+- name: Create one ServiceNow Standard Change from an approved template
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    snow_instance_url: ""
+    snow_nonproduction_instance_url: ""
+    snow_standard_change_template_id: ""
+    snow_change_payload: {}
+    snow_confirm_create: false
+
+  tasks:
+    - name: Validate the Standard Change request before any POST
+      ansible.builtin.assert:
+        that:
+          - _snow_instance is match('^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$')
+          - _snow_allowed is match('^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$')
+          - _snow_instance == _snow_allowed
+          - _snow_template is match('^[A-Za-z0-9_.-]{1,80}$')
+          - snow_change_payload is mapping
+        fail_msg: >-
+          snow_instance_url must be an https host, with no user, password,
+          or path, and it must exactly match snow_nonproduction_instance_url.
+          snow_standard_change_template_id must be one token.
+          snow_change_payload must be a dictionary.
+          No ServiceNow request was sent.
+      vars:
+        _snow_instance: "{{ snow_instance_url | default('') | string | trim | regex_replace('/+$', '') }}"
+        _snow_allowed: "{{ snow_nonproduction_instance_url | default('') | string | trim | regex_replace('/+$', '') }}"
+        _snow_template: "{{ snow_standard_change_template_id | default('') | string | trim }}"
+
+    - name: Show that creation was not confirmed
+      when: not (snow_confirm_create | bool)
+      ansible.builtin.debug:
+        msg:
+          - "Standard Change creation: NOT CONFIRMED"
+          - "snow_confirm_create is false. No ServiceNow request was sent."
+          - "Set snow_confirm_create=true to send one POST."
+
+    - name: End the play when creation is not confirmed
+      when: not (snow_confirm_create | bool)
+      ansible.builtin.meta: end_play
+
+    - name: Show that check mode does not create a change
+      when: ansible_check_mode | bool
+      ansible.builtin.debug:
+        msg:
+          - "Standard Change creation: CHECK MODE"
+          - "No ServiceNow request was sent."
+
+    - name: End the play in check mode
+      when: ansible_check_mode | bool
+      ansible.builtin.meta: end_play
+
+    - name: Check the existing ServiceNow credential without logging it
+      ansible.builtin.set_fact:
+        snow_credential_ready: >-
+          {{
+            (_snow_username | length) > 0
+            and (_snow_password | length) > 0
+            and ((_snow_host | length) == 0 or _snow_host == _snow_instance)
+          }}
+      no_log: true
+      vars:
+        _snow_username: "{{ lookup('ansible.builtin.env', 'SN_USERNAME') | trim }}"
+        _snow_password: "{{ lookup('ansible.builtin.env', 'SN_PASSWORD') | trim }}"
+        _snow_host: "{{ lookup('ansible.builtin.env', 'SN_HOST') | trim | regex_replace('/+$', '') }}"
+        _snow_instance: "{{ snow_instance_url | default('') | string | trim | regex_replace('/+$', '') }}"
+
+    - name: Require the existing ServiceNow credential before the POST
+      when: not (snow_credential_ready | bool)
+      ansible.builtin.fail:
+        msg: >-
+          The AAP credential must supply SN_USERNAME and SN_PASSWORD.
+          When SN_HOST is set, it must match snow_instance_url.
+          No ServiceNow request was sent.
+
+    - name: POST one Standard Change
+      block:
+        - name: Send the Standard Change creation request
+          ansible.builtin.uri:
+            url: "{{ _snow_instance }}/api/sn_chg_rest/change/standard/{{ _snow_template }}"
+            method: POST
+            url_username: "{{ lookup('ansible.builtin.env', 'SN_USERNAME') | trim }}"
+            url_password: "{{ lookup('ansible.builtin.env', 'SN_PASSWORD') }}"
+            force_basic_auth: true
+            use_netrc: false
+            validate_certs: true
+            timeout: 60
+            body_format: json
+            body: "{{ snow_change_payload }}"
+            status_code:
+              - 200
+              - 201
+              - 202
+            headers:
+              Accept: application/json
+              Content-Type: application/json
+          register: snow_standard_change_response
+          no_log: true
+          vars:
+            _snow_instance: "{{ snow_instance_url | default('') | string | trim | regex_replace('/+$', '') }}"
+            _snow_template: "{{ snow_standard_change_template_id | default('') | string | trim }}"
+      rescue:
+        - name: Classify the creation failure without the response body
+          ansible.builtin.set_fact:
+            snow_standard_change_failure: "{{ _snow_failure }}"
+          no_log: true
+          vars:
+            _snow_msg: "{{ ansible_failed_result.msg | default('') | string }}"
+            _snow_status: "{{ ansible_failed_result.status | default('') | string }}"
+            _snow_failure: >-
+              {{
+                'authentication rejected'
+                if (_snow_status == '401')
+                else (
+                  'permission denied'
+                  if (_snow_status == '403')
+                  else (
+                    'certificate verification failed'
+                    if ('certificate' in (_snow_msg | lower))
+                    else (
+                      'connection failed'
+                      if (
+                        ('timed out' in (_snow_msg | lower))
+                        or ('connection' in (_snow_msg | lower))
+                        or ('name or service not known' in (_snow_msg | lower))
+                      )
+                      else (
+                        'unexpected HTTP status ' ~ _snow_status
+                        if (_snow_status | length) > 0
+                        else 'request failed'
+                      )
+                    )
+                  )
+                )
+              }}
+
+        - name: Stop after the failed Standard Change POST
+          ansible.builtin.fail:
+            msg: >-
+              Standard Change creation failed
+              ({{ snow_standard_change_failure | default('request failed') }}).
+              The POST was not retried. The response body was not displayed.
+
+    - name: Reject an error indicator in the creation response
+      when: >-
+        snow_standard_change_response.json is defined
+        and snow_standard_change_response.json is mapping
+        and (
+          snow_standard_change_response.json.error is defined
+          or (snow_standard_change_response.json.status | default('') | string | lower) == 'failure'
+        )
+      ansible.builtin.fail:
+        msg: >-
+          The Standard Change POST returned HTTP
+          {{ snow_standard_change_response.status | default('unknown') }}
+          with an error indicator. The response body was not displayed.
+          No further request was sent.
+
+    - name: Collect the change number and sys_id when the response includes them
+      ansible.builtin.set_fact:
+        snow_standard_change_summary: "{{ _snow_summary_json | from_json }}"
+      no_log: true
+      vars:
+        _snow_summary_json: |
+          {% set body = snow_standard_change_response.json | default({}, true) %}
+          {% set ns = namespace(record={}, number='', sys_id='') %}
+          {% if body is mapping and body.result is defined and body.result is mapping %}
+          {% set ns.record = body.result %}
+          {% elif (
+            body is mapping
+            and body.result is defined
+            and body.result is not string
+            and body.result is sequence
+            and (body.result | length) > 0
+            and (body.result | first) is mapping
+          ) %}
+          {% set ns.record = body.result | first %}
+          {% elif body is mapping %}
+          {% set ns.record = body %}
+          {% endif %}
+          {% if ns.record.number is defined and ns.record.number is string %}
+          {% set ns.number = ns.record.number | trim %}
+          {% elif ns.record.number is defined and ns.record.number is mapping and ns.record.number.display_value is defined %}
+          {% set ns.number = ns.record.number.display_value | string | trim %}
+          {% elif ns.record.number is defined and ns.record.number is mapping and ns.record.number.value is defined %}
+          {% set ns.number = ns.record.number.value | string | trim %}
+          {% endif %}
+          {% if ns.record.sys_id is defined and ns.record.sys_id is string %}
+          {% set ns.sys_id = ns.record.sys_id | trim %}
+          {% elif ns.record.sys_id is defined and ns.record.sys_id is mapping and ns.record.sys_id.value is defined %}
+          {% set ns.sys_id = ns.record.sys_id.value | string | trim %}
+          {% endif %}
+          {{
+            {
+              'http_status': snow_standard_change_response.status | default('NOT RETURNED') | string,
+              'change_number': ns.number if (ns.number is match('^[A-Za-z0-9_-]{1,40}$')) else 'NOT RETURNED',
+              'sys_id': ns.sys_id if (ns.sys_id is match('^[0-9a-fA-F]{32}$')) else 'NOT RETURNED'
+            } | to_json
+          }}
+
+    - name: Show the sanitized Standard Change result
+      ansible.builtin.debug:
+        msg:
+          - "Standard Change creation: SUCCEEDED"
+          - "HTTP status: {{ snow_standard_change_summary.http_status }}"
+          - "Change number: {{ snow_standard_change_summary.change_number }}"
+          - "sys_id: {{ snow_standard_change_summary.sys_id }}"
+          - "No further request was sent. Confirm the record in ServiceNow."

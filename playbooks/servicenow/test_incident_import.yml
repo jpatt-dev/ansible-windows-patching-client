@@ -1,0 +1,192 @@
+---
+# Standalone proof of concept. One POST to a ServiceNow Import Set API.
+# This playbook is not part of Full Patch or roles/servicenow_incident.
+#
+# servicenow.itsm 2.6.3 api accepts api_path and action post. The path is
+# sent as given, for example api/now/import/u_staging_table. The module
+# returns only the JSON result member, adds sysparm_exclude_reference_link,
+# and does not return the HTTP status. A successful module result means the
+# request was accepted. It does not by itself prove an incident was created.
+#
+# AAP job template:
+#   Playbook: playbooks/servicenow/test_incident_import.yml
+#   Inventory: localhost. Do not limit this job to a Windows wave.
+#   Credential: the custom credential that injects SN_HOST, SN_USERNAME,
+#               and SN_PASSWORD.
+#   Extra vars: snow_import_api_path and snow_import_payload.
+#               snow_import_confirm_create stays false until the POST is intended.
+
+- name: Test one ServiceNow incident import set
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    snow_import_api_path: ""
+    snow_import_payload: {}
+    snow_import_confirm_create: false
+
+  tasks:
+    - name: Validate the import path and payload before any POST
+      ansible.builtin.assert:
+        that:
+          - _snow_import_path is match('^api/now/import/[A-Za-z][A-Za-z0-9_]{0,79}$')
+          - snow_import_payload is mapping
+          - snow_import_payload | length > 0
+        fail_msg: >-
+          snow_import_api_path must be api/now/import/<staging_table>.
+          snow_import_payload must be a non-empty dictionary.
+          No ServiceNow request was sent.
+      vars:
+        _snow_import_path: "{{ snow_import_api_path | default('') | string | trim }}"
+
+    - name: Show that the import was not confirmed
+      when: not (snow_import_confirm_create | bool)
+      ansible.builtin.debug:
+        msg:
+          - "Incident import: NOT CONFIRMED"
+          - "snow_import_confirm_create is false. No ServiceNow request was sent."
+          - "Set snow_import_confirm_create=true to send one POST."
+
+    - name: End the play when the import is not confirmed
+      when: not (snow_import_confirm_create | bool)
+      ansible.builtin.meta: end_play
+
+    - name: Show that check mode does not post the import
+      when: ansible_check_mode | bool
+      ansible.builtin.debug:
+        msg:
+          - "Incident import: CHECK MODE"
+          - "No ServiceNow request was sent."
+
+    - name: End the play in check mode
+      when: ansible_check_mode | bool
+      ansible.builtin.meta: end_play
+
+    - name: Require the configured ServiceNow instance before the POST
+      ansible.builtin.assert:
+        that:
+          - _snow_host is match('^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$')
+        fail_msg: >-
+          SN_HOST must be the https instance URL from the AAP credential.
+          No ServiceNow request was sent.
+      vars:
+        _snow_host: "{{ lookup('ansible.builtin.env', 'SN_HOST') | trim | regex_replace('/+$', '') }}"
+
+    - name: POST one import-set record
+      block:
+        # Username and password come from the credential environment.
+        # args[module] does not see that env fallback.
+        - name: Send the import set record  # noqa: args[module]
+          servicenow.itsm.api:
+            instance:
+              host: "{{ lookup('ansible.builtin.env', 'SN_HOST') | trim | regex_replace('/+$', '') }}"
+              validate_certs: true
+            api_path: "{{ snow_import_api_path | trim }}"
+            action: post
+            data: "{{ snow_import_payload }}"
+          register: snow_import_response
+          no_log: true
+      rescue:
+        - name: Classify the import failure without the response body
+          ansible.builtin.set_fact:
+            snow_import_failure: "{{ _snow_import_failure }}"
+          no_log: true
+          vars:
+            _snow_msg: "{{ ansible_failed_result.msg | default('') | string }}"
+            _snow_status_text: >-
+              {{
+                _snow_msg | regex_search('Unexpected response - [0-9]{3}')
+                | default('', true)
+              }}
+            _snow_status: "{{ _snow_status_text | regex_search('[0-9]{3}$') | default('', true) }}"
+            _snow_import_failure: >-
+              {{
+                'authentication rejected'
+                if ('Failed to authenticate' in _snow_msg)
+                else (
+                  'unexpected HTTP status ' ~ _snow_status
+                  if (_snow_status | length) > 0
+                  else 'request failed'
+                )
+              }}
+
+        - name: Stop after the failed import POST
+          ansible.builtin.fail:
+            msg: >-
+              Incident import failed
+              ({{ snow_import_failure | default('request failed') }}).
+              The POST was not retried. The response body was not displayed.
+
+    - name: Read the import result without displaying the payload
+      ansible.builtin.set_fact:
+        snow_import_summary: "{{ _snow_import_summary_json | from_json }}"
+      no_log: true
+      vars:
+        _snow_import_summary_json: |
+          {% set raw = snow_import_response.record | default(none) %}
+          {% set ns = namespace(rows=[], status='', table='', number='', sys_id='', confirmed=0) %}
+          {% if raw is mapping %}
+          {% set ns.rows = [raw] %}
+          {% elif raw is not string and raw is sequence %}
+          {% for item in raw %}
+          {% if item is mapping %}
+          {% set ns.rows = ns.rows + [item] %}
+          {% endif %}
+          {% endfor %}
+          {% endif %}
+          {% if ns.rows | length == 1 %}
+          {% set row = ns.rows[0] %}
+          {% set ns.status = row.status | default('') | string | trim %}
+          {% set ns.table = row.table | default('') | string | trim %}
+          {% if row.sys_id is defined and row.sys_id is string %}
+          {% set ns.sys_id = row.sys_id | trim %}
+          {% elif row.sys_id is defined and row.sys_id is mapping and row.sys_id.value is defined %}
+          {% set ns.sys_id = row.sys_id.value | string | trim %}
+          {% endif %}
+          {% if row.number is defined and row.number is string %}
+          {% set ns.number = row.number | trim %}
+          {% elif (
+            row.display_value is defined
+            and row.display_value is string
+            and (
+              (row.display_name | default('') | string | lower) == 'number'
+              or (row.display_value | string) is match('^INC[0-9]+$')
+            )
+          ) %}
+          {% set ns.number = row.display_value | trim %}
+          {% endif %}
+          {% if (
+            (ns.status | lower) in ['inserted', 'updated']
+            and (ns.table | lower) == 'incident'
+            and (
+              ns.sys_id is match('^[0-9a-fA-F]{32}$')
+              or ns.number is match('^INC[0-9]+$')
+            )
+          ) %}
+          {% set ns.confirmed = 1 %}
+          {% endif %}
+          {% endif %}
+          {{
+            {
+              'outcome': 'confirmed' if (ns.confirmed == 1) else 'unconfirmed',
+              'transform_status': ns.status if (ns.status is match('^[A-Za-z0-9_-]{1,40}$')) else 'NOT RETURNED',
+              'target_table': ns.table if (ns.table is match('^[A-Za-z0-9_]{1,80}$')) else 'NOT RETURNED',
+              'incident_number': ns.number if (ns.number is match('^INC[0-9]+$')) else 'NOT RETURNED',
+              'sys_id': ns.sys_id if (ns.sys_id is match('^[0-9a-fA-F]{32}$')) else 'NOT RETURNED'
+            } | to_json
+          }}
+
+    - name: Show the sanitized import result
+      ansible.builtin.debug:
+        msg:
+          - "Incident import: {{ snow_import_summary.outcome | upper }}"
+          - "Transform status: {{ snow_import_summary.transform_status }}"
+          - "Target table: {{ snow_import_summary.target_table }}"
+          - "Incident number: {{ snow_import_summary.incident_number }}"
+          - "sys_id: {{ snow_import_summary.sys_id }}"
+          - >-
+            The module does not return the HTTP status.
+            Acceptance of the import row is not a confirmed incident
+            unless the transform status, target table, and record identifier
+            are all present. No further request was sent.
