@@ -125,7 +125,10 @@
       vars:
         _snow_import_summary_json: |
           {% set raw = snow_import_response.record | default(none) %}
-          {% set ns = namespace(rows=[], status='', table='', number='', sys_id='', confirmed=0) %}
+          {% set ns = namespace(
+            rows=[], chosen={}, status='', table='', number='', sys_id='',
+            display_value='', error_message='', status_message='', confirmed=0
+          ) %}
           {% if raw is mapping %}
           {% set ns.rows = [raw] %}
           {% elif raw is not string and raw is sequence %}
@@ -136,28 +139,48 @@
           {% endfor %}
           {% endif %}
           {% if ns.rows | length == 1 %}
-          {% set row = ns.rows[0] %}
-          {% set ns.status = row.status | default('') | string | trim %}
-          {% set ns.table = row.table | default('') | string | trim %}
-          {% if row.sys_id is defined and row.sys_id is string %}
-          {% set ns.sys_id = row.sys_id | trim %}
-          {% elif row.sys_id is defined and row.sys_id is mapping and row.sys_id.value is defined %}
-          {% set ns.sys_id = row.sys_id.value | string | trim %}
+          {% set ns.chosen = ns.rows[0] %}
+          {% elif ns.rows | length > 1 %}
+          {% for item in ns.rows %}
+          {% if (ns.chosen | length) == 0 and (item.status | default('') | string | lower) == 'error' %}
+          {% set ns.chosen = item %}
           {% endif %}
-          {% if row.number is defined and row.number is string %}
-          {% set ns.number = row.number | trim %}
+          {% endfor %}
+          {% if (ns.chosen | length) == 0 %}
+          {% set ns.chosen = ns.rows[0] %}
+          {% endif %}
+          {% endif %}
+          {% if (ns.chosen | length) > 0 %}
+          {% set ns.status = ns.chosen.status | default('') | string | trim %}
+          {% set ns.table = ns.chosen.table | default('') | string | trim %}
+          {% if ns.chosen.sys_id is defined and ns.chosen.sys_id is string %}
+          {% set ns.sys_id = ns.chosen.sys_id | trim %}
+          {% elif ns.chosen.sys_id is defined and ns.chosen.sys_id is mapping and ns.chosen.sys_id.value is defined %}
+          {% set ns.sys_id = ns.chosen.sys_id.value | string | trim %}
+          {% endif %}
+          {% if ns.chosen.display_value is defined and ns.chosen.display_value is string %}
+          {% set ns.display_value = ns.chosen.display_value | trim %}
+          {% endif %}
+          {% if ns.chosen.error_message is defined and ns.chosen.error_message is string %}
+          {% set ns.error_message = ns.chosen.error_message | trim %}
+          {% endif %}
+          {% if ns.chosen.status_message is defined and ns.chosen.status_message is string %}
+          {% set ns.status_message = ns.chosen.status_message | trim %}
+          {% endif %}
+          {% if ns.chosen.number is defined and ns.chosen.number is string %}
+          {% set ns.number = ns.chosen.number | trim %}
           {% elif (
-            row.display_value is defined
-            and row.display_value is string
+            (ns.display_value | length) > 0
             and (
-              (row.display_name | default('') | string | lower) == 'number'
-              or (row.display_value | string) is match('^INC[0-9]+$')
+              (ns.chosen.display_name | default('') | string | lower) == 'number'
+              or ns.display_value is match('^INC[0-9]+$')
             )
           ) %}
-          {% set ns.number = row.display_value | trim %}
+          {% set ns.number = ns.display_value %}
           {% endif %}
           {% if (
-            (ns.status | lower) in ['inserted', 'updated']
+            (ns.rows | length) == 1
+            and (ns.status | lower) in ['inserted', 'updated']
             and (ns.table | lower) == 'incident'
             and (
               ns.sys_id is match('^[0-9a-fA-F]{32}$')
@@ -167,13 +190,21 @@
           {% set ns.confirmed = 1 %}
           {% endif %}
           {% endif %}
+          {% set clean_error = ns.error_message | regex_replace('[\r\n\t]+', ' ') | trim %}
+          {% set clean_error = clean_error | regex_replace('(?i)(password|authorization|bearer)\\s*[:=]\\s*\\S+', 'credential=[redacted]') %}
+          {% set clean_status = ns.status_message | regex_replace('[\r\n\t]+', ' ') | trim %}
+          {% set clean_status = clean_status | regex_replace('(?i)(password|authorization|bearer)\\s*[:=]\\s*\\S+', 'credential=[redacted]') %}
+          {% set clean_display = ns.display_value | regex_replace('[\r\n\t]+', ' ') | trim %}
           {{
             {
               'outcome': 'confirmed' if (ns.confirmed == 1) else 'unconfirmed',
               'transform_status': ns.status if (ns.status is match('^[A-Za-z0-9_-]{1,40}$')) else 'NOT RETURNED',
               'target_table': ns.table if (ns.table is match('^[A-Za-z0-9_]{1,80}$')) else 'NOT RETURNED',
               'incident_number': ns.number if (ns.number is match('^INC[0-9]+$')) else 'NOT RETURNED',
-              'sys_id': ns.sys_id if (ns.sys_id is match('^[0-9a-fA-F]{32}$')) else 'NOT RETURNED'
+              'sys_id': ns.sys_id if (ns.sys_id is match('^[0-9a-fA-F]{32}$')) else 'NOT RETURNED',
+              'display_value': clean_display[:200] if (clean_display | length) > 0 else 'NOT RETURNED',
+              'error_message': clean_error[:400] if (clean_error | length) > 0 else 'NOT RETURNED',
+              'status_message': clean_status[:400] if (clean_status | length) > 0 else 'NOT RETURNED'
             } | to_json
           }}
 
@@ -181,12 +212,20 @@
       ansible.builtin.debug:
         msg:
           - "Incident import: {{ snow_import_summary.outcome | upper }}"
+          - >-
+            {{
+              'The Import Set API accepted the request, but incident creation was not confirmed.'
+              if (
+                snow_import_summary.outcome == 'unconfirmed'
+                and snow_import_summary.transform_status == 'error'
+              )
+              else 'The module does not return the HTTP status. Acceptance of the import row is not a confirmed incident.'
+            }}
           - "Transform status: {{ snow_import_summary.transform_status }}"
           - "Target table: {{ snow_import_summary.target_table }}"
           - "Incident number: {{ snow_import_summary.incident_number }}"
           - "sys_id: {{ snow_import_summary.sys_id }}"
-          - >-
-            The module does not return the HTTP status.
-            Acceptance of the import row is not a confirmed incident
-            unless the transform status, target table, and record identifier
-            are all present. No further request was sent.
+          - "display_value: {{ snow_import_summary.display_value }}"
+          - "error_message: {{ snow_import_summary.error_message }}"
+          - "status_message: {{ snow_import_summary.status_message }}"
+          - "No further request was sent."
