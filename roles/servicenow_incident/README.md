@@ -2,7 +2,7 @@
 
 Small role for ServiceNow incidents opened when a patching workflow reports a failed host. It follows the same controller-only pattern as `servicenow_patching_change`. It is not an incident framework, and it does not decide which hosts failed.
 
-The role uses `servicenow.itsm.incident`, `servicenow.itsm.incident_info`, and `servicenow.itsm.api_info`. Credentials are the AAP custom credential that injects `SN_HOST`, `SN_USERNAME`, and `SN_PASSWORD`. The role passes `SN_HOST` into the module and does not pre-check those names with `lookup('env')`. A rejected API login fails the task. TLS certificate verification stays on. API tasks are `no_log`. `snow_incident_caller` is required to create. `snow_incident_assignment_group` and `snow_incident_priority` are sent only when set.
+The role uses `servicenow.itsm.incident`, `servicenow.itsm.incident_info`, and `servicenow.itsm.api_info`. `snow_incident_create_method: import_set` also uses `servicenow.itsm.api`. Full Patch does not set that method. Credentials are the AAP custom credential that injects `SN_HOST`, `SN_USERNAME`, and `SN_PASSWORD`. The role passes `SN_HOST` into the module and does not pre-check those names with `lookup('env')`. A rejected API login fails the task. TLS certificate verification stays on. API tasks are `no_log`. `snow_incident_caller` is required to create. `snow_incident_assignment_group` and `snow_incident_priority` are sent only when set.
 
 Call it from a localhost play, or from Full Patch play 2. Do not attach it to the Windows host pattern without `run_once`. `delegate_to: localhost` and `run_once: true` make each API call run once on the controller. `set_fact` writes `snow_incident_result` on the current inventory host for that run. A job Limit that names only Windows hosts skips `hosts: localhost`, so Full Patch calls this role from its existing aggregation play and copies `snow_incident_result` before the next host.
 
@@ -23,7 +23,9 @@ Set `snow_incident_operation` to one of:
 
 `read` is idempotent.
 
-`create` looks up `correlation_id` before inserting. Hostname, change number, correlation id, assignment group, and job id are rejected when they contain `^` or a line break. The default id is `aap-patch:<hostname>:<change number>:<job id>`. A retry with that same id returns the existing incident and does not open another one, including when that incident is already closed. Pass a new `snow_incident_correlation_id` to open another incident after closure. Two creates racing at the same moment can still both insert. A second distinct failure in the same job, for the same host and change, also reuses the first incident unless the caller supplies a different correlation id. Without a hostname or an explicit correlation id, create is refused.
+`create` with `snow_incident_create_method: standard` looks up `correlation_id` before inserting. Hostname, change number, correlation id, assignment group, and job id are rejected when they contain `^` or a line break. The default id is `aap-patch:<hostname>:<change number>:<job id>`. A retry with that same id returns the existing incident and does not open another one, including when that incident is already closed. Pass a new `snow_incident_correlation_id` to open another incident after closure. Two creates racing at the same moment can still both insert. A second distinct failure in the same job, for the same host and change, also reuses the first incident unless the caller supplies a different correlation id. Without a hostname or an explicit correlation id, create is refused.
+
+`snow_incident_create_method: import_set` posts once to `snow_incident_import_api_path` and does not perform that lookup. `u_correlation_display` is not `correlation_id`. A second POST can create another incident. The role does not fall back to `servicenow.itsm.incident`. HTTP success is not enough: the transform must be `inserted` or `updated`, the target table must be `incident`, and an incident number or sys_id must be present. Hostname, change number, failure text, and job id are not copied into import columns. Put any other confirmed `u_*` column in `snow_incident_import_fields`.
 
 `update` field changes are safe to repeat. Work notes, including the `AAP job` line, are appended again on every run that includes them.
 
@@ -43,8 +45,12 @@ Set `snow_incident_operation` to one of:
 | `snow_incident_work_notes` | `""` | create, update. Sent as `other.work_notes`. |
 | `snow_incident_aap_job_id` | `""` | create, update. Falls back to `tower_job_id` or `awx_job_id`. |
 | `snow_incident_ci_sys_id` | `""` | create, update. Optional 32-character sys_id copied to `cmdb_ci`. |
-| `snow_incident_assignment_group` | `""` | create, update, close. Group name. The role sends the sys_id. |
-| `snow_incident_caller` | `""` | create. User id, usually `first.last`. Required. |
+| `snow_incident_assignment_group` | `""` | create, update, close. Group name. The role sends the sys_id. For `import_set`, a 32-character sys_id is sent as `u_assignment_group` without a name lookup. |
+| `snow_incident_caller` | `""` | standard create. User id, usually `first.last`. Required for `standard` only. |
+| `snow_incident_create_method` | `standard` | create. `import_set` uses the Import Set API. |
+| `snow_incident_import_api_path` | `""` | `import_set`. `api/now/import/<staging_table>`. |
+| `snow_incident_import_correlation_display` | `""` | `import_set`. Sent as `u_correlation_display`. |
+| `snow_incident_import_fields` | `{}` | `import_set`. Extra `u_*` columns. |
 | `snow_incident_priority` | `""` | create, update, close. Forwarded unchanged. |
 | `snow_incident_correlation_id` | `""` | create. Overrides the default retry key. |
 | `snow_incident_fields` | `{}` | create, update, close. `impact` and `urgency` are module arguments. |

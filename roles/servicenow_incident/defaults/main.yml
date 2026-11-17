@@ -49,6 +49,20 @@ snow_incident_fields: {}
 snow_incident_allow_create: false
 snow_incident_allow_close: false
 
+# standard uses servicenow.itsm.incident. import_set posts to the client
+# Import Set API. Full Patch keeps the default.
+snow_incident_create_method: standard
+
+# api/now/import/<staging_table>. Required for import_set. Not a table name.
+snow_incident_import_api_path: ""
+
+# Client import column. Not the standard incident correlation_id.
+snow_incident_import_correlation_display: ""
+
+# Extra u_* import columns. u_correlation_display and u_assignment_group
+# are set by this role and are rejected here.
+snow_incident_import_fields: {}
+
 # Close code forwarded to servicenow.itsm.incident. The 2.6.3 default labels are
 # Duplicate, Known error, Resolved by caller, Resolved by change,
 # Resolved by problem, Solution provided, Workaround provided, and User error.

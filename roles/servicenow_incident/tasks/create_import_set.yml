@@ -1,0 +1,189 @@
+---
+# One POST to the client Import Set API. This file does not look up
+# correlation_id and does not call servicenow.itsm.incident.
+# u_correlation_display is not the standard incident correlation_id.
+# A second run can create another incident. The POST is not retried.
+
+- name: Require the import assignment group sys_id
+  ansible.builtin.assert:
+    that:
+      - snow_incident_assignment_group_id | default('') | string | trim is match('^[0-9a-fA-F]{32}$')
+    fail_msg: >-
+      import_set requires u_assignment_group to be one assignment group
+      sys_id. Pass that sys_id in snow_incident_assignment_group, or pass
+      the group name so the existing lookup can resolve it.
+      No incident was created.
+    quiet: true
+
+- name: POST one import-set incident
+  block:
+    # Username and password come from the credential environment.
+    # args[module] does not see that env fallback.
+    - name: Send the import set record  # noqa: args[module]
+      servicenow.itsm.api:
+        instance:
+          host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+          validate_certs: true
+        api_path: "{{ snow_incident_import_api_path | trim }}"
+        action: post
+        data: "{{ snow_incident_import_payload }}"
+      vars:
+        snow_incident_import_payload: >-
+          {{
+            snow_incident_import_fields | default({})
+            | combine({
+                'u_correlation_display': snow_incident_import_correlation_display | string | trim,
+                'u_assignment_group': snow_incident_assignment_group_id | string | trim
+              })
+          }}
+      register: snow_incident_import_response
+      no_log: true
+  rescue:
+    - name: Classify the import failure without the response body
+      ansible.builtin.set_fact:
+        snow_incident_import_failure: "{{ _snow_import_failure }}"
+      no_log: true
+      vars:
+        _snow_msg: "{{ ansible_failed_result.msg | default('') | string }}"
+        _snow_status_text: >-
+          {{
+            _snow_msg | regex_search('Unexpected response - [0-9]{3}')
+            | default('', true)
+          }}
+        _snow_status: "{{ _snow_status_text | regex_search('[0-9]{3}$') | default('', true) }}"
+        _snow_import_failure: >-
+          {{
+            'authentication rejected'
+            if ('Failed to authenticate' in _snow_msg)
+            else (
+              'unexpected HTTP status ' ~ _snow_status
+              if (_snow_status | length) > 0
+              else 'request failed'
+            )
+          }}
+
+    - name: Stop after the failed import POST
+      ansible.builtin.fail:
+        msg: >-
+          Incident import failed
+          ({{ snow_incident_import_failure | default('request failed') }}).
+          The standard incident API was not used.
+          The POST was not retried. The response body was not displayed.
+
+- name: Read the import result without displaying the payload
+  ansible.builtin.set_fact:
+    snow_incident_import_summary: "{{ _snow_import_summary_json | from_json }}"
+  no_log: true
+  vars:
+    _snow_import_summary_json: |
+      {% set raw = snow_incident_import_response.record | default(none) %}
+      {% set ns = namespace(
+        rows=[], chosen={}, status='', table='', number='', sys_id='',
+        display_value='', error_message='', status_message='', confirmed=0
+      ) %}
+      {% if raw is mapping %}
+      {% set ns.rows = [raw] %}
+      {% elif raw is not string and raw is sequence %}
+      {% for item in raw %}
+      {% if item is mapping %}
+      {% set ns.rows = ns.rows + [item] %}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+      {% if ns.rows | length == 1 %}
+      {% set ns.chosen = ns.rows[0] %}
+      {% elif ns.rows | length > 1 %}
+      {% for item in ns.rows %}
+      {% if (ns.chosen | length) == 0 and (item.status | default('') | string | lower) == 'error' %}
+      {% set ns.chosen = item %}
+      {% endif %}
+      {% endfor %}
+      {% if (ns.chosen | length) == 0 %}
+      {% set ns.chosen = ns.rows[0] %}
+      {% endif %}
+      {% endif %}
+      {% if (ns.chosen | length) > 0 %}
+      {% set ns.status = ns.chosen.status | default('') | string | trim %}
+      {% set ns.table = ns.chosen.table | default('') | string | trim %}
+      {% if ns.chosen.sys_id is defined and ns.chosen.sys_id is string %}
+      {% set ns.sys_id = ns.chosen.sys_id | trim %}
+      {% elif ns.chosen.sys_id is defined and ns.chosen.sys_id is mapping and ns.chosen.sys_id.value is defined %}
+      {% set ns.sys_id = ns.chosen.sys_id.value | string | trim %}
+      {% endif %}
+      {% if ns.chosen.display_value is defined and ns.chosen.display_value is string %}
+      {% set ns.display_value = ns.chosen.display_value | trim %}
+      {% endif %}
+      {% if ns.chosen.error_message is defined and ns.chosen.error_message is string %}
+      {% set ns.error_message = ns.chosen.error_message | trim %}
+      {% endif %}
+      {% if ns.chosen.status_message is defined and ns.chosen.status_message is string %}
+      {% set ns.status_message = ns.chosen.status_message | trim %}
+      {% endif %}
+      {% if ns.chosen.number is defined and ns.chosen.number is string %}
+      {% set ns.number = ns.chosen.number | trim %}
+      {% elif (
+        (ns.display_value | length) > 0
+        and (
+          (ns.chosen.display_name | default('') | string | lower) == 'number'
+          or ns.display_value is match('^INC[0-9]+$')
+        )
+      ) %}
+      {% set ns.number = ns.display_value %}
+      {% endif %}
+      {% if (
+        (ns.rows | length) == 1
+        and (ns.status | lower) in ['inserted', 'updated']
+        and (ns.table | lower) == 'incident'
+        and (
+          ns.sys_id is match('^[0-9a-fA-F]{32}$')
+          or ns.number is match('^INC[0-9]+$')
+        )
+      ) %}
+      {% set ns.confirmed = 1 %}
+      {% endif %}
+      {% endif %}
+      {% set clean_error = ns.error_message | regex_replace('[\r\n\t]+', ' ') | trim %}
+      {% set clean_error = clean_error | regex_replace('(?i)(password|authorization|bearer)\\s*[:=]\\s*\\S+', 'credential=[redacted]') %}
+      {% set clean_status = ns.status_message | regex_replace('[\r\n\t]+', ' ') | trim %}
+      {% set clean_status = clean_status | regex_replace('(?i)(password|authorization|bearer)\\s*[:=]\\s*\\S+', 'credential=[redacted]') %}
+      {{
+        {
+          'confirmed': ns.confirmed == 1,
+          'transform_status': ns.status if (ns.status is match('^[A-Za-z0-9_-]{1,40}$')) else 'NOT RETURNED',
+          'target_table': ns.table if (ns.table is match('^[A-Za-z0-9_]{1,80}$')) else 'NOT RETURNED',
+          'incident_number': ns.number if (ns.number is match('^INC[0-9]+$')) else '',
+          'sys_id': ns.sys_id if (ns.sys_id is match('^[0-9a-fA-F]{32}$')) else '',
+          'error_message': clean_error[:400] if (clean_error | length) > 0 else 'NOT RETURNED',
+          'status_message': clean_status[:400] if (clean_status | length) > 0 else 'NOT RETURNED'
+        } | to_json
+      }}
+
+- name: Fail when the import did not confirm an incident
+  when: not (snow_incident_import_summary.confirmed | bool)
+  ansible.builtin.fail:
+    msg: >-
+      The Import Set API accepted the request, but incident creation was
+      not confirmed. Transform status:
+      {{ snow_incident_import_summary.transform_status }}.
+      Target table: {{ snow_incident_import_summary.target_table }}.
+      error_message: {{ snow_incident_import_summary.error_message }}.
+      status_message: {{ snow_incident_import_summary.status_message }}.
+      The standard incident API was not used. The POST was not retried.
+
+- name: Publish the imported incident
+  ansible.builtin.set_fact:
+    snow_incident_result:
+      operation: create
+      success: true
+      reused: false
+      number: "{{ snow_incident_import_summary.incident_number }}"
+      sys_id: "{{ snow_incident_import_summary.sys_id }}"
+      state: ""
+      short_description: ""
+      correlation_id: "{{ snow_incident_import_correlation_display | string | trim }}"
+      hostname: "{{ snow_incident_hostname }}"
+      message: >-
+        Import set transform {{ snow_incident_import_summary.transform_status }}
+        returned incident {{ snow_incident_import_summary.incident_number }}.
+        u_correlation_display was not used as a correlation_id lookup.
+        This create is not idempotent.

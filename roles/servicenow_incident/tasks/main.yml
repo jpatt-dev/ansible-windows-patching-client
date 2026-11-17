@@ -36,8 +36,20 @@
         fail_msg: read requires snow_incident_number.
         quiet: true
 
-    - name: Validate inputs for incident create
+    - name: Validate the incident creation method
       when: snow_incident_operation == 'create'
+      ansible.builtin.assert:
+        that:
+          - snow_incident_create_method | default('standard') in ['standard', 'import_set']
+        fail_msg: >-
+          snow_incident_create_method must be standard or import_set.
+          No incident was created.
+        quiet: true
+
+    - name: Validate inputs for incident create
+      when:
+        - snow_incident_operation == 'create'
+        - (snow_incident_create_method | default('standard')) == 'standard'
       ansible.builtin.assert:
         that:
           - snow_incident_allow_create | bool
@@ -89,6 +101,53 @@
             else 'Hostname, change number, correlation id, assignment group, and job id cannot contain ^ or a line break.'
             if not (snow_incident_text_ok | bool)
             else 'Creation stays disabled until snow_incident_allow_create is true.'
+          }}
+
+    - name: Validate inputs for import set incident create
+      when:
+        - snow_incident_operation == 'create'
+        - (snow_incident_create_method | default('standard')) == 'import_set'
+      ansible.builtin.assert:
+        that:
+          - snow_incident_allow_create | bool
+          - _snow_import_path is match('^api/now/import/[A-Za-z][A-Za-z0-9_]{0,79}$')
+          - snow_incident_import_fields is mapping
+          - _snow_import_bad_keys | length == 0
+          - _snow_import_reserved_keys | length == 0
+          - _snow_import_display | length > 0
+          - _snow_import_display is not search('\\^|\\r|\\n')
+          - _snow_import_group | length > 0
+          - _snow_import_group is match('^[0-9a-fA-F]{32}$') or (_snow_import_group is not search('\\^|\\r|\\n'))
+        fail_msg: >-
+          import_set requires snow_incident_allow_create=true,
+          snow_incident_import_api_path set to api/now/import/<staging_table>,
+          a non-empty snow_incident_import_correlation_display, and
+          snow_incident_assignment_group as a 32-character sys_id or a group
+          name. Extra columns belong in snow_incident_import_fields and must
+          use u_* names. u_correlation_display and u_assignment_group are set
+          by this role. No incident was created.
+          {{ _snow_import_key_error }}
+        quiet: true
+      vars:
+        _snow_import_path: "{{ snow_incident_import_api_path | default('') | string | trim }}"
+        _snow_import_display: "{{ snow_incident_import_correlation_display | default('') | string | trim }}"
+        _snow_import_group: "{{ snow_incident_assignment_group | default('') | string | trim }}"
+        _snow_import_bad_keys: >-
+          {{
+            snow_incident_import_fields | default({}) | list
+            | reject('match', '^u_[A-Za-z0-9_]+$')
+            | list
+          }}
+        _snow_import_reserved_keys: >-
+          {{
+            ['u_correlation_display', 'u_assignment_group']
+            | intersect(snow_incident_import_fields | default({}) | list)
+          }}
+        _snow_import_key_error: >-
+          {{
+            'Rejected import field names: ' ~ (_snow_import_bad_keys + _snow_import_reserved_keys) | join(', ') ~ '.'
+            if (_snow_import_bad_keys + _snow_import_reserved_keys) | length > 0
+            else ''
           }}
 
     - name: Validate inputs for incident update
@@ -243,10 +302,23 @@
           }}
         snow_incident_assignment_group_id: ""
 
+    - name: Use an assignment group sys_id for the import set
+      when:
+        - snow_incident_operation == 'create'
+        - (snow_incident_create_method | default('standard')) == 'import_set'
+        - snow_incident_assignment_group | default('') | string | trim is match('^[0-9a-fA-F]{32}$')
+      ansible.builtin.set_fact:
+        snow_incident_assignment_group_id: "{{ snow_incident_assignment_group | string | trim }}"
+
     - name: Resolve the incident assignment group
       when:
         - snow_incident_operation in ['create', 'update', 'close']
         - snow_incident_assignment_group | default('') | string | length > 0
+        - not (
+            snow_incident_operation == 'create'
+            and (snow_incident_create_method | default('standard')) == 'import_set'
+            and snow_incident_assignment_group | default('') | string | trim is match('^[0-9a-fA-F]{32}$')
+          )
       block:
         # args[module] does not see the collection env_fallback for SN_USERNAME.
         - name: Query sys_user_group by name  # noqa: args[module]
@@ -273,6 +345,11 @@
       when:
         - snow_incident_operation in ['create', 'update', 'close']
         - snow_incident_assignment_group | default('') | string | length > 0
+        - not (
+            snow_incident_operation == 'create'
+            and (snow_incident_create_method | default('standard')) == 'import_set'
+            and snow_incident_assignment_group | default('') | string | trim is match('^[0-9a-fA-F]{32}$')
+          )
       ansible.builtin.include_tasks:
         file: resolve_assignment_group.yml
 
@@ -282,9 +359,18 @@
         file: read.yml
 
     - name: Create an incident
-      when: snow_incident_operation == 'create'
+      when:
+        - snow_incident_operation == 'create'
+        - (snow_incident_create_method | default('standard')) == 'standard'
       ansible.builtin.include_tasks:
         file: create.yml
+
+    - name: Create an incident through the import set
+      when:
+        - snow_incident_operation == 'create'
+        - (snow_incident_create_method | default('standard')) == 'import_set'
+      ansible.builtin.include_tasks:
+        file: create_import_set.yml
 
     - name: Update an existing incident
       when: snow_incident_operation == 'update'

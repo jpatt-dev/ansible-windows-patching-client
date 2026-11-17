@@ -1,0 +1,84 @@
+---
+# Offline checks for the incident creation method switch.
+# Neither play calls ServiceNow. import_set stops before the POST.
+# standard still requires the existing caller input.
+#
+#   ANSIBLE_ROLES_PATH=roles ansible-playbook tests/servicenow/test_incident_import_method.yml
+
+- name: Reject an import set create before the POST
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  environment:
+    ANSIBLE_ROLES_PATH: "{{ playbook_dir }}/../../roles"
+  tasks:
+    - name: Include the role without an import path
+      block:
+        - name: Create through the import set with incomplete inputs
+          ansible.builtin.include_role:
+            name: servicenow_incident
+          vars:
+            snow_incident_operation: create
+            snow_incident_allow_create: true
+            snow_incident_create_method: import_set
+            snow_incident_import_api_path: ""
+            snow_incident_import_correlation_display: ""
+            snow_incident_assignment_group: ""
+        - name: Fail if the incomplete import was accepted
+          ansible.builtin.fail:
+            msg: Import set creation continued without the required inputs.
+      rescue:
+        - name: Record the expected import validation failure
+          ansible.builtin.set_fact:
+            snow_import_method_failed: true
+            snow_import_method_error: "{{ ansible_failed_result.msg | default('') }}"
+
+        - name: Clear the expected validation failure
+          ansible.builtin.meta: clear_host_errors
+
+    - name: Assert the import set stopped before a POST
+      ansible.builtin.assert:
+        that:
+          - snow_import_method_failed | bool
+          - "'import_set requires' in snow_import_method_error"
+          - "'No incident was created' in snow_import_method_error"
+          - "'servicenow.itsm.incident' not in snow_import_method_error"
+        fail_msg: "{{ snow_import_method_error | default('Import set validation did not fail closed.') }}"
+
+- name: Keep standard create on the existing caller check
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  environment:
+    ANSIBLE_ROLES_PATH: "{{ playbook_dir }}/../../roles"
+  tasks:
+    - name: Include the role for a standard create without a caller
+      block:
+        - name: Create through the standard method without a caller
+          ansible.builtin.include_role:
+            name: servicenow_incident
+          vars:
+            snow_incident_operation: create
+            snow_incident_allow_create: true
+            snow_incident_create_method: standard
+            snow_incident_hostname: win-test
+            snow_incident_failure: validation only
+        - name: Fail if the standard create skipped the caller check
+          ansible.builtin.fail:
+            msg: Standard create continued without snow_incident_caller.
+      rescue:
+        - name: Record the expected standard validation failure
+          ansible.builtin.set_fact:
+            snow_standard_method_failed: true
+            snow_standard_method_error: "{{ ansible_failed_result.msg | default('') }}"
+
+        - name: Clear the expected validation failure
+          ansible.builtin.meta: clear_host_errors
+
+    - name: Assert standard create still requires a caller
+      ansible.builtin.assert:
+        that:
+          - snow_standard_method_failed | bool
+          - "'snow_incident_caller' in snow_standard_method_error"
+          - "'import_set requires' not in snow_standard_method_error"
+        fail_msg: "{{ snow_standard_method_error | default('Standard create validation did not fail closed.') }}"

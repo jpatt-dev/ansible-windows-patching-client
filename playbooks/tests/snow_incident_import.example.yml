@@ -1,0 +1,10 @@
+---
+# Example extra variables for playbooks/tests/snow_incident_test.yml.
+# No secrets. Leave the flag false until one nonproduction POST is intended.
+# snow_incident_test_import_assignment_group is an assignment group sys_id.
+# Hostname, change number, failure text, and job id are not import columns.
+snow_incident_test_enable_import_set: false
+snow_incident_test_import_api_path: api/now/import/PLACEHOLDER_STAGING_TABLE
+snow_incident_test_import_correlation_display: PLACEHOLDER_CORRELATION_DISPLAY
+snow_incident_test_import_assignment_group: "0123456789abcdef0123456789abcdef"
+snow_incident_test_import_fields: {}

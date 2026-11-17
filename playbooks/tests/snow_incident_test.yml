@@ -18,6 +18,11 @@
 #   snow_incident_test_close_code: "Solution provided"
 #   snow_incident_test_close_notes: ""
 #   snow_incident_test_close_number: ""
+#   snow_incident_test_enable_import_set: false
+#   snow_incident_test_import_api_path: api/now/import/STAGING_TABLE
+#   snow_incident_test_import_correlation_display: ""
+#   snow_incident_test_import_assignment_group: ""
+#   snow_incident_test_import_fields: {}
 #
 # Create, update, and close stay disabled unless the matching flag is true.
 # Close uses the incident created in this run, or snow_incident_test_close_number
@@ -33,6 +38,11 @@
     snow_incident_test_enable_create: false
     snow_incident_test_enable_update: false
     snow_incident_test_enable_close: false
+    snow_incident_test_enable_import_set: false
+    snow_incident_test_import_api_path: ""
+    snow_incident_test_import_correlation_display: ""
+    snow_incident_test_import_assignment_group: ""
+    snow_incident_test_import_fields: {}
     snow_incident_test_hostname: ""
     snow_incident_test_caller: ""
     snow_incident_test_change_number: ""
@@ -54,10 +64,12 @@
             or (snow_incident_test_enable_create | bool)
             or (snow_incident_test_enable_update | bool)
             or (snow_incident_test_enable_close | bool)
+            or (snow_incident_test_enable_import_set | bool)
         fail_msg: >-
           Nothing to do. Set snow_incident_test_read_number, or set one of
           snow_incident_test_enable_create, snow_incident_test_enable_update,
-          or snow_incident_test_enable_close to true.
+          snow_incident_test_enable_close, or
+          snow_incident_test_enable_import_set to true.
           Write flags default to false.
         quiet: true
 
@@ -249,3 +261,49 @@
       when: snow_incident_test_enable_close | bool
       ansible.builtin.debug:
         var: snow_incident_result
+
+    - name: Create one incident through the import set
+      when: snow_incident_test_enable_import_set | bool
+      ansible.builtin.include_role:
+        name: servicenow_incident
+      vars:
+        snow_incident_operation: create
+        snow_incident_allow_create: true
+        snow_incident_create_method: import_set
+        snow_incident_import_api_path: "{{ snow_incident_test_import_api_path }}"
+        snow_incident_import_correlation_display: "{{ snow_incident_test_import_correlation_display }}"
+        snow_incident_assignment_group: "{{ snow_incident_test_import_assignment_group }}"
+        snow_incident_import_fields: "{{ snow_incident_test_import_fields }}"
+        snow_incident_hostname: "{{ snow_incident_test_hostname }}"
+        snow_incident_change_number: "{{ snow_incident_test_change_number }}"
+        snow_incident_aap_job_id: "{{ snow_incident_test_job_id }}"
+        snow_incident_failure: "{{ snow_incident_test_failure }}"
+
+    - name: Check the imported incident number and sys_id
+      when: snow_incident_test_enable_import_set | bool
+      ansible.builtin.assert:
+        that:
+          - snow_incident_result.success | bool
+          - snow_incident_result.operation == 'create'
+          - not (snow_incident_result.reused | bool)
+          - >-
+            (snow_incident_result.number | default('') | length > 0)
+            or (snow_incident_result.sys_id | default('') | length > 0)
+          - >-
+            (snow_incident_result.number | default('') | length == 0)
+            or (snow_incident_result.number is match('^INC[0-9]+$'))
+          - >-
+            (snow_incident_result.sys_id | default('') | length == 0)
+            or (snow_incident_result.sys_id is match('^[0-9a-fA-F]{32}$'))
+        fail_msg: >-
+          The import set did not return an incident number and sys_id.
+          {{ snow_incident_result.message | default('') }}
+        quiet: true
+
+    - name: Show the imported incident identity
+      when: snow_incident_test_enable_import_set | bool
+      ansible.builtin.debug:
+        msg:
+          - "number: {{ snow_incident_result.number }}"
+          - "sys_id: {{ snow_incident_result.sys_id }}"
+          - "{{ snow_incident_result.message }}"
