@@ -25,6 +25,13 @@
           - "'servicenow_incident' in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_incident_one.yml'))"
           - "'snow_incident_operation: create' in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_incident_one.yml'))"
           - "'snow_incident_allow_create: true' in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_incident_one.yml'))"
+          - "'snow_patching_import_set_create_enabled' in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_incidents.yml'))"
+          - "'default(false)' in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_incidents.yml'))"
+          - "'u_caller' in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_incident_one.yml'))"
+          - "'u_short_description' in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_incident_one.yml'))"
+          - "'u_description' in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_incident_one.yml'))"
+          - "'snow_patching_import_correlation_source' not in (_snow_followup_slurps.results[1].content | b64decode)"
+          - "'snow_patching_import_set_create_enabled' not in (_snow_followup_slurps.results[1].content | b64decode)"
           - "'snow_patching_create_incidents_enabled' not in (_snow_followup_slurps.results[1].content | b64decode)"
           - "'snow_incident_caller' not in (_snow_followup_slurps.results[1].content | b64decode)"
         fail_msg: Follow-up incidents must stay disabled, unsurveyed, and after reporting.
@@ -554,3 +561,80 @@
           - snow_patching_incident_results[2].incident_number == ''
           - patch_workflow_marker == 'original-report'
         fail_msg: Incident result rows were overwritten or dropped.
+
+- name: Import set follow-up stays off without the extra opt-in
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_patching_tasks_dir: "{{ playbook_dir }}/../../playbooks/windows/tasks"
+    snow_patching_create_incidents_enabled: true
+    snow_incident_create_method: import_set
+    snow_incident_caller: patch.automation
+    snow_incident_assignment_group: 0123456789abcdef0123456789abcdef
+    snow_incident_import_api_path: api/now/import/PLACEHOLDER_STAGING_TABLE
+    snow_patching_import_correlation_source: correlation_id
+    patch_workflow_marker: original-report
+    patch_workflow_report:
+      hosts:
+        - hostname: WIN-ONE
+          result: failed
+          exempt: false
+          reason_code: PATCH_INSTALL_FAILED
+          reason: Update installation failed
+          manual_followup_required: true
+          snow_ci_sys_id: dddddddddddddddddddddddddddddddd
+          change_ticket_id: CHG0090001
+          aap_job_id: "100"
+  tasks:
+    - name: Run import set handling without the non-idempotent opt-in
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_incidents.yml"
+
+    - name: Assert the import set was refused before a role call
+      ansible.builtin.assert:
+        that:
+          - snow_patching_incident_failed | bool
+          - snow_patching_incident_results | length == 0
+          - "'snow_patching_import_set_create_enabled' in snow_patching_incident_error"
+          - "'not idempotent' in snow_patching_incident_error"
+          - "'No incident was created' in snow_patching_incident_error"
+          - patch_workflow_marker == 'original-report'
+        fail_msg: Import set creation ran without the extra opt-in.
+
+- name: Import set follow-up refuses an unconfigured correlation mapping
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_patching_tasks_dir: "{{ playbook_dir }}/../../playbooks/windows/tasks"
+    snow_patching_create_incidents_enabled: true
+    snow_patching_import_set_create_enabled: true
+    snow_incident_create_method: import_set
+    snow_incident_caller: patch.automation
+    snow_incident_assignment_group: 0123456789abcdef0123456789abcdef
+    snow_incident_import_api_path: api/now/import/PLACEHOLDER_STAGING_TABLE
+    patch_workflow_marker: original-report
+    patch_workflow_report:
+      hosts:
+        - hostname: WIN-ONE
+          result: failed
+          exempt: false
+          reason_code: PATCH_INSTALL_FAILED
+          reason: Update installation failed
+          manual_followup_required: true
+          snow_ci_sys_id: dddddddddddddddddddddddddddddddd
+          change_ticket_id: CHG0090001
+          aap_job_id: "100"
+  tasks:
+    - name: Run import set handling without the correlation mapping
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_incidents.yml"
+
+    - name: Assert the correlation value was not sent
+      ansible.builtin.assert:
+        that:
+          - snow_patching_incident_failed | bool
+          - snow_patching_incident_results | length == 0
+          - "'snow_patching_import_correlation_source' in snow_patching_incident_error"
+          - "'No incident was created' in snow_patching_incident_error"
+          - patch_workflow_marker == 'original-report'
+        fail_msg: Import set creation continued without an explicit correlation mapping.

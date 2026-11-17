@@ -16,6 +16,18 @@
 
 - name: Create or reuse the follow-up incident
   when: snow_followup_candidate.action == 'create'
+  vars:
+    snow_followup_import_short: >-
+      Windows patch follow-up for {{ snow_followup_candidate.hostname }}
+      ({{ snow_followup_candidate.reason_code }})
+    snow_followup_import_description: |-
+      Hostname: {{ snow_followup_candidate.hostname }}
+      Change: {{ snow_followup_candidate.change_ticket_id }}
+      Status: {{ snow_followup_candidate.result }}
+      Reason code: {{ snow_followup_candidate.reason_code }}
+      Reason: {{ snow_followup_candidate.reason }}
+      AAP job: {{ snow_followup_candidate.aap_job_id }}
+      CI: {{ snow_followup_candidate.ci_sys_id }}
   block:
     - name: Open the incident through the shared incident role
       ansible.builtin.include_role:
@@ -41,6 +53,27 @@
           CI: {{ snow_followup_candidate.ci_sys_id }}
           Follow-up: {{ snow_followup_candidate.reason }}
         snow_incident_fields: {}
+        snow_incident_create_method: "{{ snow_followup_create_method | default('standard') }}"
+        snow_incident_import_api_path: "{{ snow_followup_import_api_path | default('') }}"
+        snow_incident_import_correlation_display: >-
+          {{
+            snow_followup_candidate.correlation_id
+            if (
+              (snow_followup_create_method | default('standard')) == 'import_set'
+              and (snow_followup_import_correlation_source | default('')) == 'correlation_id'
+            )
+            else ''
+          }}
+        snow_incident_import_fields: >-
+          {{
+            {
+              'u_caller': snow_followup_caller,
+              'u_short_description': snow_followup_import_short,
+              'u_description': snow_followup_import_description
+            }
+            if (snow_followup_create_method | default('standard')) == 'import_set'
+            else {}
+          }}
 
     - name: Keep this host's incident result before the next host
       ansible.builtin.set_fact:
