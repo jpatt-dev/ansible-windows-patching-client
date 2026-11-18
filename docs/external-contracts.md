@@ -158,17 +158,19 @@ can run without ServiceNow until the shared role is delivered.
 
 ## Report consumption
 
-Same-job Play 2 order: aggregate → write → optional change work note →
-optional report attachment → optional follow-up incidents → SMTP → fail if
-patching or an enabled ServiceNow operation failed.
+Same-job Play 2 order: aggregate → optional follow-up incidents → write →
+optional change work note → optional report attachment → SMTP → fail if
+patching or an enabled ServiceNow operation failed. Incident number and
+status are on each host before the files are written. A failed incident
+stays `failed` and does not stop the report files.
 
 Durable artifacts: AAP `set_stats` (`patch_final_result`,
 `patch_workflow_report`, `patch_workflow_report_json`,
 `patch_workflow_report_csv`).
 
-Ephemeral EE files: `patch_report_files` under `/tmp/aap-patch-reports`
-(JSON, Markdown, CSV). Attach must use those paths in **this** job. A later
-workflow node will not see the files.
+Ephemeral EE files under `/tmp/aap-patch-reports` are JSON, Markdown, and
+CSV. `patch_report_files` attaches JSON and CSV only. Attach must use those
+paths in **this** job. A later workflow node will not see the files.
 
 `snow_patching_attach_reports_enabled` passes `patch_report_files` to
 `servicenow_patching_change` as `snow_report_files`. It does not regenerate

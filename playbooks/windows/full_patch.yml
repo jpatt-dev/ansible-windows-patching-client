@@ -400,18 +400,13 @@
       tags:
         - report
 
-    - name: Write canonical Final Report JSON/CSV/Markdown from patch_workflow_report
-      ansible.builtin.include_role:
-        name: patch_report
-        tasks_from: final_write.yml
-      run_once: true
-      tags:
-        - report
-
     # One controller call for the Limit. A separate localhost play would be
     # skipped by an AAP wave Limit such as windows_wave_1. run_once keeps
     # this off the serial per-server path. Do not use snow_enabled or
     # snow_shared_role here; that adapter is the pre-remediation validator.
+    # Incidents run before the report files so a confirmed number is in
+    # JSON, CSV, and Markdown. A failure is recorded and the files are
+    # still written.
     - name: Clear ServiceNow integration failure flags
       ansible.builtin.set_fact:
         snow_patching_update_failed: false
@@ -425,6 +420,29 @@
       tags:
         - report
         - servicenow
+
+    - name: Create follow-up incidents for hosts that need manual follow-up
+      ansible.builtin.include_tasks: tasks/snow_followup_incidents.yml
+      when: snow_patching_create_incidents_enabled | bool
+      run_once: true
+      tags:
+        - report
+        - servicenow
+
+    - name: Add follow-up incident results to the patch report
+      ansible.builtin.include_tasks: tasks/snow_followup_apply_report.yml
+      run_once: true
+      tags:
+        - report
+        - servicenow
+
+    - name: Write canonical Final Report JSON/CSV/Markdown from patch_workflow_report
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_write.yml
+      run_once: true
+      tags:
+        - report
 
     - name: Update ServiceNow change request with the patch summary
       when: snow_patching_update_cr_enabled | bool
@@ -591,14 +609,6 @@
               patch_workflow_report and the report files were left in place.
               The job fails after optional SMTP.
           changed_when: false
-
-    - name: Create follow-up incidents for hosts that need manual follow-up
-      ansible.builtin.include_tasks: tasks/snow_followup_incidents.yml
-      when: snow_patching_create_incidents_enabled | bool
-      run_once: true
-      tags:
-        - report
-        - servicenow
 
     - name: Prepare change tasks for affected hosts
       ansible.builtin.include_tasks: tasks/snow_followup_ctasks.yml

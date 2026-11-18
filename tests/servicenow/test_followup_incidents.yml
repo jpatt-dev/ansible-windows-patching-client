@@ -643,3 +643,164 @@
           - "'No incident was created' in snow_patching_incident_error"
           - patch_workflow_marker == 'original-report'
         fail_msg: Import set creation continued without an explicit correlation mapping.
+
+- name: Incident results are stamped without changing the patch result
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_patching_tasks_dir: "{{ playbook_dir }}/../../playbooks/windows/tasks"
+    snow_patching_create_incidents_enabled: true
+    snow_patching_incident_results:
+      - hostname: WIN-CREATED
+        ci_sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        incident_number: INC0001001
+        reused: false
+        success: true
+      - hostname: WIN-REUSED
+        ci_sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        incident_number: INC0001002
+        reused: true
+        success: true
+      - hostname: WIN-FAILED
+        ci_sys_id: cccccccccccccccccccccccccccccccc
+        incident_number: INC0001999
+        reused: false
+        success: false
+      - hostname: WIN-BLANK
+        ci_sys_id: dddddddddddddddddddddddddddddddd
+        incident_number: ""
+        reused: false
+        success: true
+    patch_workflow_report:
+      status_counts:
+        failed: 2
+      hosts:
+        - hostname: WIN-CREATED
+          result: failed
+          reason: Update installation failed
+          reason_code: PATCH_INSTALL_FAILED
+          manual_followup_required: true
+          snow_ci_sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        - hostname: WIN-REUSED
+          result: degraded
+          reason: A reboot is pending
+          reason_code: PENDING_REBOOT
+          manual_followup_required: true
+          snow_ci_sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        - hostname: WIN-FAILED
+          result: failed
+          reason: Host unreachable
+          reason_code: UNREACHABLE
+          manual_followup_required: true
+          snow_ci_sys_id: cccccccccccccccccccccccccccccccc
+        - hostname: WIN-BLANK
+          result: failed
+          reason: Update installation failed
+          reason_code: PATCH_INSTALL_FAILED
+          manual_followup_required: true
+          snow_ci_sys_id: dddddddddddddddddddddddddddddddd
+        - hostname: WIN-OK
+          result: success
+          reason: Updates installed successfully
+          reason_code: PATCH_SUCCEEDED
+          manual_followup_required: false
+          snow_ci_sys_id: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+        - hostname: WIN-MISSED
+          result: failed
+          reason: Update installation failed
+          reason_code: PATCH_INSTALL_FAILED
+          manual_followup_required: true
+          snow_ci_sys_id: ffffffffffffffffffffffffffffffff
+  tasks:
+    - name: Replace incident facts left by earlier plays
+      ansible.builtin.set_fact:
+        snow_patching_create_incidents_enabled: true
+        snow_patching_incident_results: "{{ incident_stamp_results }}"
+        patch_workflow_report: "{{ incident_stamp_report }}"
+      vars:
+        incident_stamp_results:
+          - hostname: WIN-CREATED
+            ci_sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            incident_number: INC0001001
+            reused: false
+            success: true
+          - hostname: WIN-REUSED
+            ci_sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+            incident_number: INC0001002
+            reused: true
+            success: true
+          - hostname: WIN-FAILED
+            ci_sys_id: cccccccccccccccccccccccccccccccc
+            incident_number: INC0001999
+            reused: false
+            success: false
+          - hostname: WIN-BLANK
+            ci_sys_id: dddddddddddddddddddddddddddddddd
+            incident_number: ""
+            reused: false
+            success: true
+        incident_stamp_report:
+          status_counts:
+            failed: 2
+          hosts:
+            - hostname: WIN-CREATED
+              result: failed
+              reason: Update installation failed
+              reason_code: PATCH_INSTALL_FAILED
+              manual_followup_required: true
+              snow_ci_sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            - hostname: WIN-REUSED
+              result: degraded
+              reason: A reboot is pending
+              reason_code: PENDING_REBOOT
+              manual_followup_required: true
+              snow_ci_sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+            - hostname: WIN-FAILED
+              result: failed
+              reason: Host unreachable
+              reason_code: UNREACHABLE
+              manual_followup_required: true
+              snow_ci_sys_id: cccccccccccccccccccccccccccccccc
+            - hostname: WIN-BLANK
+              result: failed
+              reason: Update installation failed
+              reason_code: PATCH_INSTALL_FAILED
+              manual_followup_required: true
+              snow_ci_sys_id: dddddddddddddddddddddddddddddddd
+            - hostname: WIN-OK
+              result: success
+              reason: Updates installed successfully
+              reason_code: PATCH_SUCCEEDED
+              manual_followup_required: false
+              snow_ci_sys_id: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+            - hostname: WIN-MISSED
+              result: failed
+              reason: Update installation failed
+              reason_code: PATCH_INSTALL_FAILED
+              manual_followup_required: true
+              snow_ci_sys_id: ffffffffffffffffffffffffffffffff
+
+    - name: Stamp the report from incident results
+      ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_apply_report.yml"
+
+    - name: Assert incident status and the original patch fields
+      ansible.builtin.assert:
+        that:
+          - (patch_workflow_report.hosts | selectattr('hostname', 'equalto', 'WIN-CREATED') | first).incident_status == 'created'
+          - (patch_workflow_report.hosts | selectattr('hostname', 'equalto', 'WIN-CREATED') | first).incident_number == 'INC0001001'
+          - (patch_workflow_report.hosts | selectattr('hostname', 'equalto', 'WIN-CREATED') | first).result == 'failed'
+          - (patch_workflow_report.hosts | selectattr('hostname', 'equalto', 'WIN-CREATED') | first).reason == 'Update installation failed'
+          - (patch_workflow_report.hosts | selectattr('hostname', 'equalto', 'WIN-CREATED') | first).snow_ci_sys_id == 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+          - (patch_workflow_report.hosts | selectattr('hostname', 'equalto', 'WIN-REUSED') | first).incident_status == 'reused'
+          - (patch_workflow_report.hosts | selectattr('hostname', 'equalto', 'WIN-REUSED') | first).incident_number == 'INC0001002'
+          - (patch_workflow_report.hosts | selectattr('hostname', 'equalto', 'WIN-FAILED') | first).incident_status == 'failed'
+          - (patch_workflow_report.hosts | selectattr('hostname', 'equalto', 'WIN-FAILED') | first).incident_number == ''
+          - (patch_workflow_report.hosts | selectattr('hostname', 'equalto', 'WIN-BLANK') | first).incident_status == 'failed'
+          - (patch_workflow_report.hosts | selectattr('hostname', 'equalto', 'WIN-BLANK') | first).incident_number == ''
+          - (patch_workflow_report.hosts | selectattr('hostname', 'equalto', 'WIN-OK') | first).incident_status == 'not required'
+          - (patch_workflow_report.hosts | selectattr('hostname', 'equalto', 'WIN-OK') | first).result == 'success'
+          - (patch_workflow_report.hosts | selectattr('hostname', 'equalto', 'WIN-MISSED') | first).incident_status == 'failed'
+          - patch_workflow_report.status_counts.failed == 2
+          - "'INC0001001' in patch_workflow_report_json"
+        fail_msg: Incident results were not applied to the report, or a patch field changed.

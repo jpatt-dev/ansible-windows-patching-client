@@ -106,23 +106,23 @@
           - (_csv_lines | length) == 4
           - (_csv_lines | select('equalto', '') | list | length) == 0
           - _csv_lines[0] == _csv_header_expected
-          - (_csv_lines[0] | regex_findall('","') | length) == 15
+          - (_csv_lines[0] | regex_findall('","') | length) == 18
           - (('\\' ~ 'n') not in (_csv_lines | join('')))
           - ('"WINHOST01"' in _csv_lines[1])
           - ('"Microsoft Windows Server 2019 Datacenter"' in _csv_lines[1])
           - ('"17763.7553"' in _csv_lines[1])
-          - _csv_lines[1] is match('.*"PATCH_SUCCEEDED","False","False"$')
+          - _csv_lines[1] is match('.*"PATCH_SUCCEEDED","False","False","","not required",""$')
           - ('"HOST ""QUOTED"""' in _csv_lines[2])
           - ('"Windows Server 2022, Datacenter"' in _csv_lines[2])
           - ('"London, UK"' in _csv_lines[2])
           - ('"A reboot is pending and requires follow-up"' in _csv_lines[2])
-          - _csv_lines[2] is match('.*"PENDING_REBOOT","True","True"$')
+          - _csv_lines[2] is match('.*"PENDING_REBOOT","True","True","","not required",""$')
           - _csv_lines[3] is match('^"HOST,COMMA",""')
-          - _csv_lines[3] is match('.*"UNKNOWN_RESULT","not_available","False"$')
+          - _csv_lines[3] is match('.*"UNKNOWN_RESULT","not_available","False","","not required",""$')
           - (_csv_text | trim) == (patch_workflow_report_csv | trim)
         fail_msg: Generated CSV quoting, header, or published report agreement did not match.
       vars:
-        _csv_header_expected: '"Hostname","FQDN","OS Release","Post-Patch Kernel/Build","Location","Patched","Exempt","Result","Reason","Updates Installed","Updates Remaining","Change Ticket","Patch Wave","Reason Code","Pending Reboot","Manual Follow-up Required"'
+        _csv_header_expected: '"Hostname","FQDN","OS Release","Post-Patch Kernel/Build","Location","Patched","Exempt","Result","Reason","Updates Installed","Updates Remaining","Change Ticket","Patch Wave","Reason Code","Pending Reboot","Manual Follow-up Required","Incident Number","Incident Status","CI sys_id"'
 
 - name: CSV rendering with zero hosts
   hosts: localhost
@@ -178,12 +178,12 @@
           - (_zero_csv_lines | length) == 1
           - (_zero_csv_lines | select('equalto', '') | list | length) == 0
           - _zero_csv_lines[0] == _csv_header_expected
-          - (_zero_csv_lines[0] | regex_findall('","') | length) == 15
+          - (_zero_csv_lines[0] | regex_findall('","') | length) == 18
           - (('\\' ~ 'n') not in (_zero_csv_lines | join('')))
           - (_zero_csv_text | trim) == (patch_workflow_report_csv | trim)
         fail_msg: Zero-host CSV must be the canonical header only and match the published report.
       vars:
-        _csv_header_expected: '"Hostname","FQDN","OS Release","Post-Patch Kernel/Build","Location","Patched","Exempt","Result","Reason","Updates Installed","Updates Remaining","Change Ticket","Patch Wave","Reason Code","Pending Reboot","Manual Follow-up Required"'
+        _csv_header_expected: '"Hostname","FQDN","OS Release","Post-Patch Kernel/Build","Location","Patched","Exempt","Result","Reason","Updates Installed","Updates Remaining","Change Ticket","Patch Wave","Reason Code","Pending Reboot","Manual Follow-up Required","Incident Number","Incident Status","CI sys_id"'
 
 - name: Seed mock hosts for result classification
   hosts: localhost
@@ -1192,13 +1192,15 @@
           - "'Update ServiceNow change request with the patch summary' in _agg_task_names"
           - "'Attach final reports to the ServiceNow change request' in _agg_task_names"
           - "'Create follow-up incidents for hosts that need manual follow-up' in _agg_task_names"
+          - "'Add follow-up incident results to the patch report' in _agg_task_names"
           - "'Email Windows patching report' in _agg_task_names"
           - "'Fail after reporting if patching or ServiceNow integration failed' in _agg_task_names"
           - >-
-            _agg_task_blob is search('(?s)Aggregate Final Patch Report.*Write canonical
-            Final Report.*Update ServiceNow change request with the patch summary.*Attach
-            final reports to the ServiceNow change request.*Create follow-up incidents
-            for hosts that need manual follow-up.*Email Windows patching
+            _agg_task_blob is search('(?s)Aggregate Final Patch Report.*Create follow-up
+            incidents for hosts that need manual follow-up.*Add follow-up incident
+            results to the patch report.*Write canonical Final Report.*Update
+            ServiceNow change request with the patch summary.*Attach final reports
+            to the ServiceNow change request.*Email Windows patching
             report.*Fail after reporting if patching or ServiceNow integration failed')
           - "'Validate ServiceNow change for this host before remediation' in (_full_patch_slurp.content | b64decode)"
           - "'Update ServiceNow work notes after host final result' not in (_full_patch_slurp.content | b64decode)"

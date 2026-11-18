@@ -263,6 +263,9 @@ Primary CSV columns:
 14. Reason Code
 15. Pending Reboot
 16. Manual Follow-up Required
+17. Incident Number
+18. Incident Status (`created`, `reused`, `failed`, or `not required`)
+19. CI sys_id
 
 CSV fields are RFC 4180 quoted. Commas, double quotes, and empty strings are
 preserved. `Reason Code`, `Pending Reboot`, and `Manual Follow-up Required`

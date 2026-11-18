@@ -1,0 +1,54 @@
+---
+# Stamp each report host from snow_patching_incident_results.
+# Status is created, reused, failed, or not required.
+# A missing number is not created or reused. Existing host fields stay.
+
+- name: Add incident number and status to each report host
+  ansible.builtin.set_fact:
+    patch_workflow_report: "{{ patch_workflow_report | combine({'hosts': snow_followup_report_hosts}) }}"
+    patch_workflow_report_json: "{{ patch_workflow_report | combine({'hosts': snow_followup_report_hosts}) | to_json }}"
+  vars:
+    snow_followup_report_hosts: "{{ snow_followup_report_hosts_json | trim | from_json }}"
+    snow_followup_report_hosts_json: |
+      {% set rows = snow_patching_incident_results | default([]) %}
+      {% set incidents_on = snow_patching_create_incidents_enabled | default(false) | bool %}
+      {% set ns = namespace(hosts=[]) %}
+      {% for host in patch_workflow_report.hosts | default([]) %}
+      {% set name = host.hostname | default(host.host | default('')) | string | trim %}
+      {% set inv = host.inventory_hostname | default(name) | string | trim %}
+      {% set named = rows | selectattr('hostname', 'equalto', name) | list %}
+      {% set matches = named if (named | length) > 0 else (rows | selectattr('hostname', 'equalto', inv) | list) %}
+      {% set stamp = namespace(number='', status='not required', ci=host.snow_ci_sys_id | default('') | string | trim) %}
+      {% if (matches | length) > 0 %}
+      {% set stamp.ci = matches[0].ci_sys_id | default(stamp.ci) | string | trim %}
+      {% set row_number = matches[0].incident_number | default('') | string | trim %}
+      {% set row_ok = matches[0].success | default(false) | bool %}
+      {% set row_reused = matches[0].reused | default(false) | bool %}
+      {% if row_ok and (row_number | length) > 0 and row_reused %}
+      {% set stamp.status = 'reused' %}
+      {% set stamp.number = row_number %}
+      {% elif row_ok and (row_number | length) > 0 %}
+      {% set stamp.status = 'created' %}
+      {% set stamp.number = row_number %}
+      {% else %}
+      {% set stamp.status = 'failed' %}
+      {% endif %}
+      {% elif incidents_on and (host.manual_followup_required | default(false) | bool) %}
+      {% set stamp.status = 'failed' %}
+      {% endif %}
+      {% set ns.hosts = ns.hosts + [host | combine({
+        'incident_number': stamp.number,
+        'incident_status': stamp.status,
+        'snow_ci_sys_id': stamp.ci
+      })] %}
+      {% endfor %}
+      {{ ns.hosts | to_json }}
+  changed_when: false
+
+- name: Publish the report with incident results
+  ansible.builtin.set_stats:
+    data:
+      patch_workflow_report: "{{ patch_workflow_report }}"
+      patch_workflow_report_json: "{{ patch_workflow_report_json }}"
+      snow_patching_incident_results: "{{ snow_patching_incident_results | default([]) }}"
+    per_host: false
