@@ -37,6 +37,9 @@
           - "'snow_patching_import_set_create_enabled' not in (_snow_followup_slurps.results[1].content | b64decode)"
           - "'snow_patching_create_incidents_enabled' not in (_snow_followup_slurps.results[1].content | b64decode)"
           - "'snow_incident_caller' not in (_snow_followup_slurps.results[1].content | b64decode)"
+          - "'Publish follow-up incident results' not in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_incidents.yml'))"
+          - "'aggregate: false' in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_apply_report.yml'))"
+          - "'inventory_hostname' in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_incident_one.yml'))"
         fail_msg: Follow-up incidents must stay disabled, unsurveyed, and after reporting.
 
     - name: Include incident handling while it is disabled
@@ -721,23 +724,39 @@
       vars:
         incident_stamp_results:
           - hostname: WIN-CREATED
+            inventory_hostname: win-created.example
             ci_sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
             incident_number: INC0001001
             reused: false
             success: true
           - hostname: WIN-REUSED
+            inventory_hostname: win-reused.example
             ci_sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
             incident_number: INC0001002
             reused: true
             success: true
           - hostname: WIN-FAILED
+            inventory_hostname: win-failed.example
             ci_sys_id: cccccccccccccccccccccccccccccccc
             incident_number: INC0001999
             reused: false
             success: false
           - hostname: WIN-BLANK
+            inventory_hostname: win-blank.example
             ci_sys_id: dddddddddddddddddddddddddddddddd
             incident_number: ""
+            reused: false
+            success: true
+          - hostname: WIN-SAME
+            inventory_hostname: win-a.example
+            ci_sys_id: "11111111111111111111111111111111"
+            incident_number: INC0002001
+            reused: false
+            success: true
+          - hostname: WIN-SAME
+            inventory_hostname: win-b.example
+            ci_sys_id: "22222222222222222222222222222222"
+            incident_number: INC0002002
             reused: false
             success: true
         incident_stamp_report:
@@ -745,41 +764,77 @@
             failed: 2
           hosts:
             - hostname: WIN-CREATED
+              inventory_hostname: win-created.example
               result: failed
               reason: Update installation failed
               reason_code: PATCH_INSTALL_FAILED
               manual_followup_required: true
               snow_ci_sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
             - hostname: WIN-REUSED
+              inventory_hostname: win-reused.example
               result: degraded
               reason: A reboot is pending
               reason_code: PENDING_REBOOT
               manual_followup_required: true
               snow_ci_sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
             - hostname: WIN-FAILED
+              inventory_hostname: win-failed.example
               result: failed
               reason: Host unreachable
               reason_code: UNREACHABLE
               manual_followup_required: true
               snow_ci_sys_id: cccccccccccccccccccccccccccccccc
             - hostname: WIN-BLANK
+              inventory_hostname: win-blank.example
               result: failed
               reason: Update installation failed
               reason_code: PATCH_INSTALL_FAILED
               manual_followup_required: true
               snow_ci_sys_id: dddddddddddddddddddddddddddddddd
             - hostname: WIN-OK
+              inventory_hostname: win-ok.example
               result: success
               reason: Updates installed successfully
               reason_code: PATCH_SUCCEEDED
               manual_followup_required: false
               snow_ci_sys_id: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
             - hostname: WIN-MISSED
+              inventory_hostname: win-missed.example
               result: failed
               reason: Update installation failed
               reason_code: PATCH_INSTALL_FAILED
               manual_followup_required: true
               snow_ci_sys_id: ffffffffffffffffffffffffffffffff
+            - hostname: WIN-EXEMPT
+              inventory_hostname: win-exempt.example
+              result: failed
+              reason: Exempt from patching
+              reason_code: EXEMPT
+              exempt: true
+              manual_followup_required: true
+              snow_ci_sys_id: abababababababababababababababab
+            - hostname: WIN-EXEMPT-RESULT
+              inventory_hostname: win-exempt-result.example
+              result: exempt
+              reason: Exempt from patching
+              reason_code: EXEMPT
+              exempt: false
+              manual_followup_required: true
+              snow_ci_sys_id: cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd
+            - hostname: WIN-SAME
+              inventory_hostname: win-a.example
+              result: failed
+              reason: Update installation failed
+              reason_code: PATCH_INSTALL_FAILED
+              manual_followup_required: true
+              snow_ci_sys_id: a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1
+            - hostname: WIN-SAME
+              inventory_hostname: win-b.example
+              result: failed
+              reason: Update installation failed
+              reason_code: PATCH_INSTALL_FAILED
+              manual_followup_required: true
+              snow_ci_sys_id: b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2
 
     - name: Stamp the report from incident results
       ansible.builtin.include_tasks: "{{ snow_patching_tasks_dir }}/snow_followup_apply_report.yml"
@@ -800,7 +855,25 @@
           - (patch_workflow_report.hosts | selectattr('hostname', 'equalto', 'WIN-BLANK') | first).incident_number == ''
           - (patch_workflow_report.hosts | selectattr('hostname', 'equalto', 'WIN-OK') | first).incident_status == 'not required'
           - (patch_workflow_report.hosts | selectattr('hostname', 'equalto', 'WIN-OK') | first).result == 'success'
-          - (patch_workflow_report.hosts | selectattr('hostname', 'equalto', 'WIN-MISSED') | first).incident_status == 'failed'
+          - (patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-missed.example') | first).incident_status == 'failed'
+          - (patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-exempt.example') | first).incident_status == 'not required'
+          - (patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-exempt.example') | first).incident_number == ''
+          - (patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-exempt-result.example') | first).incident_status == 'not required'
+          - (patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-a.example') | first).incident_number == 'INC0002001'
+          - (patch_workflow_report.hosts | selectattr('inventory_hostname', 'equalto', 'win-b.example') | first).incident_number == 'INC0002002'
+          - >-
+            (patch_workflow_report.hosts
+            | selectattr('inventory_hostname', 'equalto', 'win-a.example')
+            | first).snow_ci_sys_id
+            == 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'
+          - >-
+            (patch_workflow_report.hosts
+            | selectattr('inventory_hostname', 'equalto', 'win-b.example')
+            | first).snow_ci_sys_id
+            == 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2'
           - patch_workflow_report.status_counts.failed == 2
+          - (patch_workflow_report_json | from_json) is mapping
+          - (patch_workflow_report_json | from_json).hosts | length == (patch_workflow_report.hosts | length)
+          - snow_patching_incident_results | length == 6
           - "'INC0001001' in patch_workflow_report_json"
         fail_msg: Incident results were not applied to the report, or a patch field changed.

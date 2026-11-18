@@ -5,6 +5,7 @@
   vars:
     snow_followup_result_row:
       hostname: "{{ snow_followup_candidate.hostname }}"
+      inventory_hostname: "{{ snow_followup_candidate.inventory_hostname | default(snow_followup_candidate.hostname) }}"
       ci_sys_id: "{{ snow_followup_candidate.ci_sys_id }}"
       change_ticket_id: "{{ snow_followup_candidate.change_ticket_id }}"
       reason_code: "{{ snow_followup_candidate.reason_code }}"
@@ -29,6 +30,16 @@
       AAP job: {{ snow_followup_candidate.aap_job_id }}
       CI: {{ snow_followup_candidate.ci_sys_id }}
   block:
+    - name: Drop a previous host's incident result before this create
+      ansible.builtin.set_fact:
+        snow_incident_result: {}
+
+    - name: Drop a previous localhost incident result before this create
+      ansible.builtin.set_fact:
+        snow_incident_result: {}
+      delegate_to: localhost
+      delegate_facts: true
+
     - name: Open the incident through the shared incident role
       ansible.builtin.include_role:
         name: servicenow_incident
@@ -94,6 +105,7 @@
           else snow_followup_on_controller }}"
         snow_followup_kept:
           hostname: "{{ snow_followup_candidate.hostname }}"
+          inventory_hostname: "{{ snow_followup_candidate.inventory_hostname | default(snow_followup_candidate.hostname) }}"
           ci_sys_id: "{{ snow_followup_candidate.ci_sys_id }}"
           change_ticket_id: "{{ snow_followup_candidate.change_ticket_id }}"
           reason_code: "{{ snow_followup_candidate.reason_code }}"
@@ -123,6 +135,7 @@
       vars:
         snow_followup_result_row:
           hostname: "{{ snow_followup_candidate.hostname }}"
+          inventory_hostname: "{{ snow_followup_candidate.inventory_hostname | default(snow_followup_candidate.hostname) }}"
           ci_sys_id: "{{ snow_followup_candidate.ci_sys_id }}"
           change_ticket_id: "{{ snow_followup_candidate.change_ticket_id }}"
           reason_code: "{{ snow_followup_candidate.reason_code }}"
