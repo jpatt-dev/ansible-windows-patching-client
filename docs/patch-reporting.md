@@ -265,7 +265,9 @@ Primary CSV columns:
 16. Manual Follow-up Required
 17. Incident Number
 18. Incident Status (`created`, `reused`, `failed`, or `not required`)
-19. CI sys_id
+
+`snow_ci_sys_id` stays on each JSON host, in the Markdown host details, and
+in the ServiceNow Incident description. It is not a CSV column.
 
 CSV fields are RFC 4180 quoted. Commas, double quotes, and empty strings are
 preserved. `Reason Code`, `Pending Reboot`, and `Manual Follow-up Required`

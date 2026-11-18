@@ -106,23 +106,23 @@
           - (_csv_lines | length) == 4
           - (_csv_lines | select('equalto', '') | list | length) == 0
           - _csv_lines[0] == _csv_header_expected
-          - (_csv_lines[0] | regex_findall('","') | length) == 18
+          - (_csv_lines[0] | regex_findall('","') | length) == 17
           - (('\\' ~ 'n') not in (_csv_lines | join('')))
           - ('"WINHOST01"' in _csv_lines[1])
           - ('"Microsoft Windows Server 2019 Datacenter"' in _csv_lines[1])
           - ('"17763.7553"' in _csv_lines[1])
-          - _csv_lines[1] is match('.*"PATCH_SUCCEEDED","False","False","","not required",""$')
+          - _csv_lines[1] is match('.*"PATCH_SUCCEEDED","False","False","","not required"$')
           - ('"HOST ""QUOTED"""' in _csv_lines[2])
           - ('"Windows Server 2022, Datacenter"' in _csv_lines[2])
           - ('"London, UK"' in _csv_lines[2])
           - ('"A reboot is pending and requires follow-up"' in _csv_lines[2])
-          - _csv_lines[2] is match('.*"PENDING_REBOOT","True","True","","not required",""$')
+          - _csv_lines[2] is match('.*"PENDING_REBOOT","True","True","","not required"$')
           - _csv_lines[3] is match('^"HOST,COMMA",""')
-          - _csv_lines[3] is match('.*"UNKNOWN_RESULT","not_available","False","","not required",""$')
+          - _csv_lines[3] is match('.*"UNKNOWN_RESULT","not_available","False","","not required"$')
           - (_csv_text | trim) == (patch_workflow_report_csv | trim)
         fail_msg: Generated CSV quoting, header, or published report agreement did not match.
       vars:
-        _csv_header_expected: '"Hostname","FQDN","OS Release","Post-Patch Kernel/Build","Location","Patched","Exempt","Result","Reason","Updates Installed","Updates Remaining","Change Ticket","Patch Wave","Reason Code","Pending Reboot","Manual Follow-up Required","Incident Number","Incident Status","CI sys_id"'
+        _csv_header_expected: '"Hostname","FQDN","OS Release","Post-Patch Kernel/Build","Location","Patched","Exempt","Result","Reason","Updates Installed","Updates Remaining","Change Ticket","Patch Wave","Reason Code","Pending Reboot","Manual Follow-up Required","Incident Number","Incident Status"'
 
 - name: CSV rendering with zero hosts
   hosts: localhost
@@ -178,12 +178,12 @@
           - (_zero_csv_lines | length) == 1
           - (_zero_csv_lines | select('equalto', '') | list | length) == 0
           - _zero_csv_lines[0] == _csv_header_expected
-          - (_zero_csv_lines[0] | regex_findall('","') | length) == 18
+          - (_zero_csv_lines[0] | regex_findall('","') | length) == 17
           - (('\\' ~ 'n') not in (_zero_csv_lines | join('')))
           - (_zero_csv_text | trim) == (patch_workflow_report_csv | trim)
         fail_msg: Zero-host CSV must be the canonical header only and match the published report.
       vars:
-        _csv_header_expected: '"Hostname","FQDN","OS Release","Post-Patch Kernel/Build","Location","Patched","Exempt","Result","Reason","Updates Installed","Updates Remaining","Change Ticket","Patch Wave","Reason Code","Pending Reboot","Manual Follow-up Required","Incident Number","Incident Status","CI sys_id"'
+        _csv_header_expected: '"Hostname","FQDN","OS Release","Post-Patch Kernel/Build","Location","Patched","Exempt","Result","Reason","Updates Installed","Updates Remaining","Change Ticket","Patch Wave","Reason Code","Pending Reboot","Manual Follow-up Required","Incident Number","Incident Status"'
 
 - name: Seed mock hosts for result classification
   hosts: localhost
