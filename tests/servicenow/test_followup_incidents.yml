@@ -30,7 +30,10 @@
           - "'u_caller' in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_incident_one.yml'))"
           - "'u_short_description' in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_incident_one.yml'))"
           - "'u_description' in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_incident_one.yml'))"
-          - "'snow_patching_import_correlation_source' not in (_snow_followup_slurps.results[1].content | b64decode)"
+          - "'snow_incident_correlation_id:' in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_incident_one.yml'))"
+          - "'snow_followup_candidate.correlation_id' in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_incident_one.yml'))"
+          - "'snow_followup_import_correlation_display' in (lookup('file', snow_patching_tasks_dir ~ '/snow_followup_incident_one.yml'))"
+          - "'snow_incident_import_correlation_display' not in (_snow_followup_slurps.results[1].content | b64decode)"
           - "'snow_patching_import_set_create_enabled' not in (_snow_followup_slurps.results[1].content | b64decode)"
           - "'snow_patching_create_incidents_enabled' not in (_snow_followup_slurps.results[1].content | b64decode)"
           - "'snow_incident_caller' not in (_snow_followup_slurps.results[1].content | b64decode)"
@@ -573,7 +576,7 @@
     snow_incident_caller: patch.automation
     snow_incident_assignment_group: 0123456789abcdef0123456789abcdef
     snow_incident_import_api_path: api/now/import/PLACEHOLDER_STAGING_TABLE
-    snow_patching_import_correlation_source: correlation_id
+    snow_incident_import_correlation_display: Ansible
     patch_workflow_marker: original-report
     patch_workflow_report:
       hosts:
@@ -634,7 +637,9 @@
         that:
           - snow_patching_incident_failed | bool
           - snow_patching_incident_results | length == 0
-          - "'snow_patching_import_correlation_source' in snow_patching_incident_error"
+          - "'snow_incident_import_correlation_display' in snow_patching_incident_error"
+          - "'Ansible' in snow_patching_incident_error"
+          - "'aap-patch' in snow_patching_incident_error"
           - "'No incident was created' in snow_patching_incident_error"
           - patch_workflow_marker == 'original-report'
         fail_msg: Import set creation continued without an explicit correlation mapping.

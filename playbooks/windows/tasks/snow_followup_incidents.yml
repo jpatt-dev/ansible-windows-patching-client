@@ -9,9 +9,9 @@
 # A create through import_set also requires
 # snow_patching_import_set_create_enabled=true,
 # snow_incident_import_api_path, snow_incident_assignment_group, and
-# snow_patching_import_correlation_source=correlation_id.
-# That source copies the existing aap-patch correlation value. It does not
-# prove the transform will reuse an incident. There is no retry and no
+# snow_incident_import_correlation_display. The client value is the literal
+# Ansible. The aap-patch:<change>:<hostname>:<reason code> id stays on the
+# follow-up result and is not sent in that field. There is no retry and no
 # fallback to the standard Incident API.
 
 - name: Skip follow-up incidents when creation is disabled
@@ -35,7 +35,7 @@
         snow_followup_create_method: "{{ snow_incident_create_method | default('standard') | string | trim }}"
         snow_followup_import_set_enabled: "{{ snow_patching_import_set_create_enabled | default(false) | bool }}"
         snow_followup_import_api_path: "{{ snow_incident_import_api_path | default('') | string | trim }}"
-        snow_followup_import_correlation_source: "{{ snow_patching_import_correlation_source | default('') | string | trim }}"
+        snow_followup_import_correlation_display: "{{ snow_incident_import_correlation_display | default('') | string | trim }}"
         snow_followup_create_count: "{{ snow_patching_incident_candidates | selectattr('action', 'equalto', 'create') | list | length }}"
       changed_when: false
 
@@ -58,19 +58,20 @@
           - snow_followup_import_set_enabled | bool
           - snow_followup_import_api_path is match('^api/now/import/[A-Za-z][A-Za-z0-9_]{0,79}$')
           - snow_followup_assignment_group | length > 0
-          - snow_followup_import_correlation_source == 'correlation_id'
+          - snow_followup_import_correlation_display | length > 0
+          - snow_followup_import_correlation_display is not search('\\^|\\r|\\n')
         fail_msg: >-
           Import set follow-up creation is not idempotent.
           u_correlation_display does not prevent a duplicate incident.
           Set snow_patching_import_set_create_enabled=true,
           snow_incident_import_api_path to api/now/import/<staging_table>,
           snow_incident_assignment_group, and
-          snow_patching_import_correlation_source=correlation_id,
+          snow_incident_import_correlation_display to the client value,
           in addition to snow_patching_create_incidents_enabled.
-          correlation_id is the only accepted mapping. It copies the
-          existing aap-patch value and does not search for an incident.
-          The standard incident API is not used as a fallback.
-          No incident was created.
+          The client value is the literal Ansible. The aap-patch
+          correlation id stays on the follow-up result. It is not sent
+          as u_correlation_display. The standard incident API is not
+          used as a fallback. No incident was created.
         quiet: true
 
     - name: Require the caller when a follow-up host needs an incident

@@ -57,11 +57,8 @@
         snow_incident_import_api_path: "{{ snow_followup_import_api_path | default('') }}"
         snow_incident_import_correlation_display: >-
           {{
-            snow_followup_candidate.correlation_id
-            if (
-              (snow_followup_create_method | default('standard')) == 'import_set'
-              and (snow_followup_import_correlation_source | default('')) == 'correlation_id'
-            )
+            snow_followup_import_correlation_display | default('')
+            if (snow_followup_create_method | default('standard')) == 'import_set'
             else ''
           }}
         snow_incident_import_fields: >-
