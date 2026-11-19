@@ -1,0 +1,26 @@
+---
+- name: Reset the invalid-template result
+  ansible.builtin.set_fact:
+    standard_change_rejected: false
+    standard_change_error: ""
+
+- name: Reject one invalid template before POST
+  block:
+    - name: Include preflight for an invalid template
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/standard_change_preflight.yml"
+      vars:
+        snow_standard_change_template_id: "{{ item }}"
+  rescue:
+    - name: Record the invalid-template failure
+      ansible.builtin.set_fact:
+        standard_change_rejected: true
+        standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
+
+- name: Confirm the invalid template sent no request
+  ansible.builtin.assert:
+    that:
+      - standard_change_rejected | bool
+      - "'must not contain a path' in standard_change_error"
+      - "'No ServiceNow request was sent' in standard_change_error"
+      - snow_standard_change_preflight is not defined
+    fail_msg: "Invalid template was accepted. error={{ standard_change_error | default('') }}"

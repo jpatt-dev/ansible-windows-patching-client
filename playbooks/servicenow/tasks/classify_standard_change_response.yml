@@ -1,0 +1,104 @@
+---
+# Classify one canned or live Standard Change response.
+# Confirmed requires HTTP 200 or 201, a CHG number, a 32-character
+# sys_id, and no top-level error indicator. This file does not send HTTP.
+
+- name: Classify the Standard Change response
+  ansible.builtin.set_fact:
+    snow_standard_change_summary: "{{ _snow_summary_json | trim | from_json }}"
+  no_log: true
+  vars:
+    _snow_summary_json: |
+      {% set resp = snow_standard_change_response | default({}) %}
+      {% set ns = namespace(
+        outcome='unconfirmed',
+        reason='malformed_json',
+        status='NOT RETURNED',
+        number='',
+        sys_id='',
+        record={},
+        usable=false
+      ) %}
+      {% if resp is mapping and (resp.status | default('') | string | length) > 0 %}
+      {% set ns.status = resp.status | string %}
+      {% endif %}
+      {% if resp is mapping and (resp.failed | default(false) | bool) %}
+      {% set ns.reason = resp.failure_class | default('request_failed') | string %}
+      {% endif %}
+      {% if resp is mapping and resp.json is defined and resp.json is mapping %}
+      {% set ns.usable = true %}
+      {% if resp.json.result is defined and resp.json.result is mapping %}
+      {% set ns.record = resp.json.result %}
+      {% elif (
+        resp.json.result is defined
+        and resp.json.result is not string
+        and resp.json.result is sequence
+        and (resp.json.result | length) == 1
+        and (resp.json.result | first) is mapping
+      ) %}
+      {% set ns.record = resp.json.result | first %}
+      {% elif resp.json.result is defined %}
+      {% set ns.usable = false %}
+      {% else %}
+      {% set ns.record = resp.json %}
+      {% endif %}
+      {% endif %}
+      {% if ns.record.number is defined and ns.record.number is string %}
+      {% set ns.number = ns.record.number | trim %}
+      {% elif ns.record.number is defined and ns.record.number is mapping and ns.record.number.display_value is defined %}
+      {% set ns.number = ns.record.number.display_value | string | trim %}
+      {% elif ns.record.number is defined and ns.record.number is mapping and ns.record.number.value is defined %}
+      {% set ns.number = ns.record.number.value | string | trim %}
+      {% endif %}
+      {% if ns.number is not match('^CHG[0-9]+$') %}
+      {% set ns.number = '' %}
+      {% endif %}
+      {% if ns.record.sys_id is defined and ns.record.sys_id is string %}
+      {% set ns.sys_id = ns.record.sys_id | trim %}
+      {% elif ns.record.sys_id is defined and ns.record.sys_id is mapping and ns.record.sys_id.value is defined %}
+      {% set ns.sys_id = ns.record.sys_id.value | string | trim %}
+      {% endif %}
+      {% if ns.sys_id is not match('^[0-9a-fA-F]{32}$') %}
+      {% set ns.sys_id = '' %}
+      {% endif %}
+      {% if resp is mapping and not (resp.failed | default(false) | bool) and ns.usable %}
+      {% if (
+        resp.json.error is defined
+        or ((resp.json.status | default('') | string | lower) in ['failure', 'error', 'failed'])
+      ) %}
+      {% set ns.reason = 'api_error' %}
+      {% elif ns.status == '202' %}
+      {% set ns.reason = 'http_202' %}
+      {% elif ns.status not in ['200', '201'] %}
+      {% set ns.reason = 'unexpected_status' %}
+      {% elif (ns.number | length) == 0 %}
+      {% set ns.reason = 'missing_change_number' %}
+      {% elif (ns.sys_id | length) == 0 %}
+      {% set ns.reason = 'missing_sys_id' %}
+      {% else %}
+      {% set ns.outcome = 'confirmed' %}
+      {% set ns.reason = 'confirmed' %}
+      {% endif %}
+      {% endif %}
+      {{
+        {
+          'outcome': ns.outcome,
+          'reason': ns.reason,
+          'http_status': ns.status,
+          'change_number': ns.number if (ns.number | length) > 0 else 'NOT RETURNED',
+          'sys_id': ns.sys_id if (ns.sys_id | length) > 0 else 'NOT RETURNED'
+        } | to_json
+      }}
+  changed_when: false
+
+- name: Reject an unconfirmed Standard Change result
+  when: snow_standard_change_summary.outcome != 'confirmed'
+  ansible.builtin.fail:
+    msg: >-
+      Standard Change creation: UNCONFIRMED
+      ({{ snow_standard_change_summary.reason }}).
+      HTTP status: {{ snow_standard_change_summary.http_status }}.
+      Change number: {{ snow_standard_change_summary.change_number }}.
+      sys_id: {{ snow_standard_change_summary.sys_id }}.
+      The POST was not retried. Inspect ServiceNow before trying again.
+      This result does not confirm that a Standard Change was created.

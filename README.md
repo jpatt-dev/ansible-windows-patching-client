@@ -232,8 +232,11 @@ Normal patch operations do not require Git changes.
 
 `playbooks/servicenow/create_standard_change.yml` sends one POST to
 `/api/sn_chg_rest/change/standard/{template_id}`. It is not part of Full
-Patch, Precheck, incident creation, or change preparation. The endpoint and
-the request body are not confirmed for the client instance.
+Patch, Precheck, incident creation, or change preparation. The client
+confirmed that endpoint. The request body and the response fields are not
+confirmed. A job is successful only when the response is HTTP 200 or 201,
+the number matches `CHG` plus digits, and the sys_id is 32 hexadecimal
+characters. Any other result is unconfirmed and is not retried.
 
 Required extra variables:
 
@@ -264,19 +267,17 @@ ansible-playbook playbooks/servicenow/create_standard_change.yml \
 
 In AAP, use inventory `localhost`, that credential, and the same extra vars.
 Set `snow_confirm_create` to `true` only for one intended nonproduction test.
-Check mode does not send the POST. The task has no retries. The job log shows
-the HTTP status, change number, and sys_id when those fields are present.
-The response body is not displayed.
+Check mode does not send the POST. The task has no retries. The response
+body is not displayed. An unconfirmed result tells the operator to inspect
+ServiceNow before trying again. It does not say that no Change was created.
 
 After a success summary, open the change number in the nonproduction
-ServiceNow instance and confirm the template, state, and fields. If the
-number is `NOT RETURNED`, do not run the playbook again until the response
-shape is confirmed.
+ServiceNow instance and confirm the template, state, and fields. Do not
+run the playbook again while a prior result is unconfirmed.
 
-Still to confirm with the ServiceNow team: the real creation path, which
-identifier belongs in the URL, the required JSON fields, the success status
-code, where the change number and sys_id appear, and the authorized
-nonproduction instance name.
+Still to confirm with the ServiceNow team: the required JSON fields, where
+the change number and sys_id appear, which field proves the record is a
+Standard Change, and the authorized nonproduction instance name.
 
 ## Documentation
 

@@ -1,0 +1,30 @@
+---
+- name: Reset the malformed-response result
+  ansible.builtin.set_fact:
+    standard_change_unconfirmed: false
+    standard_change_error: ""
+
+- name: Classify one malformed Standard Change response
+  block:
+    - name: Include the malformed-response classification
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/classify_standard_change_response.yml"
+      vars:
+        snow_standard_change_response: "{{ item }}"
+  rescue:
+    - name: Record the malformed-response failure
+      ansible.builtin.set_fact:
+        standard_change_unconfirmed: true
+        standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
+
+- name: Confirm malformed JSON is not success
+  ansible.builtin.assert:
+    that:
+      - standard_change_unconfirmed | bool
+      - snow_standard_change_summary.outcome == 'unconfirmed'
+      - snow_standard_change_summary.reason == 'malformed_json'
+      - snow_standard_change_summary.change_number == 'NOT RETURNED'
+      - snow_standard_change_summary.sys_id == 'NOT RETURNED'
+      - "'SUCCEEDED' not in standard_change_error"
+      - "'Inspect ServiceNow before trying again' in standard_change_error"
+      - "'not-json' not in standard_change_error"
+    fail_msg: "Malformed JSON was confirmed. error={{ standard_change_error | default('') }}"

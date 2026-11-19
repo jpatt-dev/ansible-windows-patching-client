@@ -1,0 +1,372 @@
+---
+# Offline Standard Change creation checks. No ServiceNow request is sent.
+#   ANSIBLE_ROLES_PATH=roles ansible-playbook tests/servicenow/test_create_standard_change.yml
+
+- name: HTTP 200 with a reference-value CHG number and sys_id is confirmed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_standard_change_response:
+      failed: false
+      status: 200
+      json:
+        result:
+          number:
+            display_value: CHG0002001
+            value: not-the-change-number
+          sys_id:
+            value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  tasks:
+    - name: Classify the HTTP 200 response
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/classify_standard_change_response.yml"
+
+    - name: Confirm HTTP 200 success
+      ansible.builtin.assert:
+        that:
+          - snow_standard_change_summary.outcome == 'confirmed'
+          - snow_standard_change_summary.reason == 'confirmed'
+          - snow_standard_change_summary.http_status == '200'
+          - snow_standard_change_summary.change_number == 'CHG0002001'
+          - snow_standard_change_summary.sys_id == 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+        fail_msg: "HTTP 200 was not confirmed. summary={{ snow_standard_change_summary | default({}) }}"
+
+- name: HTTP 201 with a valid CHG number and sys_id is confirmed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_standard_change_response:
+      failed: false
+      status: 201
+      json:
+        result:
+          - number: CHG0002011
+            sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  tasks:
+    - name: Classify the HTTP 201 response
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/classify_standard_change_response.yml"
+
+    - name: Confirm HTTP 201 success
+      ansible.builtin.assert:
+        that:
+          - snow_standard_change_summary.outcome == 'confirmed'
+          - snow_standard_change_summary.http_status == '201'
+          - snow_standard_change_summary.change_number == 'CHG0002011'
+          - snow_standard_change_summary.sys_id == 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+        fail_msg: "HTTP 201 was not confirmed. summary={{ snow_standard_change_summary | default({}) }}"
+
+- name: HTTP 202 stays unconfirmed and keeps a valid identity
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_standard_change_response:
+      failed: false
+      status: 202
+      json:
+        result:
+          number: CHG0002022
+          sys_id: cccccccccccccccccccccccccccccccc
+  tasks:
+    - name: Classify the HTTP 202 response
+      block:
+        - name: Include HTTP 202 classification
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/classify_standard_change_response.yml"
+      rescue:
+        - name: Record the HTTP 202 failure
+          ansible.builtin.set_fact:
+            standard_change_unconfirmed: true
+            standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Confirm HTTP 202 is not success
+      ansible.builtin.assert:
+        that:
+          - standard_change_unconfirmed | bool
+          - snow_standard_change_summary.outcome == 'unconfirmed'
+          - snow_standard_change_summary.reason == 'http_202'
+          - snow_standard_change_summary.change_number == 'CHG0002022'
+          - snow_standard_change_summary.sys_id == 'cccccccccccccccccccccccccccccccc'
+          - "'UNCONFIRMED' in standard_change_error"
+          - "'Inspect ServiceNow before trying again' in standard_change_error"
+          - "'The POST was not retried' in standard_change_error"
+          - "'SUCCEEDED' not in standard_change_error"
+          - "'No ServiceNow request was sent' not in standard_change_error"
+          - "'no Change was created' not in standard_change_error"
+        fail_msg: "HTTP 202 was treated as success. error={{ standard_change_error | default('') }}"
+
+- name: HTTP 200 without a CHG number is unconfirmed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_standard_change_response:
+      failed: false
+      status: 200
+      json:
+        result:
+          number: ""
+          sys_id: dddddddddddddddddddddddddddddddd
+  tasks:
+    - name: Classify a response that has no change number
+      block:
+        - name: Include the missing-number classification
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/classify_standard_change_response.yml"
+      rescue:
+        - name: Record the missing-number failure
+          ansible.builtin.set_fact:
+            standard_change_unconfirmed: true
+            standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Confirm a missing CHG number is not success
+      ansible.builtin.assert:
+        that:
+          - standard_change_unconfirmed | bool
+          - snow_standard_change_summary.outcome == 'unconfirmed'
+          - snow_standard_change_summary.reason == 'missing_change_number'
+          - snow_standard_change_summary.change_number == 'NOT RETURNED'
+          - snow_standard_change_summary.sys_id == 'dddddddddddddddddddddddddddddddd'
+          - "'SUCCEEDED' not in standard_change_error"
+          - "'Inspect ServiceNow before trying again' in standard_change_error"
+        fail_msg: "A missing CHG number was confirmed. error={{ standard_change_error | default('') }}"
+
+- name: HTTP 201 without a sys_id is unconfirmed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_standard_change_response:
+      failed: false
+      status: 201
+      json:
+        result:
+          number: CHG0002012
+          sys_id: ""
+  tasks:
+    - name: Classify a response that has no sys_id
+      block:
+        - name: Include the missing-sys_id classification
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/classify_standard_change_response.yml"
+      rescue:
+        - name: Record the missing-sys_id failure
+          ansible.builtin.set_fact:
+            standard_change_unconfirmed: true
+            standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Confirm a missing sys_id is not success
+      ansible.builtin.assert:
+        that:
+          - standard_change_unconfirmed | bool
+          - snow_standard_change_summary.outcome == 'unconfirmed'
+          - snow_standard_change_summary.reason == 'missing_sys_id'
+          - snow_standard_change_summary.change_number == 'CHG0002012'
+          - snow_standard_change_summary.sys_id == 'NOT RETURNED'
+          - "'SUCCEEDED' not in standard_change_error"
+        fail_msg: "A missing sys_id was confirmed. error={{ standard_change_error | default('') }}"
+
+- name: Malformed or missing JSON is unconfirmed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_malformed_responses:
+      - status: 200
+        failed: false
+        json: "not-json"
+      - status: 201
+        failed: false
+  tasks:
+    - name: Classify each malformed response
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/classify_standard_change_case.yml"
+      loop: "{{ snow_malformed_responses }}"
+      loop_control:
+        label: "{{ item.status }}"
+
+- name: An explicit API error is unconfirmed and is not printed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_standard_change_response:
+      failed: false
+      status: 200
+      json:
+        status: failure
+        error:
+          message: "SECRET-ERROR-BODY do not print"
+        result:
+          number: CHG0002099
+          sys_id: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  tasks:
+    - name: Classify an error response that also contains an identity
+      block:
+        - name: Include the API-error classification
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/classify_standard_change_response.yml"
+      rescue:
+        - name: Record the API-error failure
+          ansible.builtin.set_fact:
+            standard_change_unconfirmed: true
+            standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Confirm the error body was not treated as success
+      ansible.builtin.assert:
+        that:
+          - standard_change_unconfirmed | bool
+          - snow_standard_change_summary.outcome == 'unconfirmed'
+          - snow_standard_change_summary.reason == 'api_error'
+          - snow_standard_change_summary.change_number == 'CHG0002099'
+          - snow_standard_change_summary.sys_id == 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+          - "'SECRET-ERROR-BODY' not in standard_change_error"
+          - "'SUCCEEDED' not in standard_change_error"
+          - "'Inspect ServiceNow before trying again' in standard_change_error"
+        fail_msg: "API error indicator was confirmed or printed. error={{ standard_change_error | default('') }}"
+
+- name: Invalid template identifiers are rejected before a POST
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_instance_url: https://nonproduction.example.invalid
+    snow_nonproduction_instance_url: https://nonproduction.example.invalid
+    snow_confirm_create: true
+    snow_change_payload:
+      short_description: offline
+    snow_invalid_templates:
+      - "../admin"
+      - "template?x=1"
+      - "template/path"
+      - ""
+  tasks:
+    - name: Reject each invalid template
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/preflight_standard_change_case.yml"
+      loop: "{{ snow_invalid_templates }}"
+      loop_control:
+        label: "{{ item }}"
+
+- name: Creation stays off when snow_confirm_create is false
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_instance_url: https://nonproduction.example.invalid
+    snow_nonproduction_instance_url: https://nonproduction.example.invalid
+    snow_standard_change_template_id: STDCHG0001
+    snow_confirm_create: false
+    snow_change_payload: {}
+  tasks:
+    - name: Run preflight with creation disabled
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/standard_change_preflight.yml"
+
+    - name: Confirm no creation was requested
+      ansible.builtin.assert:
+        that:
+          - snow_standard_change_preflight == 'not_confirmed'
+          - snow_standard_change_template == 'STDCHG0001'
+        fail_msg: "snow_confirm_create false did not stop before POST."
+
+- name: An empty payload is not sent when creation is confirmed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_instance_url: https://nonproduction.example.invalid
+    snow_nonproduction_instance_url: https://nonproduction.example.invalid
+    snow_standard_change_template_id: STDCHG0001
+    snow_confirm_create: true
+    snow_change_payload: {}
+  tasks:
+    - name: Mark any earlier preflight result
+      ansible.builtin.set_fact:
+        snow_standard_change_preflight: stale
+
+    - name: Run preflight with an empty payload
+      block:
+        - name: Include empty-payload preflight
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/standard_change_preflight.yml"
+      rescue:
+        - name: Record the empty-payload failure
+          ansible.builtin.set_fact:
+            standard_change_rejected: true
+            standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Confirm the empty payload was rejected before POST
+      ansible.builtin.assert:
+        that:
+          - standard_change_rejected | bool
+          - "'snow_change_payload is empty' in standard_change_error"
+          - "'No ServiceNow request was sent' in standard_change_error"
+          - snow_standard_change_preflight == 'stale'
+        fail_msg: "Empty payload was accepted. error={{ standard_change_error | default('') }}"
+
+- name: HTTP failure or timeout stays unconfirmed without another POST
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_standard_change_response:
+      failed: true
+      status: ""
+      failure_class: connection failed
+      json:
+        result:
+          number: CHG0002500
+          sys_id: ffffffffffffffffffffffffffffffff
+  tasks:
+    - name: Classify a failed POST that still returned an identity
+      block:
+        - name: Include the failed-response classification
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/classify_standard_change_response.yml"
+      rescue:
+        - name: Record the failed-response outcome
+          ansible.builtin.set_fact:
+            standard_change_unconfirmed: true
+            standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Confirm the failed POST does not claim success or absence
+      ansible.builtin.assert:
+        that:
+          - standard_change_unconfirmed | bool
+          - snow_standard_change_summary.outcome == 'unconfirmed'
+          - snow_standard_change_summary.reason == 'connection failed'
+          - snow_standard_change_summary.change_number == 'CHG0002500'
+          - snow_standard_change_summary.sys_id == 'ffffffffffffffffffffffffffffffff'
+          - "'The POST was not retried' in standard_change_error"
+          - "'Inspect ServiceNow before trying again' in standard_change_error"
+          - "'SUCCEEDED' not in standard_change_error"
+          - "'no Change was created' not in standard_change_error"
+          - "'No ServiceNow request was sent' not in standard_change_error"
+        fail_msg: "HTTP failure was confirmed or claimed no Change. error={{ standard_change_error | default('') }}"
+
+- name: The creation playbook sends one POST and does not retry it
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Read the Standard Change playbook
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../playbooks/servicenow/create_standard_change.yml"
+      register: standard_change_playbook
+
+    - name: Read the response classifier
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/classify_standard_change_response.yml"
+      register: standard_change_classifier
+
+    - name: Confirm there is one POST and no retry or read-back
+      ansible.builtin.assert:
+        that:
+          - "(standard_change_text | regex_findall('method: POST') | length) == 1"
+          - "'retries:' not in standard_change_text"
+          - "'until:' not in standard_change_text"
+          - "(standard_change_text | regex_findall('change_request_info') | length) == 1"
+          - "'validate_certs: true' in standard_change_text"
+          - "'no_log: true' in standard_change_text"
+          - "'ansible_check_mode' not in standard_change_text"
+          - "standard_change_text is search('snow_standard_change_preflight != .proceed.')"
+          - "'method: POST' not in classifier_text"
+          - "'uri:' not in classifier_text"
+          - "'retries:' not in classifier_text"
+        fail_msg: The Standard Change playbook does not keep a single unretriable POST.
+      vars:
+        standard_change_text: "{{ standard_change_playbook.content | b64decode }}"
+        classifier_text: "{{ standard_change_classifier.content | b64decode }}"

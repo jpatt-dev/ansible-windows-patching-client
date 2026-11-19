@@ -1,0 +1,64 @@
+---
+# Input checks for the standalone Standard Change POST.
+# This file does not call ServiceNow.
+
+- name: Validate the Standard Change request before any POST
+  ansible.builtin.assert:
+    that:
+      - _snow_instance is match('^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$')
+      - _snow_allowed is match('^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$')
+      - _snow_instance == _snow_allowed
+      - _snow_template is match('^[A-Za-z0-9_.-]{1,80}$')
+      - _snow_template is not search('\\.\\.')
+      - snow_change_payload is mapping
+    fail_msg: >-
+      snow_instance_url must be an https host, with no user, password,
+      or path, and it must exactly match snow_nonproduction_instance_url.
+      snow_standard_change_template_id must be one nonempty token and
+      must not contain a path, a query, or '..'.
+      snow_change_payload must be a dictionary.
+      No ServiceNow request was sent.
+  vars:
+    _snow_instance: "{{ snow_instance_url | default('') | string | trim | regex_replace('/+$', '') }}"
+    _snow_allowed: "{{ snow_nonproduction_instance_url | default('') | string | trim | regex_replace('/+$', '') }}"
+    _snow_template: "{{ snow_standard_change_template_id | default('') | string | trim }}"
+
+- name: Remember the normalized instance and template
+  ansible.builtin.set_fact:
+    snow_standard_change_instance: "{{ snow_instance_url | default('') | string | trim | regex_replace('/+$', '') }}"
+    snow_standard_change_template: "{{ snow_standard_change_template_id | default('') | string | trim }}"
+  changed_when: false
+
+- name: Record that creation was not confirmed
+  when: not (snow_confirm_create | default(false) | bool)
+  ansible.builtin.set_fact:
+    snow_standard_change_preflight: not_confirmed
+  changed_when: false
+
+- name: Reject an empty body until the payload contract is confirmed
+  when:
+    - snow_confirm_create | default(false) | bool
+    - (snow_change_payload | length) == 0
+  ansible.builtin.fail:
+    msg: >-
+      snow_change_payload is empty. An empty body is not sent until the
+      Standard Change request contract is confirmed.
+      No ServiceNow request was sent.
+
+- name: Record that check mode must not create a change
+  when:
+    - snow_confirm_create | default(false) | bool
+    - ansible_check_mode | bool
+    - (snow_change_payload | length) > 0
+  ansible.builtin.set_fact:
+    snow_standard_change_preflight: check_mode
+  changed_when: false
+
+- name: Record that the request may be sent
+  when:
+    - snow_confirm_create | default(false) | bool
+    - not (ansible_check_mode | bool)
+    - (snow_change_payload | length) > 0
+  ansible.builtin.set_fact:
+    snow_standard_change_preflight: proceed
+  changed_when: false
