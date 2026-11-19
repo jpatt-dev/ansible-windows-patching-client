@@ -88,7 +88,9 @@
           - snow_standard_change_summary.change_number == 'CHG0002022'
           - snow_standard_change_summary.sys_id == 'cccccccccccccccccccccccccccccccc'
           - "'UNCONFIRMED' in standard_change_error"
-          - "'Inspect ServiceNow before trying again' in standard_change_error"
+          - >-
+            'A Standard Change may already exist. Do not relaunch this job until ServiceNow has been checked for the record.'
+            in standard_change_error
           - "'The POST was not retried' in standard_change_error"
           - "'SUCCEEDED' not in standard_change_error"
           - "'No ServiceNow request was sent' not in standard_change_error"
@@ -127,7 +129,9 @@
           - snow_standard_change_summary.change_number == 'NOT RETURNED'
           - snow_standard_change_summary.sys_id == 'dddddddddddddddddddddddddddddddd'
           - "'SUCCEEDED' not in standard_change_error"
-          - "'Inspect ServiceNow before trying again' in standard_change_error"
+          - >-
+            'A Standard Change may already exist. Do not relaunch this job until ServiceNow has been checked for the record.'
+            in standard_change_error
         fail_msg: "A missing CHG number was confirmed. error={{ standard_change_error | default('') }}"
 
 - name: HTTP 201 without a sys_id is unconfirmed
@@ -218,11 +222,44 @@
           - snow_standard_change_summary.sys_id == 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
           - "'SECRET-ERROR-BODY' not in standard_change_error"
           - "'SUCCEEDED' not in standard_change_error"
-          - "'Inspect ServiceNow before trying again' in standard_change_error"
+          - >-
+            'A Standard Change may already exist. Do not relaunch this job until ServiceNow has been checked for the record.'
+            in standard_change_error
         fail_msg: "API error indicator was confirmed or printed. error={{ standard_change_error | default('') }}"
 
-- name: Invalid template identifiers are rejected before a POST
+- name: Prepare isolated local hosts for preflight cases
   hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add one fresh host for each preflight case
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        ansible_connection: local
+      loop:
+        - std_invalid
+        - std_confirm
+        - std_empty
+        - std_missing
+        - std_mismatch
+        - std_match
+
+    - name: Add one fresh host for each internal variable
+      ansible.builtin.add_host:
+        name: "std_override_{{ item }}"
+        groups: std_override
+        ansible_connection: local
+        std_internal_name: "{{ item }}"
+      loop:
+        - snow_standard_change_instance
+        - snow_standard_change_template
+        - snow_standard_change_preflight
+        - snow_credential_ready
+        - snow_standard_change_response
+        - snow_standard_change_summary
+
+- name: Invalid template identifiers are rejected before a POST
+  hosts: std_invalid
   connection: local
   gather_facts: false
   vars:
@@ -244,7 +281,7 @@
         label: "{{ item }}"
 
 - name: Creation stays off when snow_confirm_create is false
-  hosts: localhost
+  hosts: std_confirm
   connection: local
   gather_facts: false
   vars:
@@ -265,7 +302,7 @@
         fail_msg: "snow_confirm_create false did not stop before POST."
 
 - name: An empty payload is not sent when creation is confirmed
-  hosts: localhost
+  hosts: std_empty
   connection: local
   gather_facts: false
   vars:
@@ -275,10 +312,6 @@
     snow_confirm_create: true
     snow_change_payload: {}
   tasks:
-    - name: Mark any earlier preflight result
-      ansible.builtin.set_fact:
-        snow_standard_change_preflight: stale
-
     - name: Run preflight with an empty payload
       block:
         - name: Include empty-payload preflight
@@ -295,7 +328,7 @@
           - standard_change_rejected | bool
           - "'snow_change_payload is empty' in standard_change_error"
           - "'No ServiceNow request was sent' in standard_change_error"
-          - snow_standard_change_preflight == 'stale'
+          - snow_standard_change_preflight is not defined
         fail_msg: "Empty payload was accepted. error={{ standard_change_error | default('') }}"
 
 - name: HTTP failure or timeout stays unconfirmed without another POST
@@ -331,7 +364,9 @@
           - snow_standard_change_summary.change_number == 'CHG0002500'
           - snow_standard_change_summary.sys_id == 'ffffffffffffffffffffffffffffffff'
           - "'The POST was not retried' in standard_change_error"
-          - "'Inspect ServiceNow before trying again' in standard_change_error"
+          - >-
+            'A Standard Change may already exist. Do not relaunch this job until ServiceNow has been checked for the record.'
+            in standard_change_error
           - "'SUCCEEDED' not in standard_change_error"
           - "'no Change was created' not in standard_change_error"
           - "'No ServiceNow request was sent' not in standard_change_error"
@@ -370,3 +405,134 @@
       vars:
         standard_change_text: "{{ standard_change_playbook.content | b64decode }}"
         classifier_text: "{{ standard_change_classifier.content | b64decode }}"
+
+- name: Caller-supplied internal variables are rejected before POST
+  hosts: std_override
+  connection: local
+  gather_facts: false
+  vars:
+    snow_instance_url: https://nonproduction.example.invalid
+    snow_nonproduction_instance_url: https://nonproduction.example.invalid
+    snow_standard_change_template_id: STDCHG0001
+    snow_confirm_create: true
+    snow_change_payload:
+      short_description: offline
+  tasks:
+    - name: Reject the supplied internal variable
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/preflight_internal_override_case.yml"
+
+- name: A missing SN_HOST fails before POST
+  hosts: std_missing
+  connection: local
+  gather_facts: false
+  vars:
+    snow_instance_url: https://nonproduction.example.invalid
+    snow_nonproduction_instance_url: https://nonproduction.example.invalid
+    snow_standard_change_template_id: STDCHG0001
+    snow_confirm_create: true
+    snow_change_payload:
+      short_description: offline
+  tasks:
+    - name: Skip when a dedicated credential case supplies SN_HOST
+      when: lookup('ansible.builtin.env', 'STD_CHANGE_CREDENTIAL_CASE') | default('') | length > 0
+      ansible.builtin.meta: end_play
+
+    - name: Reset the missing SN_HOST result
+      ansible.builtin.set_fact:
+        standard_change_rejected: false
+        standard_change_error: ""
+
+    - name: Pass preflight with creation confirmed
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/standard_change_preflight.yml"
+
+    - name: Check the credential with SN_HOST unset
+      block:
+        - name: Include the credential check
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/standard_change_credential.yml"
+      rescue:
+        - name: Record the missing SN_HOST failure
+          ansible.builtin.set_fact:
+            standard_change_rejected: true
+            standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Confirm a missing SN_HOST sends no request
+      ansible.builtin.assert:
+        that:
+          - standard_change_rejected | bool
+          - snow_credential_failure == 'missing_host'
+          - "'missing_host' in standard_change_error"
+          - "'No ServiceNow request was sent' in standard_change_error"
+          - snow_standard_change_preflight == 'proceed'
+          - snow_standard_change_response is not defined
+        fail_msg: "Missing SN_HOST was accepted. error={{ standard_change_error | default('') }}"
+
+- name: A mismatched SN_HOST fails before POST
+  hosts: std_mismatch
+  connection: local
+  gather_facts: false
+  vars:
+    snow_instance_url: https://nonproduction.example.invalid
+    snow_nonproduction_instance_url: https://nonproduction.example.invalid
+    snow_standard_change_template_id: STDCHG0001
+    snow_confirm_create: true
+    snow_change_payload:
+      short_description: offline
+  tasks:
+    - name: Skip unless the mismatch credential case was requested
+      when: lookup('ansible.builtin.env', 'STD_CHANGE_CREDENTIAL_CASE') | default('') != 'mismatch'
+      ansible.builtin.meta: end_play
+
+    - name: Pass preflight with creation confirmed
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/standard_change_preflight.yml"
+
+    - name: Check the credential against a different SN_HOST
+      block:
+        - name: Include the credential check
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/standard_change_credential.yml"
+      rescue:
+        - name: Record the mismatched SN_HOST failure
+          ansible.builtin.set_fact:
+            standard_change_rejected: true
+            standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Confirm a mismatched SN_HOST sends no request
+      ansible.builtin.assert:
+        that:
+          - standard_change_rejected | bool
+          - snow_credential_failure == 'host_mismatch'
+          - "'host_mismatch' in standard_change_error"
+          - "'offline-password' not in standard_change_error"
+          - "'No ServiceNow request was sent' in standard_change_error"
+          - snow_standard_change_response is not defined
+        fail_msg: "Mismatched SN_HOST was accepted. error={{ standard_change_error | default('') }}"
+
+- name: Matching credentials reach the creation gate without a POST
+  hosts: std_match
+  connection: local
+  gather_facts: false
+  vars:
+    snow_instance_url: https://nonproduction.example.invalid
+    snow_nonproduction_instance_url: https://nonproduction.example.invalid
+    snow_standard_change_template_id: STDCHG0001
+    snow_confirm_create: true
+    snow_change_payload:
+      short_description: offline
+  tasks:
+    - name: Skip unless the matching credential case was requested
+      when: lookup('ansible.builtin.env', 'STD_CHANGE_CREDENTIAL_CASE') | default('') != 'match'
+      ansible.builtin.meta: end_play
+
+    - name: Pass preflight with creation confirmed
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/standard_change_preflight.yml"
+
+    - name: Include the credential check
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/standard_change_credential.yml"
+
+    - name: Confirm the credential check passed and no request was sent
+      ansible.builtin.assert:
+        that:
+          - snow_credential_ready | bool
+          - snow_standard_change_preflight == 'proceed'
+          - snow_standard_change_instance == 'https://nonproduction.example.invalid'
+          - snow_standard_change_response is not defined
+        fail_msg: Matching credentials did not reach the creation gate.

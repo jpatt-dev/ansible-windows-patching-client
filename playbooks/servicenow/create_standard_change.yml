@@ -63,27 +63,8 @@
       when: snow_standard_change_preflight != 'proceed'
       ansible.builtin.meta: end_play
 
-    - name: Check the existing ServiceNow credential without logging it
-      ansible.builtin.set_fact:
-        snow_credential_ready: >-
-          {{
-            (_snow_username | length) > 0
-            and (_snow_password | length) > 0
-            and ((_snow_host | length) == 0 or _snow_host == snow_standard_change_instance)
-          }}
-      no_log: true
-      vars:
-        _snow_username: "{{ lookup('ansible.builtin.env', 'SN_USERNAME') | trim }}"
-        _snow_password: "{{ lookup('ansible.builtin.env', 'SN_PASSWORD') | trim }}"
-        _snow_host: "{{ lookup('ansible.builtin.env', 'SN_HOST') | trim | regex_replace('/+$', '') }}"
-
-    - name: Require the existing ServiceNow credential before the POST
-      when: not (snow_credential_ready | bool)
-      ansible.builtin.fail:
-        msg: >-
-          The AAP credential must supply SN_USERNAME and SN_PASSWORD.
-          When SN_HOST is set, it must match snow_instance_url.
-          No ServiceNow request was sent.
+    - name: Check the ServiceNow credential against the validated instance
+      ansible.builtin.include_tasks: tasks/standard_change_credential.yml
 
     - name: POST one Standard Change
       block:

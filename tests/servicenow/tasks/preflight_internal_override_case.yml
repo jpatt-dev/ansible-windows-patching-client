@@ -1,0 +1,25 @@
+---
+- name: Reset the internal-variable result
+  ansible.builtin.set_fact:
+    standard_change_rejected: false
+    standard_change_error: ""
+    "{{ std_internal_name }}": supplied-internal
+
+- name: Reject the supplied internal variable
+  block:
+    - name: Include preflight with one internal variable set
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/standard_change_preflight.yml"
+  rescue:
+    - name: Record the internal-variable rejection
+      ansible.builtin.set_fact:
+        standard_change_rejected: true
+        standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
+
+- name: Confirm the internal variable was rejected before POST
+  ansible.builtin.assert:
+    that:
+      - standard_change_rejected | bool
+      - ('(' ~ std_internal_name ~ ')') in standard_change_error
+      - "'No ServiceNow request was sent' in standard_change_error"
+      - "'must not contain a path' not in standard_change_error"
+    fail_msg: "Internal variable {{ std_internal_name }} was accepted. error={{ standard_change_error | default('') }}"

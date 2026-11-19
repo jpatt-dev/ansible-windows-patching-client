@@ -248,9 +248,10 @@ Required extra variables:
 | `snow_change_payload` | JSON object sent as the body. `{}` until the required fields are confirmed. |
 | `snow_confirm_create` | Default `false`. `true` sends one POST. |
 
-Authentication is the existing AAP custom credential: `SN_USERNAME` and
-`SN_PASSWORD`. When `SN_HOST` is set, it must match `snow_instance_url`.
-This playbook does not read the password from a playbook variable.
+Authentication is the existing AAP custom credential: `SN_HOST`,
+`SN_USERNAME`, and `SN_PASSWORD`. `SN_HOST` must be nonempty and must
+exactly match `snow_instance_url`. This playbook does not read the
+password from a playbook variable.
 
 Local syntax check, with no POST:
 
@@ -268,8 +269,9 @@ ansible-playbook playbooks/servicenow/create_standard_change.yml \
 In AAP, use inventory `localhost`, that credential, and the same extra vars.
 Set `snow_confirm_create` to `true` only for one intended nonproduction test.
 Check mode does not send the POST. The task has no retries. The response
-body is not displayed. An unconfirmed result tells the operator to inspect
-ServiceNow before trying again. It does not say that no Change was created.
+body is not displayed. An unconfirmed result says a Standard Change may
+already exist and must be checked in ServiceNow before the job is relaunched.
+It does not say that no Change was created.
 
 After a success summary, open the change number in the nonproduction
 ServiceNow instance and confirm the template, state, and fields. Do not

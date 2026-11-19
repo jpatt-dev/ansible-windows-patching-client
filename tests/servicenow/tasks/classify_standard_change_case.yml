@@ -3,6 +3,12 @@
   ansible.builtin.set_fact:
     standard_change_unconfirmed: false
     standard_change_error: ""
+    snow_standard_change_summary:
+      outcome: stale
+      reason: stale
+      http_status: stale
+      change_number: stale
+      sys_id: stale
 
 - name: Classify one malformed Standard Change response
   block:
@@ -25,6 +31,9 @@
       - snow_standard_change_summary.change_number == 'NOT RETURNED'
       - snow_standard_change_summary.sys_id == 'NOT RETURNED'
       - "'SUCCEEDED' not in standard_change_error"
-      - "'Inspect ServiceNow before trying again' in standard_change_error"
+      - >-
+        'A Standard Change may already exist. Do not relaunch this job until ServiceNow has been checked for the record.'
+        in standard_change_error
+      - snow_standard_change_summary.reason != 'stale'
       - "'not-json' not in standard_change_error"
     fail_msg: "Malformed JSON was confirmed. error={{ standard_change_error | default('') }}"

@@ -100,5 +100,7 @@
       HTTP status: {{ snow_standard_change_summary.http_status }}.
       Change number: {{ snow_standard_change_summary.change_number }}.
       sys_id: {{ snow_standard_change_summary.sys_id }}.
-      The POST was not retried. Inspect ServiceNow before trying again.
+      The POST was not retried.
+      A Standard Change may already exist. Do not relaunch this job until
+      ServiceNow has been checked for the record.
       This result does not confirm that a Standard Change was created.

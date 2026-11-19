@@ -1,6 +1,29 @@
 ---
 # Input checks for the standalone Standard Change POST.
 # This file does not call ServiceNow.
+# Extra vars outrank set_fact, so a supplied internal name is rejected
+# before any of those names are used.
+
+- name: Reject caller-supplied internal Standard Change variables
+  when: _snow_internal_supplied | length > 0
+  ansible.builtin.fail:
+    msg: >-
+      Internal Standard Change variables were supplied
+      ({{ _snow_internal_supplied | join(', ') }}).
+      They are not operator inputs.
+      No ServiceNow request was sent.
+  vars:
+    _snow_internal_supplied: >-
+      {{
+        [
+          'snow_standard_change_instance' if (snow_standard_change_instance is defined) else '',
+          'snow_standard_change_template' if (snow_standard_change_template is defined) else '',
+          'snow_standard_change_preflight' if (snow_standard_change_preflight is defined) else '',
+          'snow_credential_ready' if (snow_credential_ready is defined) else '',
+          'snow_standard_change_response' if (snow_standard_change_response is defined) else '',
+          'snow_standard_change_summary' if (snow_standard_change_summary is defined) else ''
+        ] | reject('equalto', '') | list
+      }}
 
 - name: Validate the Standard Change request before any POST
   ansible.builtin.assert:
