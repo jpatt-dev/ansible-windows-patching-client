@@ -1,7 +1,10 @@
 ---
 # Classify one canned or live Standard Change response.
-# Confirmed requires HTTP 200 or 201, a CHG number, a 32-character
-# sys_id, and no top-level error indicator. This file does not send HTTP.
+# A uri-shaped response is confirmed only for HTTP 200 or 201.
+# A servicenow.itsm.api record is confirmed only when the module returned
+# it, which that collection does after HTTP 200 or 201, and the record has
+# a CHG number and a 32-character sys_id. The module does not return the
+# status code. This file does not send HTTP.
 
 - name: Classify the Standard Change response
   ansible.builtin.set_fact:
@@ -42,6 +45,20 @@
       {% else %}
       {% set ns.record = resp.json %}
       {% endif %}
+      {% elif resp.record is defined and resp.record is mapping %}
+      {% set ns.usable = true %}
+      {% set ns.record = resp.record %}
+      {% elif (
+        resp.record is defined
+        and resp.record is not string
+        and resp.record is sequence
+        and (resp.record | length) == 1
+        and (resp.record | first) is mapping
+      ) %}
+      {% set ns.usable = true %}
+      {% set ns.record = resp.record | first %}
+      {% elif resp.record is defined %}
+      {% set ns.usable = false %}
       {% endif %}
       {% if ns.record.number is defined and ns.record.number is string %}
       {% set ns.number = ns.record.number | trim %}
@@ -63,12 +80,23 @@
       {% endif %}
       {% if resp is mapping and not (resp.failed | default(false) | bool) and ns.usable %}
       {% if (
-        resp.json.error is defined
-        or ((resp.json.status | default('') | string | lower) in ['failure', 'error', 'failed'])
+        (resp.json is defined and resp.json is mapping and resp.json.error is defined)
+        or (ns.record.error is defined)
+        or ((resp.json.status | default('') | string | lower) in ['failure', 'error', 'failed'] if (resp.json is defined and resp.json is mapping) else false)
+        or ((ns.record.status | default('') | string | lower) in ['failure', 'error', 'failed'])
       ) %}
       {% set ns.reason = 'api_error' %}
       {% elif ns.status == '202' %}
       {% set ns.reason = 'http_202' %}
+      {% elif ns.status == 'NOT RETURNED' %}
+      {% if (ns.number | length) == 0 %}
+      {% set ns.reason = 'missing_change_number' %}
+      {% elif (ns.sys_id | length) == 0 %}
+      {% set ns.reason = 'missing_sys_id' %}
+      {% else %}
+      {% set ns.outcome = 'confirmed' %}
+      {% set ns.reason = 'confirmed' %}
+      {% endif %}
       {% elif ns.status not in ['200', '201'] %}
       {% set ns.reason = 'unexpected_status' %}
       {% elif (ns.number | length) == 0 %}

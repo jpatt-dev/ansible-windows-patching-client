@@ -390,7 +390,13 @@
     - name: Confirm there is one POST and no retry or read-back
       ansible.builtin.assert:
         that:
-          - "(standard_change_text | regex_findall('method: POST') | length) == 1"
+          - "(standard_change_text | regex_findall('action: post') | length) == 1"
+          - "(standard_change_text | regex_findall('method: POST') | length) == 0"
+          - "'servicenow.itsm.api' in standard_change_text"
+          - "'url_username' not in standard_change_text"
+          - "'url_password' not in standard_change_text"
+          - "\"lookup('ansible.builtin.env', 'SN_USERNAME')\" not in standard_change_text"
+          - "\"lookup('ansible.builtin.env', 'SN_PASSWORD')\" not in standard_change_text"
           - "'retries:' not in standard_change_text"
           - "'until:' not in standard_change_text"
           - "(standard_change_text | regex_findall('change_request_info') | length) == 1"
@@ -535,4 +541,58 @@
           - snow_standard_change_preflight == 'proceed'
           - snow_standard_change_instance == 'https://nonproduction.example.invalid'
           - snow_standard_change_response is not defined
-        fail_msg: Matching credentials did not reach the creation gate.
+          - (lookup('ansible.builtin.env', 'SN_USERNAME') | default('') | length) == 0
+          - (lookup('ansible.builtin.env', 'SN_PASSWORD') | default('') | length) == 0
+        fail_msg: Matching SN_HOST did not reach the creation gate without a username lookup.
+
+- name: Module records and sanitized failures stay fail-closed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_module_cases:
+      - label: module success
+        expect_outcome: confirmed
+        expect_reason: confirmed
+        response:
+          record:
+            number: CHG0003001
+            sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      - label: module list record
+        expect_outcome: confirmed
+        expect_reason: confirmed
+        response:
+          record:
+            - number:
+                display_value: CHG0003002
+              sys_id:
+                value: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      - label: module missing number
+        expect_outcome: unconfirmed
+        expect_reason: missing_change_number
+        response:
+          record:
+            sys_id: cccccccccccccccccccccccccccccccc
+      - label: module malformed record
+        expect_outcome: unconfirmed
+        expect_reason: malformed_json
+        response:
+          record: not-a-record
+      - label: authentication failure
+        expect_outcome: unconfirmed
+        expect_reason: authentication rejected
+        module_error: "Failed to authenticate with the instance: 401 Unauthorized SECRET-BODY"
+      - label: permission failure
+        expect_outcome: unconfirmed
+        expect_reason: permission denied
+        module_error: 'Unexpected response - 403 {"message":"SECRET-BODY"}'
+      - label: module HTTP 202
+        expect_outcome: unconfirmed
+        expect_reason: http_202
+        module_error: 'Unexpected response - 202 {"result":{"number":"CHG0003202"}} SECRET-BODY'
+  tasks:
+    - name: Classify each module response without calling ServiceNow
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/module_response_case.yml"
+      loop: "{{ snow_module_cases }}"
+      loop_control:
+        label: "{{ item.label }}"

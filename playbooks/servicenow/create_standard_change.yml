@@ -8,11 +8,19 @@
 # version sys_id. The body is snow_change_payload. Required fields are not
 # filled in here because the client has not confirmed that contract.
 #
-# A confirmed result requires HTTP 200 or 201, a number matching
-# ^CHG[0-9]+$, a 32-character hexadecimal sys_id, and no top-level error
-# indicator. HTTP 202, a missing identifier, malformed JSON, and a failed
-# or timed-out POST stay unconfirmed. This playbook does not send a second
-# request and does not claim that no Change was created.
+# Authentication matches the working Incident Import Set path.
+# servicenow.itsm 2.6.3 reads SN_USERNAME and SN_PASSWORD from the module
+# environment. This playbook does not pass those lookups to the task.
+# SN_HOST must be visible and must match the validated instance. The POST
+# host is that validated instance, not an unbound credential URL.
+#
+# servicenow.itsm.api action post returns record, which is the JSON result
+# member, only after HTTP 200 or 201. It does not return the HTTP status.
+# HTTP 202 raises an error and stays unconfirmed. A module success still
+# requires a number matching ^CHG[0-9]+$ and a 32-character hexadecimal
+# sys_id. This playbook does not send a second request and does not claim
+# that no Change was created. In check mode the collection would return the
+# request payload as record, so this play ends before the module.
 #
 # Read-back is not implemented. servicenow.itsm.change_request_info can
 # later query by number or sys_id, but only after the client confirms which
@@ -68,70 +76,25 @@
 
     - name: POST one Standard Change
       block:
-        - name: Send the Standard Change creation request
-          ansible.builtin.uri:
-            url: "{{ snow_standard_change_instance }}/api/sn_chg_rest/change/standard/{{ snow_standard_change_template }}"
-            method: POST
-            url_username: "{{ lookup('ansible.builtin.env', 'SN_USERNAME') | trim }}"
-            url_password: "{{ lookup('ansible.builtin.env', 'SN_PASSWORD') }}"
-            force_basic_auth: true
-            use_netrc: false
-            validate_certs: true
-            timeout: 60
-            body_format: json
-            body: "{{ snow_change_payload }}"
-            status_code:
-              - 200
-              - 201
-              - 202
-            headers:
-              Accept: application/json
-              Content-Type: application/json
+        # Username and password come from the credential environment.
+        # args[module] does not see that env fallback.
+        - name: Send the Standard Change creation request  # noqa: args[module]
+          servicenow.itsm.api:
+            instance:
+              host: "{{ snow_standard_change_instance }}"
+              validate_certs: true
+              timeout: 60
+            api_path: "api/sn_chg_rest/change/standard/{{ snow_standard_change_template }}"
+            action: post
+            data: "{{ snow_change_payload }}"
           register: snow_standard_change_response
           no_log: true
       rescue:
-        - name: Classify the creation failure without the response body
-          ansible.builtin.set_fact:
-            snow_standard_change_failure: "{{ _snow_failure }}"
+        - name: Sanitize the module failure
+          ansible.builtin.include_tasks: tasks/standard_change_module_failure.yml
           no_log: true
           vars:
-            _snow_msg: "{{ ansible_failed_result.msg | default('') | string }}"
-            _snow_status: "{{ ansible_failed_result.status | default('') | string }}"
-            _snow_failure: >-
-              {{
-                'authentication rejected'
-                if (_snow_status == '401')
-                else (
-                  'permission denied'
-                  if (_snow_status == '403')
-                  else (
-                    'certificate verification failed'
-                    if ('certificate' in (_snow_msg | lower))
-                    else (
-                      'connection failed'
-                      if (
-                        ('timed out' in (_snow_msg | lower))
-                        or ('connection' in (_snow_msg | lower))
-                        or ('name or service not known' in (_snow_msg | lower))
-                      )
-                      else (
-                        'unexpected HTTP status ' ~ _snow_status
-                        if (_snow_status | length) > 0
-                        else 'request failed'
-                      )
-                    )
-                  )
-                )
-              }}
-
-        - name: Keep a sanitized failed response for classification
-          ansible.builtin.set_fact:
-            snow_standard_change_response:
-              failed: true
-              status: "{{ ansible_failed_result.status | default('') }}"
-              failure_class: "{{ snow_standard_change_failure | default('request failed') }}"
-              json: "{{ ansible_failed_result.json if (ansible_failed_result.json is defined and ansible_failed_result.json is mapping) else {} }}"
-          no_log: true
+            snow_standard_change_module_error: "{{ ansible_failed_result.msg | default('') }}"
 
     - name: Classify the Standard Change response
       ansible.builtin.include_tasks: tasks/classify_standard_change_response.yml

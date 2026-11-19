@@ -234,9 +234,11 @@ Normal patch operations do not require Git changes.
 `/api/sn_chg_rest/change/standard/{template_id}`. It is not part of Full
 Patch, Precheck, incident creation, or change preparation. The client
 confirmed that endpoint. The request body and the response fields are not
-confirmed. A job is successful only when the response is HTTP 200 or 201,
-the number matches `CHG` plus digits, and the sys_id is 32 hexadecimal
-characters. Any other result is unconfirmed and is not retried.
+confirmed. The playbook uses `servicenow.itsm.api`, the same module as
+the working incident import. That module returns `record` only after HTTP
+200 or 201 and does not return the status code. A job is successful only
+when that record has a number matching `CHG` plus digits and a 32-character
+hexadecimal sys_id. Any other result is unconfirmed and is not retried.
 
 Required extra variables:
 
@@ -248,10 +250,13 @@ Required extra variables:
 | `snow_change_payload` | JSON object sent as the body. `{}` until the required fields are confirmed. |
 | `snow_confirm_create` | Default `false`. `true` sends one POST. |
 
-Authentication is the existing AAP custom credential: `SN_HOST`,
-`SN_USERNAME`, and `SN_PASSWORD`. `SN_HOST` must be nonempty and must
-exactly match `snow_instance_url`. This playbook does not read the
-password from a playbook variable.
+Authentication is the existing AAP custom credential. `SN_HOST` must be
+visible to the play and must exactly match `snow_instance_url`. The POST
+is sent only to that validated instance. `servicenow.itsm` reads
+`SN_USERNAME` and `SN_PASSWORD` from the module environment. This playbook
+does not pre-check those two names with `lookup('env')` and does not read
+the password from a playbook variable. An empty lookup does not prove the
+credential is missing.
 
 Local syntax check, with no POST:
 

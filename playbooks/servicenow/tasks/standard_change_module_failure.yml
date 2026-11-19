@@ -1,0 +1,51 @@
+---
+# Turn one servicenow.itsm.api failure into a sanitized response.
+# The module message can contain the response body. This file does not
+# display that message and does not send another request.
+
+- name: Classify the module failure without the response body
+  ansible.builtin.set_fact:
+    snow_standard_change_response:
+      failed: true
+      status: "{{ _snow_status }}"
+      failure_class: "{{ _snow_failure }}"
+      json: {}
+  no_log: true
+  vars:
+    _snow_msg: "{{ snow_standard_change_module_error | default('') | string }}"
+    _snow_status_text: >-
+      {{
+        _snow_msg | regex_search('Unexpected response - [0-9]{3}')
+        | default('', true)
+      }}
+    _snow_status: "{{ _snow_status_text | regex_search('[0-9]{3}$') | default('', true) }}"
+    _snow_failure: >-
+      {{
+        'authentication rejected'
+        if ('Failed to authenticate' in _snow_msg)
+        else (
+          'permission denied'
+          if (_snow_status == '403')
+          else (
+            'http_202'
+            if (_snow_status == '202')
+            else (
+              'certificate verification failed'
+              if ('certificate' in (_snow_msg | lower))
+              else (
+                'connection failed'
+                if (
+                  ('timed out' in (_snow_msg | lower))
+                  or ('connection' in (_snow_msg | lower))
+                  or ('name or service not known' in (_snow_msg | lower))
+                )
+                else (
+                  'unexpected HTTP status ' ~ _snow_status
+                  if (_snow_status | length) > 0
+                  else 'request failed'
+                )
+              )
+            )
+          )
+        )
+      }}

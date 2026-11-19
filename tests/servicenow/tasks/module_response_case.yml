@@ -1,0 +1,44 @@
+---
+- name: Reset the module-response result
+  ansible.builtin.set_fact:
+    standard_change_unconfirmed: false
+    standard_change_error: ""
+    snow_standard_change_summary:
+      outcome: stale
+      reason: stale
+      http_status: stale
+      change_number: stale
+      sys_id: stale
+
+- name: Sanitize a module error before classification
+  when: item.module_error is defined
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/standard_change_module_failure.yml"
+  no_log: true
+  vars:
+    snow_standard_change_module_error: "{{ item.module_error }}"
+
+- name: Use an injected module response
+  when: item.module_error is not defined
+  ansible.builtin.set_fact:
+    snow_standard_change_response: "{{ item.response }}"
+
+- name: Classify the injected response
+  block:
+    - name: Include the response classifier
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/classify_standard_change_response.yml"
+  rescue:
+    - name: Record the unconfirmed result
+      ansible.builtin.set_fact:
+        standard_change_unconfirmed: true
+        standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
+
+- name: Confirm the injected response was classified without the body
+  ansible.builtin.assert:
+    that:
+      - snow_standard_change_summary.outcome == item.expect_outcome
+      - snow_standard_change_summary.reason == item.expect_reason
+      - snow_standard_change_summary.reason != 'stale'
+      - "'SECRET-BODY' not in standard_change_error"
+      - "'SECRET-BODY' not in (snow_standard_change_summary | to_json)"
+      - item.expect_outcome == 'confirmed' or standard_change_unconfirmed | bool
+    fail_msg: "{{ item.label }} was classified incorrectly. error={{ standard_change_error | default('') }}"
