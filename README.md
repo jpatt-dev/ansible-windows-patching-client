@@ -270,8 +270,10 @@ Template variable cannot replace it. A job that supplies
 diagnostics. A job that supplies `_snow_*` or another internal result
 name is rejected before any request. The extra output is an allowlisted
 category and, when the HTTP 400 body names an approved change field in a
-validation phrase, one error code and one field name. An unreadable body
-is reported as `body_not_parsed` and is not displayed.
+validation phrase, one error code and one field name. A body that cannot
+be classified is reported as `empty_response_body`, `non_json_response`,
+`json_decode_failed`, `json_unrecognized_structure`, or
+`response_too_large`. The body itself is not displayed.
 
 Local syntax check, with no POST:
 

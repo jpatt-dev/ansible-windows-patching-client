@@ -12,6 +12,7 @@
       diagnostic_category: ""
       diagnostic_code: ""
       diagnostic_field: ""
+      diagnostic_keys: ""
 
 - name: Sanitize the canned module error
   ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/standard_change_module_failure.yml"
@@ -37,6 +38,13 @@
       - snow_standard_change_summary.diagnostic_category == item.expect_category
       - snow_standard_change_summary.diagnostic_field == item.expect_field
       - snow_standard_change_summary.diagnostic_code == item.expect_code
+      - snow_standard_change_summary.diagnostic_keys == (item.expect_keys | default(''))
+      - >-
+        (item.expect_keys | default('') | length) == 0
+        or ('Keys: ' ~ item.expect_keys ~ '.') in standard_change_error
+      - >-
+        (item.expect_keys | default('') | length) > 0
+        or ('Keys:' not in standard_change_error)
       - >-
         item.expect_category | length == 0
         or ('Diagnostic category: ' ~ item.expect_category) in standard_change_error
@@ -51,6 +59,6 @@
       - >-
         (item.expect_field | length) > 0
         or ('planned_start_date' not in standard_change_error)
-      - "'required role' not in standard_change_error"
+      - "'user_secret' not in standard_change_error"
       - "'The POST was not retried' in standard_change_error"
     fail_msg: "{{ item.label }} leaked or misclassified. error={{ standard_change_error | default('') }}"

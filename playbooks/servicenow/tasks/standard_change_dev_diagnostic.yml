@@ -15,7 +15,7 @@
 - name: Clear any earlier parsed error body
   ansible.builtin.set_fact:
     _snow_http_error_parsed: {}
-    _snow_body_unreadable: false
+    _snow_parse_class: ""
     _snow_dev_authorized: false
   no_log: true
 
@@ -52,13 +52,15 @@
   no_log: true
   vars:
     _snow_raw: "{{ snow_standard_change_module_error | default('') | string }}"
-    _snow_start: "{{ _snow_raw.find('{') }}"
-    _snow_end: "{{ _snow_raw.rfind('}') }}"
-    _snow_candidate: >-
+    _snow_tail: "{{ _snow_raw | regex_replace('^.*Unexpected response - [0-9]{3}', '') | trim }}"
+    _snow_inner: >-
       {{
-        _snow_raw[_snow_start | int:_snow_end | int + 1]
-        if ((_snow_start | int) >= 0 and (_snow_end | int) > (_snow_start | int))
-        else ''
+        (_snow_tail[2:-1] | trim)
+        if (
+          (_snow_tail | length) >= 3
+          and _snow_tail is match('^b[\'"].*[\'\"]$')
+        )
+        else (_snow_tail | trim)
       }}
     _snow_pair: "{{ '\\\\' ~ '\\\\' }}"
     _snow_apos: "{{ '\\\\' ~ \"'\" }}"
@@ -68,33 +70,56 @@
     _snow_one: "{{ '\\\\' }}"
     _snow_decoded: >-
       {{
-        _snow_candidate
+        _snow_inner
         | regex_replace(_snow_pair, _snow_marker)
         | regex_replace(_snow_apos, "'")
         | regex_replace(_snow_marker, _snow_one)
         | regex_replace(_snow_hex, _snow_hex_repl)
       }}
   block:
-    - name: Mark a body that is not a bounded JSON object
-      when: >-
-        (_snow_candidate | length) < 2
-        or (_snow_candidate | length) > 4000
+    - name: Record an empty HTTP 400 body
+      when: (_snow_inner | length) == 0
       ansible.builtin.set_fact:
-        _snow_body_unreadable: true
+        _snow_parse_class: empty_response_body
       no_log: true
 
-    - name: Read the JSON object embedded in the module error
+    - name: Record a body that does not start with JSON
       when:
-        - (_snow_candidate | length) > 1
-        - (_snow_candidate | length) <= 4000
+        - _snow_parse_class == ''
+        - >-
+          not (_snow_inner is match('^(\{|\[)'))
       ansible.builtin.set_fact:
-        _snow_http_error_parsed: "{{ _snow_decoded | from_json }}"
+        _snow_parse_class: non_json_response
       no_log: true
+
+    - name: Record a JSON body over the size limit
+      when:
+        - _snow_parse_class == ''
+        - (_snow_inner | length) > 4000
+      ansible.builtin.set_fact:
+        _snow_parse_class: response_too_large
+      no_log: true
+
+    - name: Read a bounded JSON object
+      when: _snow_parse_class == ''
+      no_log: true
+      block:
+        - name: Decode the JSON object embedded in the module error
+          ansible.builtin.set_fact:
+            _snow_http_error_parsed: "{{ _snow_decoded | from_json }}"
+            _snow_parse_class: parsed
+          no_log: true
+      rescue:
+        - name: Record a JSON body that did not decode
+          ansible.builtin.set_fact:
+            _snow_http_error_parsed: {}
+            _snow_parse_class: json_decode_failed
+          no_log: true
   rescue:
-    - name: Discard an HTTP 400 body that is not JSON
+    - name: Discard an HTTP 400 body that could not be classified
       ansible.builtin.set_fact:
         _snow_http_error_parsed: {}
-        _snow_body_unreadable: true
+        _snow_parse_class: json_decode_failed
       no_log: true
 
 - name: Keep only an allowlisted diagnostic
@@ -138,7 +163,16 @@
         'password', 'passwd', 'secret', 'token', 'authorization',
         'cookie', 'credential', 'username', 'bearer', 'session'
       ] %}
-      {% set ns = namespace(category='', code='', field='', show=false) %}
+      {% set key_allow = ['error', 'status', 'result', 'message', 'detail', 'reason'] %}
+      {% set key_ns = namespace(found=[]) %}
+      {% if parsed is mapping %}
+      {% for key in key_allow %}
+      {% if key in parsed %}
+      {% set key_ns.found = key_ns.found + [key] %}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+      {% set ns = namespace(category='', code='', field='', keys=[], show=false) %}
       {% if (not (_snow_opt_in | bool)) or (_snow_withhold | bool) %}
       {% elif not dev_https %}
       {% set ns.show = true %}
@@ -147,9 +181,9 @@
       {% set ns.show = true %}
       {% set ns.category = 'diagnostics_not_authorized' %}
       {% elif (_snow_status | trim) != '400' %}
-      {% elif (_snow_body_unreadable | default(false) | bool) %}
+      {% elif _snow_parse_class in ['empty_response_body', 'non_json_response', 'json_decode_failed', 'response_too_large'] %}
       {% set ns.show = true %}
-      {% set ns.category = 'body_not_parsed' %}
+      {% set ns.category = _snow_parse_class %}
       {% elif 'required role' in haystack or 'permission denied' in haystack or 'insufficient privilege' in haystack %}
       {% set ns.show = true %}
       {% set ns.category = 'unclassified' %}
@@ -162,12 +196,10 @@
       {% elif 'invalid' in haystack or 'data policy' in haystack %}
       {% set ns.show = true %}
       {% set ns.category = 'invalid_field' if (detail is string and (detail | length) > 0) else 'invalid_request_body' %}
-      {% elif (error | length) > 0 %}
-      {% set ns.show = true %}
-      {% set ns.category = 'unclassified' %}
       {% else %}
       {% set ns.show = true %}
-      {% set ns.category = 'body_not_parsed' %}
+      {% set ns.category = 'json_unrecognized_structure' %}
+      {% set ns.keys = key_ns.found %}
       {% endif %}
       {% if ns.show and message is match('^[A-Za-z0-9_]{1,40}$') %}
       {% set ns.code = message %}
@@ -216,6 +248,7 @@
           'show': ns.show,
           'category': ns.category,
           'error_code': ns.code,
-          'field': ns.field
+          'field': ns.field,
+          'top_keys': ns.keys
         } | to_json
       }}

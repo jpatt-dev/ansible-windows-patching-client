@@ -782,11 +782,49 @@
           b'{"error":{"message":"INVALID_TEMPLATE",
           "detail":"template not found SECRET"},
           "status":"failure"}'
-      - label: malformed body
-        expect_category: body_not_parsed
+      - label: empty response body
+        expect_category: empty_response_body
+        expect_field: ""
+        expect_code: ""
+        module_error: "Unexpected response - 400"
+      - label: empty bytes body
+        expect_category: empty_response_body
+        expect_field: ""
+        expect_code: ""
+        module_error: "Unexpected response - 400 b''"
+      - label: plain text body
+        expect_category: non_json_response
         expect_field: ""
         expect_code: ""
         module_error: "Unexpected response - 400 not-json SECRET Bearer"
+      - label: html body
+        expect_category: non_json_response
+        expect_field: ""
+        expect_code: ""
+        module_error: "Unexpected response - 400 b'<html>SECRET</html>'"
+      - label: json decode failed
+        expect_category: json_decode_failed
+        expect_field: ""
+        expect_code: ""
+        module_error: "Unexpected response - 400 b'{\"error\": SECRET}'"
+      - label: unrecognized json structure
+        expect_category: json_unrecognized_structure
+        expect_field: ""
+        expect_code: ""
+        expect_keys: status
+        module_error: "Unexpected response - 400 b'{\"status\":\"failure\",\"user_secret\":\"SECRET\"}'"
+      - label: response too large
+        expect_category: response_too_large
+        expect_field: ""
+        expect_code: ""
+        module_error: >-
+          {{
+            "Unexpected response - 400 b'"
+            ~ '{"pad":"'
+            ~ ('A' * 4100)
+            ~ 'SECRET"}'
+            ~ "'"
+          }}
       - label: authentication failure
         expect_category: ""
         expect_field: ""

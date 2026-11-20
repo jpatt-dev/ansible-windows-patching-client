@@ -23,7 +23,8 @@
         usable=false,
         category='',
         code='',
-        field=''
+        field='',
+        keys=[]
       ) %}
       {% if resp is mapping and (resp.status | default('') | string | length) > 0 %}
       {% set ns.status = resp.status | string %}
@@ -120,7 +121,11 @@
         'invalid_field',
         'invalid_request_body',
         'unclassified',
-        'body_not_parsed'
+        'empty_response_body',
+        'non_json_response',
+        'json_decode_failed',
+        'json_unrecognized_structure',
+        'response_too_large'
       ] %}
       {% set approved = [
         'planned_start_date', 'planned_end_date', 'work_start', 'work_end',
@@ -162,6 +167,14 @@
       ) %}
       {% set ns.field = diag.field | string %}
       {% endif %}
+      {% set key_allow = ['error', 'status', 'result', 'message', 'detail', 'reason'] %}
+      {% if ns.category == 'json_unrecognized_structure' and diag.top_keys is defined and diag.top_keys is sequence %}
+      {% for key in diag.top_keys %}
+      {% if key in key_allow and (key | string) is match('^[a-z_]{1,20}$') %}
+      {% set ns.keys = ns.keys + [key | string] %}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
       {{
         {
           'outcome': ns.outcome,
@@ -171,7 +184,8 @@
           'sys_id': ns.sys_id if (ns.sys_id | length) > 0 else 'NOT RETURNED',
           'diagnostic_category': ns.category,
           'diagnostic_code': ns.code,
-          'diagnostic_field': ns.field
+          'diagnostic_field': ns.field,
+          'diagnostic_keys': ns.keys | join(', ')
         } | to_json
       }}
   changed_when: false
@@ -198,6 +212,7 @@
     _snow_category: "{{ snow_standard_change_summary.diagnostic_category | default('') }}"
     _snow_code: "{{ snow_standard_change_summary.diagnostic_code | default('') }}"
     _snow_field: "{{ snow_standard_change_summary.diagnostic_field | default('') }}"
+    _snow_keys: "{{ snow_standard_change_summary.diagnostic_keys | default('') }}"
     _snow_diag_text: >-
       {{
         (
@@ -205,5 +220,6 @@
           + (['Diagnostic category: ' ~ _snow_category ~ '.'] if (_snow_category | length) > 0 else [])
           + (['Error code: ' ~ _snow_code ~ '.'] if (_snow_code | length) > 0 else [])
           + (['Field: ' ~ _snow_field ~ '.'] if (_snow_field | length) > 0 else [])
+          + (['Keys: ' ~ _snow_keys ~ '.'] if (_snow_keys | length) > 0 else [])
         ) | join(' ')
       }}
