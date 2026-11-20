@@ -1,0 +1,5 @@
+---
+# Offline fixture used only when the test playbook is the Ansible basedir.
+# The production playbook reads playbooks/servicenow/standard_change_dev_instance.yml
+# and does not read this file.
+snow_trusted_dev_instance_url: https://dev.example.invalid

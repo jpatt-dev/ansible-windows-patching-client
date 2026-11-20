@@ -1,32 +1,33 @@
 ---
 # Input checks for the standalone Standard Change POST.
 # This file does not call ServiceNow.
-# Extra vars outrank set_fact, so a supplied internal name is rejected
-# before any of those names are used.
+# Extra vars outrank task vars and set_fact. This first task therefore
+# has no vars of its own. It asks varnames which internal names already
+# exist, before this play creates any of them.
 
 - name: Reject caller-supplied internal Standard Change variables
-  when: _snow_internal_supplied | length > 0
+  when: >-
+    lookup(
+    'ansible.builtin.varnames',
+    '^_snow_.+$',
+    '^snow_standard_change_(instance|template|preflight|response|summary|diagnostic)$',
+    '^(snow_credential_ready|snow_credential_failure|snow_trusted_dev_instance_url)$',
+    wantlist=True
+    ) | length > 0
   ansible.builtin.fail:
     msg: >-
       Internal Standard Change variables were supplied
-      ({{ _snow_internal_supplied | join(', ') }}).
+      ({{
+        lookup(
+          'ansible.builtin.varnames',
+          '^_snow_.+$',
+          '^snow_standard_change_(instance|template|preflight|response|summary|diagnostic)$',
+          '^(snow_credential_ready|snow_credential_failure|snow_trusted_dev_instance_url)$',
+          wantlist=True
+        ) | sort | join(', ')
+      }}).
       They are not operator inputs.
       No ServiceNow request was sent.
-  vars:
-    _snow_internal_supplied: >-
-      {{
-        [
-          'snow_standard_change_instance' if (snow_standard_change_instance is defined) else '',
-          'snow_standard_change_template' if (snow_standard_change_template is defined) else '',
-          'snow_standard_change_preflight' if (snow_standard_change_preflight is defined) else '',
-          'snow_credential_ready' if (snow_credential_ready is defined) else '',
-          'snow_standard_change_response' if (snow_standard_change_response is defined) else '',
-          'snow_standard_change_summary' if (snow_standard_change_summary is defined) else '',
-          'snow_standard_change_diagnostic' if (snow_standard_change_diagnostic is defined) else '',
-          '_snow_http_error_parsed' if (_snow_http_error_parsed is defined) else '',
-          'snow_trusted_dev_instance_url' if (snow_trusted_dev_instance_url is defined) else ''
-        ] | reject('equalto', '') | list
-      }}
 
 - name: Validate the Standard Change request before any POST
   ansible.builtin.assert:

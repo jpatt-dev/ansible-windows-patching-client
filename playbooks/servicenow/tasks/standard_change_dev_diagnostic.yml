@@ -10,28 +10,45 @@
 # The path below is literal. Job Template extra variables cannot replace
 # it. The template reads that file itself, so a variable of the same name
 # cannot authorize diagnostics. Matching snow_instance_url values do not.
+# A missing identity file does not replace the sanitized failure message.
 
 - name: Clear any earlier parsed error body
   ansible.builtin.set_fact:
     _snow_http_error_parsed: {}
+    _snow_body_unreadable: false
+    _snow_dev_authorized: false
+  no_log: true
+
+- name: Record whether the Git-managed DEV file matches this instance
+  ansible.builtin.set_fact:
+    _snow_dev_authorized: >-
+      {{
+        (
+          lookup(
+            'ansible.builtin.file',
+            lookup(
+              'ansible.builtin.first_found',
+              [
+                'standard_change_dev_instance.yml',
+                '../../playbooks/servicenow/standard_change_dev_instance.yml'
+              ],
+              errors='ignore'
+            ) | default('__missing_dev_identity__', true),
+            errors='ignore'
+          ) | default('', true)
+        ) is search(
+          '(?m)^snow_trusted_dev_instance_url:[ \t]*'
+          ~ ((snow_standard_change_instance | default('')) | regex_escape)
+          ~ '[ \t]*$'
+        )
+      }}
   no_log: true
 
 - name: Parse an authorized HTTP 400 body without displaying it
   when:
     - snow_dev_error_diagnostics | default(false) | bool
+    - _snow_dev_authorized | bool
     - (_snow_status | trim) == '400'
-    - (_snow_candidate | length) > 1
-    - (_snow_candidate | length) <= 4000
-    - >-
-      (
-      lookup('ansible.builtin.file',
-      lookup('ansible.builtin.first_found', [
-      'standard_change_dev_instance.yml',
-      '../../playbooks/servicenow/standard_change_dev_instance.yml'
-      ]))
-      | from_yaml).snow_trusted_dev_instance_url
-      | default('') | string | trim | regex_replace('/+$', '')
-      == (snow_standard_change_instance | default('') | string)
   no_log: true
   vars:
     _snow_raw: "{{ snow_standard_change_module_error | default('') | string }}"
@@ -43,15 +60,41 @@
         if ((_snow_start | int) >= 0 and (_snow_end | int) > (_snow_start | int))
         else ''
       }}
+    _snow_pair: "{{ '\\\\' ~ '\\\\' }}"
+    _snow_apos: "{{ '\\\\' ~ \"'\" }}"
+    _snow_hex: "{{ '\\\\' ~ 'x([0-9a-fA-F]{2})' }}"
+    _snow_hex_repl: "{{ '\\\\' ~ 'u00\\1' }}"
+    _snow_marker: "\uE000"
+    _snow_one: "{{ '\\\\' }}"
+    _snow_decoded: >-
+      {{
+        _snow_candidate
+        | regex_replace(_snow_pair, _snow_marker)
+        | regex_replace(_snow_apos, "'")
+        | regex_replace(_snow_marker, _snow_one)
+        | regex_replace(_snow_hex, _snow_hex_repl)
+      }}
   block:
-    - name: Read the JSON object embedded in the module error
+    - name: Mark a body that is not a bounded JSON object
+      when: >-
+        (_snow_candidate | length) < 2
+        or (_snow_candidate | length) > 4000
       ansible.builtin.set_fact:
-        _snow_http_error_parsed: "{{ _snow_candidate | from_json }}"
+        _snow_body_unreadable: true
+      no_log: true
+
+    - name: Read the JSON object embedded in the module error
+      when:
+        - (_snow_candidate | length) > 1
+        - (_snow_candidate | length) <= 4000
+      ansible.builtin.set_fact:
+        _snow_http_error_parsed: "{{ _snow_decoded | from_json }}"
       no_log: true
   rescue:
     - name: Discard an HTTP 400 body that is not JSON
       ansible.builtin.set_fact:
         _snow_http_error_parsed: {}
+        _snow_body_unreadable: true
       no_log: true
 
 - name: Keep only an allowlisted diagnostic
@@ -67,8 +110,9 @@
         'standard_change_dev_instance.yml',
         '../../playbooks/servicenow/standard_change_dev_instance.yml'
       ] %}
-      {% set identity_file = lookup('ansible.builtin.first_found', identity_candidates) %}
-      {% set identity = lookup('ansible.builtin.file', identity_file) | from_yaml %}
+      {% set identity_file = lookup('ansible.builtin.first_found', identity_candidates, errors='ignore') | default('', true) %}
+      {% set identity_raw = lookup('ansible.builtin.file', identity_file, errors='ignore') if ((identity_file | string | length) > 0) else '' %}
+      {% set identity = (identity_raw | from_yaml) if ((identity_raw | string | length) > 0) else {} %}
       {% set dev_url = (
         identity.snow_trusted_dev_instance_url | default('')
         if (identity is mapping) else ''
@@ -103,6 +147,12 @@
       {% set ns.show = true %}
       {% set ns.category = 'diagnostics_not_authorized' %}
       {% elif (_snow_status | trim) != '400' %}
+      {% elif (_snow_body_unreadable | default(false) | bool) %}
+      {% set ns.show = true %}
+      {% set ns.category = 'body_not_parsed' %}
+      {% elif 'required role' in haystack or 'permission denied' in haystack or 'insufficient privilege' in haystack %}
+      {% set ns.show = true %}
+      {% set ns.category = 'unclassified' %}
       {% elif 'template' in haystack and ('not found' in haystack or 'invalid' in haystack or 'unknown' in haystack or 'rejected' in haystack) %}
       {% set ns.show = true %}
       {% set ns.category = 'template_rejected' %}
@@ -114,13 +164,20 @@
       {% set ns.category = 'invalid_field' if (detail is string and (detail | length) > 0) else 'invalid_request_body' %}
       {% elif (error | length) > 0 %}
       {% set ns.show = true %}
-      {% set ns.category = 'invalid_request_body' %}
+      {% set ns.category = 'unclassified' %}
       {% else %}
       {% set ns.show = true %}
-      {% set ns.category = 'unclassified' %}
+      {% set ns.category = 'body_not_parsed' %}
       {% endif %}
       {% if ns.show and message is match('^[A-Za-z0-9_]{1,40}$') %}
       {% set ns.code = message %}
+      {% endif %}
+      {% if (ns.code | length) > 0 %}
+      {% for word in blocked %}
+      {% if word in (ns.code | lower) %}
+      {% set ns.code = '' %}
+      {% endif %}
+      {% endfor %}
       {% endif %}
       {% if ns.category in ['missing_required_field', 'invalid_field'] and detail is string %}
       {% for token in detail | regex_findall('([a-z][a-z0-9_]{1,40}) is (?:mandatory|required|invalid|missing)') %}

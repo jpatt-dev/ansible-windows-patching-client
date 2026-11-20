@@ -51,5 +51,6 @@
       - >-
         (item.expect_field | length) > 0
         or ('planned_start_date' not in standard_change_error)
+      - "'required role' not in standard_change_error"
       - "'The POST was not retried' in standard_change_error"
     fail_msg: "{{ item.label }} leaked or misclassified. error={{ standard_change_error | default('') }}"

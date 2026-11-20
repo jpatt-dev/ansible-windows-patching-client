@@ -108,7 +108,12 @@
       ansible.builtin.debug:
         msg:
           - "Standard Change creation: SUCCEEDED"
-          - "HTTP status: {{ snow_standard_change_summary.http_status }}"
+          - >-
+            HTTP status: {{
+              'not exposed by the module'
+              if snow_standard_change_summary.http_status == 'NOT RETURNED'
+              else snow_standard_change_summary.http_status
+            }}
           - "Change number: {{ snow_standard_change_summary.change_number }}"
           - "sys_id: {{ snow_standard_change_summary.sys_id }}"
           - "No further request was sent. Confirm the record in ServiceNow before using it."

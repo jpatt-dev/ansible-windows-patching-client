@@ -267,9 +267,11 @@ response body stays hidden. The playbook reads that file directly, so a Job
 Template variable cannot replace it. A job that supplies
 `snow_trusted_dev_instance_url` is rejected before any request. Matching
 `snow_instance_url` and `snow_nonproduction_instance_url` does not authorize
-diagnostics. The extra output is an allowlisted category and, when the HTTP
-400 body names an approved change field in a validation phrase, one error
-code and one field name. The response body is not displayed.
+diagnostics. A job that supplies `_snow_*` or another internal result
+name is rejected before any request. The extra output is an allowlisted
+category and, when the HTTP 400 body names an approved change field in a
+validation phrase, one error code and one field name. An unreadable body
+is reported as `body_not_parsed` and is not displayed.
 
 Local syntax check, with no POST:
 

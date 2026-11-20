@@ -1,0 +1,21 @@
+---
+# One preflight run. Extra vars are supplied by the caller.
+# Reaching the debug task means an internal name was accepted.
+- name: Reject one caller-supplied internal variable before POST
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_instance_url: https://nonproduction.example.invalid
+    snow_nonproduction_instance_url: https://nonproduction.example.invalid
+    snow_standard_change_template_id: STDCHG0001
+    snow_confirm_create: true
+    snow_change_payload:
+      short_description: offline
+  tasks:
+    - name: Check the Standard Change request before any POST
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/standard_change_preflight.yml"
+
+    - name: Internal extra var was accepted
+      ansible.builtin.fail:
+        msg: Internal extra var was accepted. No ServiceNow request was sent.

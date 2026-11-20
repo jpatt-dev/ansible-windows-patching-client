@@ -119,7 +119,8 @@
         'missing_required_field',
         'invalid_field',
         'invalid_request_body',
-        'unclassified'
+        'unclassified',
+        'body_not_parsed'
       ] %}
       {% set approved = [
         'planned_start_date', 'planned_end_date', 'work_start', 'work_end',
@@ -140,11 +141,19 @@
       ) %}
       {% set ns.category = diag.category | string %}
       {% endif %}
+      {% set code_text = diag.error_code | default('') | string %}
+      {% set code_ns = namespace(secret=false) %}
+      {% for word in blocked %}
+      {% if word in (code_text | lower) %}
+      {% set code_ns.secret = true %}
+      {% endif %}
+      {% endfor %}
       {% if (
         (ns.category | length) > 0
-        and (diag.error_code | default('') | string) is match('^[A-Za-z0-9_]{1,40}$')
+        and code_text is match('^[A-Za-z0-9_]{1,40}$')
+        and not (code_ns.secret | bool)
       ) %}
-      {% set ns.code = diag.error_code | string %}
+      {% set ns.code = code_text %}
       {% endif %}
       {% if (
         (ns.category | length) > 0
@@ -173,7 +182,11 @@
     msg: >-
       Standard Change creation: UNCONFIRMED
       ({{ snow_standard_change_summary.reason }}).
-      HTTP status: {{ snow_standard_change_summary.http_status }}.
+      HTTP status: {{
+        'not exposed by the module'
+        if snow_standard_change_summary.http_status == 'NOT RETURNED'
+        else snow_standard_change_summary.http_status
+      }}.
       Change number: {{ snow_standard_change_summary.change_number }}.
       sys_id: {{ snow_standard_change_summary.sys_id }}.
       {{ _snow_diag_text }}

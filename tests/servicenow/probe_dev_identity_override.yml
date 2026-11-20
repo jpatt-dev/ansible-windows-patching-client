@@ -28,7 +28,7 @@
     - name: Confirm the Git file still fails closed
       ansible.builtin.assert:
         that:
-          - snow_standard_change_summary.diagnostic_category == 'diagnostics_not_configured'
+          - snow_standard_change_summary.diagnostic_category == 'diagnostics_not_authorized'
           - "'planned_start_date' not in standard_change_error"
           - "'SECRET' not in standard_change_error"
           - "'attacker.example.invalid' not in standard_change_error"
