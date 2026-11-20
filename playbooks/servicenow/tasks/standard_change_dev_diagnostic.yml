@@ -4,8 +4,12 @@
 # "Unexpected response - <status> <raw body>". On Python 3 the body is
 # the bytes from HTTPError.read(), so the text contains b'{...}'.
 # This file does not display that text and does not send a request.
-# SNOW_DEV_INSTANCE_URL is an administrator environment value. Matching
-# snow_instance_url values do not authorize diagnostics.
+#
+# The approved DEV URL is read from
+# playbooks/servicenow/standard_change_dev_instance.yml.
+# The path below is literal. Job Template extra variables cannot replace
+# it. The template reads that file itself, so a variable of the same name
+# cannot authorize diagnostics. Matching snow_instance_url values do not.
 
 - name: Clear any earlier parsed error body
   ansible.builtin.set_fact:
@@ -15,19 +19,21 @@
 - name: Parse an authorized HTTP 400 body without displaying it
   when:
     - snow_dev_error_diagnostics | default(false) | bool
-    - _snow_dev_authorized | bool
     - (_snow_status | trim) == '400'
     - (_snow_candidate | length) > 1
     - (_snow_candidate | length) <= 4000
+    - >-
+      (
+      lookup('ansible.builtin.file',
+      lookup('ansible.builtin.first_found', [
+      'standard_change_dev_instance.yml',
+      '../../playbooks/servicenow/standard_change_dev_instance.yml'
+      ]))
+      | from_yaml).snow_trusted_dev_instance_url
+      | default('') | string | trim | regex_replace('/+$', '')
+      == (snow_standard_change_instance | default('') | string)
   no_log: true
   vars:
-    _snow_dev_url: "{{ lookup('ansible.builtin.env', 'SNOW_DEV_INSTANCE_URL') | trim | regex_replace('/+$', '') }}"
-    _snow_dev_authorized: >-
-      {{
-        (_snow_dev_url | length) > 0
-        and _snow_dev_url is match('^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$')
-        and _snow_dev_url == (snow_standard_change_instance | default(''))
-      }}
     _snow_raw: "{{ snow_standard_change_module_error | default('') | string }}"
     _snow_start: "{{ _snow_raw.find('{') }}"
     _snow_end: "{{ _snow_raw.rfind('}') }}"
@@ -54,28 +60,35 @@
     _snow_http_error_parsed: {}
   no_log: true
   vars:
-    _snow_dev_url: "{{ lookup('ansible.builtin.env', 'SNOW_DEV_INSTANCE_URL') | trim | regex_replace('/+$', '') }}"
-    _snow_dev_authorized: >-
-      {{
-        (_snow_dev_url | length) > 0
-        and _snow_dev_url is match('^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$')
-        and _snow_dev_url == (snow_standard_change_instance | default(''))
-      }}
     _snow_opt_in: "{{ snow_dev_error_diagnostics | default(false) | bool }}"
     _snow_withhold: "{{ _snow_status in ['401', '403'] or ('Failed to authenticate' in (snow_standard_change_module_error | default('') | string)) }}"
     _snow_diag_json: |
+      {% set identity_candidates = [
+        'standard_change_dev_instance.yml',
+        '../../playbooks/servicenow/standard_change_dev_instance.yml'
+      ] %}
+      {% set identity_file = lookup('ansible.builtin.first_found', identity_candidates) %}
+      {% set identity = lookup('ansible.builtin.file', identity_file) | from_yaml %}
+      {% set dev_url = (
+        identity.snow_trusted_dev_instance_url | default('')
+        if (identity is mapping) else ''
+      ) | string | trim | regex_replace('/+$', '') %}
+      {% set instance = snow_standard_change_instance | default('') | string %}
+      {% set dev_https = dev_url is match('^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$') %}
+      {% set dev_authorized = dev_https and (dev_url == instance) %}
       {% set parsed = _snow_http_error_parsed | default({}) %}
       {% set error = parsed.error if (parsed is mapping and parsed.error is defined and parsed.error is mapping) else {} %}
       {% set message = error.message | default('') | string %}
       {% set detail = error.detail if (error.detail is defined) else '' %}
       {% set detail_text = detail | string if (detail is string) else '' %}
       {% set haystack = (message ~ ' ' ~ detail_text) | lower %}
-      {% set stop = [
-        'is', 'a', 'the', 'field', 'fields', 'mandatory', 'required', 'missing',
-        'invalid', 'data', 'policy', 'exception', 'value', 'values', 'template',
-        'request', 'body', 'change', 'standard', 'operation', 'failed', 'failure',
-        'error', 'detail', 'message', 'null', 'true', 'false', 'and', 'or', 'not',
-        'for', 'to', 'of', 'in', 'be', 'found', 'unknown', 'rejected'
+      {% set approved = [
+        'planned_start_date', 'planned_end_date', 'work_start', 'work_end',
+        'start_date', 'end_date', 'cab_date', 'cmdb_ci', 'assignment_group',
+        'assigned_to', 'requested_by', 'short_description', 'justification',
+        'implementation_plan', 'risk_impact_analysis', 'backout_plan',
+        'test_plan', 'std_change_producer_version', 'chg_model', 'category',
+        'priority', 'risk', 'impact', 'urgency', 'type', 'state'
       ] %}
       {% set blocked = [
         'password', 'passwd', 'secret', 'token', 'authorization',
@@ -83,7 +96,10 @@
       ] %}
       {% set ns = namespace(category='', code='', field='', show=false) %}
       {% if (not (_snow_opt_in | bool)) or (_snow_withhold | bool) %}
-      {% elif not (_snow_dev_authorized | bool) %}
+      {% elif not dev_https %}
+      {% set ns.show = true %}
+      {% set ns.category = 'diagnostics_not_configured' %}
+      {% elif not dev_authorized %}
       {% set ns.show = true %}
       {% set ns.category = 'diagnostics_not_authorized' %}
       {% elif (_snow_status | trim) != '400' %}
@@ -107,22 +123,33 @@
       {% set ns.code = message %}
       {% endif %}
       {% if ns.category in ['missing_required_field', 'invalid_field'] and detail is string %}
-      {% for token in detail | regex_findall('[a-z][a-z0-9_]{1,40}') %}
-      {% if (ns.field | length) == 0 and token not in stop and token not in blocked %}
+      {% for token in detail | regex_findall('([a-z][a-z0-9_]{1,40}) is (?:mandatory|required|invalid|missing)') %}
+      {% if (ns.field | length) == 0 and token in approved and token not in blocked %}
       {% set ns.field = token %}
       {% endif %}
       {% endfor %}
-      {% elif ns.category in ['missing_required_field', 'invalid_field'] and detail is not string and detail is sequence %}
-      {% for item in detail %}
-      {% if (ns.field | length) == 0 and item is string and item is match('^[a-z][a-z0-9_]{1,40}$') and item not in stop and item not in blocked %}
-      {% set ns.field = item %}
-      {% elif (ns.field | length) == 0 and item is mapping %}
-      {% set named = item.field | default(item.name | default('')) | string %}
-      {% if named is match('^[a-z][a-z0-9_]{1,40}$') and named not in stop and named not in blocked %}
+      {% if (ns.field | length) == 0 %}
+      {% for token in detail | regex_findall('(?:mandatory|required|invalid|missing) field[: ]+([a-z][a-z0-9_]{1,40})') %}
+      {% if (ns.field | length) == 0 and token in approved and token not in blocked %}
+      {% set ns.field = token %}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+      {% elif ns.category in ['missing_required_field', 'invalid_field'] and detail is not string and detail is sequence and (detail | length) > 0 %}
+      {% set named_item = detail[0] %}
+      {% if named_item is string and named_item in approved and named_item not in blocked %}
+      {% set ns.field = named_item %}
+      {% elif named_item is mapping %}
+      {% set named = named_item.field | default(named_item.name | default('')) | string %}
+      {% if named in approved and named not in blocked %}
       {% set ns.field = named %}
       {% endif %}
       {% endif %}
-      {% endfor %}
+      {% elif ns.category in ['missing_required_field', 'invalid_field'] and detail is mapping and (detail.keys() | list | length) == 1 %}
+      {% set named = (detail.keys() | list)[0] | string %}
+      {% if named in approved and named not in blocked %}
+      {% set ns.field = named %}
+      {% endif %}
       {% endif %}
       {% if ns.category == 'invalid_field' and (ns.field | length) == 0 %}
       {% set ns.category = 'invalid_request_body' %}

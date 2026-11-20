@@ -35,6 +35,10 @@
 #   Extra vars: snow_instance_url must exactly match
 #               snow_nonproduction_instance_url. snow_confirm_create
 #               stays false until the nonproduction test is intended.
+#               snow_dev_error_diagnostics may be true on the DEV job.
+#               The approved DEV URL is
+#               playbooks/servicenow/standard_change_dev_instance.yml.
+#               Do not set snow_trusted_dev_instance_url in the job.
 
 - name: Create one ServiceNow Standard Change from an approved template
   hosts: localhost

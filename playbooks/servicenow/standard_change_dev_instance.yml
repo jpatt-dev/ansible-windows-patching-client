@@ -1,0 +1,6 @@
+---
+# Approved ServiceNow DEV instance for Standard Change error diagnostics.
+# Replace PLACEHOLDER with the approved DEV URL.
+# Store only that URL. Do not store credentials in this file.
+# This value is read from Git. A Job Template variable cannot replace it.
+snow_trusted_dev_instance_url: PLACEHOLDER

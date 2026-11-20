@@ -1,0 +1,36 @@
+---
+- name: Prove playbook_dir and an extra var cannot retarget the DEV file
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_dev_error_diagnostics: true
+    snow_standard_change_instance: https://attacker.example.invalid
+  tasks:
+    - name: Sanitize a canned HTTP 400 without calling ServiceNow
+      ansible.builtin.include_tasks: ../../playbooks/servicenow/tasks/standard_change_module_failure.yml
+      vars:
+        snow_standard_change_module_error: >-
+          Unexpected response - 400
+          b'{"error":{"message":"Data Policy Exception",
+          "detail":"planned_start_date is mandatory password=SECRET"},
+          "status":"failure"}'
+
+    - name: Classify the canned result
+      block:
+        - name: Include the response classifier
+          ansible.builtin.include_tasks: ../../playbooks/servicenow/tasks/classify_standard_change_response.yml
+      rescue:
+        - name: Record the unconfirmed result
+          ansible.builtin.set_fact:
+            standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Confirm the Git file still fails closed
+      ansible.builtin.assert:
+        that:
+          - snow_standard_change_summary.diagnostic_category == 'diagnostics_not_configured'
+          - "'planned_start_date' not in standard_change_error"
+          - "'SECRET' not in standard_change_error"
+          - "'attacker.example.invalid' not in standard_change_error"
+          - "'The POST was not retried' in standard_change_error"
+        fail_msg: "DEV file override was accepted. error={{ standard_change_error | default('') }}"

@@ -1,0 +1,14 @@
+---
+- name: Read the Git-managed DEV identity
+  ansible.builtin.set_fact:
+    snow_test_dev_identity: "{{ _snow_test_dev_identity }}"
+  vars:
+    _snow_test_dev_identity: >-
+      {{
+        (
+          lookup(
+            'ansible.builtin.file',
+            playbook_dir ~ '/../../playbooks/servicenow/standard_change_dev_instance.yml'
+          ) | from_yaml
+        ).snow_trusted_dev_instance_url | default('') | trim
+      }}

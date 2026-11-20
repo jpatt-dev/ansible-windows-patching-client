@@ -259,6 +259,7 @@
         - snow_standard_change_summary
         - snow_standard_change_diagnostic
         - _snow_http_error_parsed
+        - snow_trusted_dev_instance_url
 
 - name: Invalid template identifiers are rejected before a POST
   hosts: std_invalid
@@ -389,6 +390,16 @@
         src: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/classify_standard_change_response.yml"
       register: standard_change_classifier
 
+    - name: Read the DEV diagnostic task
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/standard_change_dev_diagnostic.yml"
+      register: standard_change_diagnostic_task
+
+    - name: Read the Git-managed DEV identity
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../playbooks/servicenow/standard_change_dev_instance.yml"
+      register: standard_change_dev_identity
+
     - name: Confirm there is one POST and no retry or read-back
       ansible.builtin.assert:
         that:
@@ -409,10 +420,20 @@
           - "'method: POST' not in classifier_text"
           - "'uri:' not in classifier_text"
           - "'retries:' not in classifier_text"
+          - "'SNOW_DEV_INSTANCE_URL' not in standard_change_text"
+          - "'SNOW_DEV_INSTANCE_URL' not in diagnostic_text"
+          - "'action: post' not in diagnostic_text"
+          - "'retries:' not in diagnostic_text"
+          - "'standard_change_dev_instance.yml' in diagnostic_text"
+          - "'snow_trusted_dev_instance_url' in dev_identity_text"
+          - "'password' not in (dev_identity_text | lower)"
+          - "'SN_' not in dev_identity_text"
         fail_msg: The Standard Change playbook does not keep a single unretriable POST.
       vars:
         standard_change_text: "{{ standard_change_playbook.content | b64decode }}"
         classifier_text: "{{ standard_change_classifier.content | b64decode }}"
+        diagnostic_text: "{{ standard_change_diagnostic_task.content | b64decode }}"
+        dev_identity_text: "{{ standard_change_dev_identity.content | b64decode }}"
 
 - name: Caller-supplied internal variables are rejected before POST
   hosts: std_override
@@ -623,16 +644,16 @@
       loop_control:
         label: "{{ item.label }}"
 
-- name: DEV diagnostics are blocked for an instance the administrator did not bind
+- name: Placeholder DEV configuration fails closed
   hosts: localhost
   connection: local
   gather_facts: false
   vars:
     snow_dev_error_diagnostics: true
-    snow_standard_change_instance: https://other.example.invalid
+    snow_standard_change_instance: https://dev.example.invalid
     snow_dev_cases:
-      - label: diagnostics unauthorized
-        expect_category: diagnostics_not_authorized
+      - label: placeholder configuration
+        expect_category: diagnostics_not_configured
         expect_field: ""
         expect_code: ""
         module_error: >-
@@ -641,7 +662,46 @@
           "detail":"planned_start_date is mandatory password=SECRET"},
           "status":"failure"}'
   tasks:
-    - name: Classify the unauthorized diagnostic case
+    - name: Read the Git-managed DEV identity
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/read_dev_identity.yml"
+
+    - name: Skip while the offline DEV fixture is installed
+      when: snow_test_dev_identity == 'https://dev.example.invalid'
+      ansible.builtin.meta: end_play
+
+    - name: Classify the placeholder configuration case
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/dev_diagnostic_case.yml"
+      loop: "{{ snow_dev_cases }}"
+      loop_control:
+        label: "{{ item.label }}"
+
+- name: A supplied DEV identity cannot replace the Git file
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_dev_error_diagnostics: true
+    snow_standard_change_instance: https://dev.example.invalid
+    snow_trusted_dev_instance_url: https://dev.example.invalid
+    snow_dev_cases:
+      - label: supplied identity ignored
+        expect_category: diagnostics_not_configured
+        expect_field: ""
+        expect_code: ""
+        module_error: >-
+          Unexpected response - 400
+          b'{"error":{"message":"Data Policy Exception",
+          "detail":"planned_start_date is mandatory password=SECRET"},
+          "status":"failure"}'
+  tasks:
+    - name: Read the Git-managed DEV identity
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/read_dev_identity.yml"
+
+    - name: Skip while the offline DEV fixture is installed
+      when: snow_test_dev_identity == 'https://dev.example.invalid'
+      ansible.builtin.meta: end_play
+
+    - name: Classify the supplied-identity case
       ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/dev_diagnostic_case.yml"
       loop: "{{ snow_dev_cases }}"
       loop_control:
@@ -663,6 +723,33 @@
           Unexpected response - 400
           b'{"error":{"message":"Data Policy Exception",
           "detail":"planned_start_date is mandatory password=SECRET Bearer"},
+          "status":"failure"}'
+      - label: validation field phrase
+        expect_category: missing_required_field
+        expect_field: planned_start_date
+        expect_code: ""
+        module_error: >-
+          Unexpected response - 400
+          b'{"error":{"message":"Data Policy Exception",
+          "detail":"mandatory field planned_start_date password=SECRET"},
+          "status":"failure"}'
+      - label: sensitive unrecognized text
+        expect_category: missing_required_field
+        expect_field: ""
+        expect_code: ""
+        module_error: >-
+          Unexpected response - 400
+          b'{"error":{"message":"Data Policy Exception",
+          "detail":"user jsmith is mandatory password=SECRET contact alice"},
+          "status":"failure"}'
+      - label: free text without a validation field
+        expect_category: invalid_request_body
+        expect_field: ""
+        expect_code: ""
+        module_error: >-
+          Unexpected response - 400
+          b'{"error":{"message":"Data Policy Exception",
+          "detail":"please ask jsmith before contacting alice"},
           "status":"failure"}'
       - label: template rejected
         expect_category: template_rejected
@@ -689,13 +776,45 @@
         expect_code: ""
         module_error: 'Unexpected response - 403 {"message":"Bearer SECRET"}'
   tasks:
-    - name: Skip unless this process was bound to the DEV instance
-      when: >-
-        (lookup('ansible.builtin.env', 'SNOW_DEV_INSTANCE_URL') | default('') | trim | regex_replace('/+$', ''))
-        != 'https://dev.example.invalid'
+    - name: Read the Git-managed DEV identity
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/read_dev_identity.yml"
+
+    - name: Skip until the Git file names the offline DEV fixture
+      when: snow_test_dev_identity != 'https://dev.example.invalid'
       ansible.builtin.meta: end_play
 
     - name: Classify the authorized DEV diagnostic cases
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/dev_diagnostic_case.yml"
+      loop: "{{ snow_dev_cases }}"
+      loop_control:
+        label: "{{ item.label }}"
+
+- name: Production diagnostics stay hidden when the Git file names DEV
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_dev_error_diagnostics: true
+    snow_standard_change_instance: https://prod.example.invalid
+    snow_dev_cases:
+      - label: production instance
+        expect_category: diagnostics_not_authorized
+        expect_field: ""
+        expect_code: ""
+        module_error: >-
+          Unexpected response - 400
+          b'{"error":{"message":"Data Policy Exception",
+          "detail":"planned_start_date is mandatory password=SECRET"},
+          "status":"failure"}'
+  tasks:
+    - name: Read the Git-managed DEV identity
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/read_dev_identity.yml"
+
+    - name: Skip until the Git file names the offline DEV fixture
+      when: snow_test_dev_identity != 'https://dev.example.invalid'
+      ansible.builtin.meta: end_play
+
+    - name: Classify the production diagnostic case
       ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/dev_diagnostic_case.yml"
       loop: "{{ snow_dev_cases }}"
       loop_control:

@@ -113,12 +113,21 @@
       {% endif %}
       {% set diag = snow_standard_change_diagnostic | default({}) %}
       {% set allowed = [
+        'diagnostics_not_configured',
         'diagnostics_not_authorized',
         'template_rejected',
         'missing_required_field',
         'invalid_field',
         'invalid_request_body',
         'unclassified'
+      ] %}
+      {% set approved = [
+        'planned_start_date', 'planned_end_date', 'work_start', 'work_end',
+        'start_date', 'end_date', 'cab_date', 'cmdb_ci', 'assignment_group',
+        'assigned_to', 'requested_by', 'short_description', 'justification',
+        'implementation_plan', 'risk_impact_analysis', 'backout_plan',
+        'test_plan', 'std_change_producer_version', 'chg_model', 'category',
+        'priority', 'risk', 'impact', 'urgency', 'type', 'state'
       ] %}
       {% set blocked = [
         'password', 'passwd', 'secret', 'token', 'authorization',
@@ -139,7 +148,7 @@
       {% endif %}
       {% if (
         (ns.category | length) > 0
-        and (diag.field | default('') | string) is match('^[a-z][a-z0-9_]{1,40}$')
+        and (diag.field | default('') | string) in approved
         and (diag.field | string) not in blocked
       ) %}
       {% set ns.field = diag.field | string %}

@@ -23,7 +23,8 @@
           'snow_standard_change_response' if (snow_standard_change_response is defined) else '',
           'snow_standard_change_summary' if (snow_standard_change_summary is defined) else '',
           'snow_standard_change_diagnostic' if (snow_standard_change_diagnostic is defined) else '',
-          '_snow_http_error_parsed' if (_snow_http_error_parsed is defined) else ''
+          '_snow_http_error_parsed' if (_snow_http_error_parsed is defined) else '',
+          'snow_trusted_dev_instance_url' if (snow_trusted_dev_instance_url is defined) else ''
         ] | reject('equalto', '') | list
       }}
 

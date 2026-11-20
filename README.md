@@ -259,13 +259,17 @@ the password from a playbook variable. An empty lookup does not prove the
 credential is missing.
 
 `snow_dev_error_diagnostics` defaults to `false`. Set it `true` only on the
-DEV job. Details are shown only when the administrator environment variable
-`SNOW_DEV_INSTANCE_URL` is exactly the validated instance. Matching
+DEV job. Details are shown only when
+`playbooks/servicenow/standard_change_dev_instance.yml` contains the same
+URL as the validated instance. Replace `PLACEHOLDER` in that file with the
+approved DEV URL. Until it is replaced, diagnostics fail closed and the
+response body stays hidden. The playbook reads that file directly, so a Job
+Template variable cannot replace it. A job that supplies
+`snow_trusted_dev_instance_url` is rejected before any request. Matching
 `snow_instance_url` and `snow_nonproduction_instance_url` does not authorize
-diagnostics. Leave `SNOW_DEV_INSTANCE_URL` unset outside the DEV execution
-environment. The extra output is an allowlisted category and, when the HTTP
-400 body supports it, one error code and one field name. The response body
-is not displayed.
+diagnostics. The extra output is an allowlisted category and, when the HTTP
+400 body names an approved change field in a validation phrase, one error
+code and one field name. The response body is not displayed.
 
 Local syntax check, with no POST:
 

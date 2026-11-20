@@ -46,5 +46,10 @@
       - "'SECRET' not in standard_change_error"
       - "'Bearer' not in standard_change_error"
       - "'password' not in standard_change_error"
+      - "'jsmith' not in standard_change_error"
+      - "'alice' not in standard_change_error"
+      - >-
+        (item.expect_field | length) > 0
+        or ('planned_start_date' not in standard_change_error)
       - "'The POST was not retried' in standard_change_error"
     fail_msg: "{{ item.label }} leaked or misclassified. error={{ standard_change_error | default('') }}"
