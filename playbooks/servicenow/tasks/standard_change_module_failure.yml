@@ -49,3 +49,18 @@
           )
         )
       }}
+
+- name: Build the DEV-only diagnostic without displaying the body
+  ansible.builtin.include_tasks: standard_change_dev_diagnostic.yml
+  no_log: true
+  vars:
+    _snow_status: >-
+      {{
+        (
+          (snow_standard_change_module_error | default('') | string)
+          | regex_search('Unexpected response - [0-9]{3}')
+          | default('', true)
+          | regex_search('[0-9]{3}$')
+          | default('', true)
+        )
+      }}

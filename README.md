@@ -258,6 +258,15 @@ does not pre-check those two names with `lookup('env')` and does not read
 the password from a playbook variable. An empty lookup does not prove the
 credential is missing.
 
+`snow_dev_error_diagnostics` defaults to `false`. Set it `true` only on the
+DEV job. Details are shown only when the administrator environment variable
+`SNOW_DEV_INSTANCE_URL` is exactly the validated instance. Matching
+`snow_instance_url` and `snow_nonproduction_instance_url` does not authorize
+diagnostics. Leave `SNOW_DEV_INSTANCE_URL` unset outside the DEV execution
+environment. The extra output is an allowlisted category and, when the HTTP
+400 body supports it, one error code and one field name. The response body
+is not displayed.
+
 Local syntax check, with no POST:
 
 ```bash

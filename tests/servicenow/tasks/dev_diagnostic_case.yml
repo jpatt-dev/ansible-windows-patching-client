@@ -1,0 +1,50 @@
+---
+- name: Reset the diagnostic result
+  ansible.builtin.set_fact:
+    standard_change_unconfirmed: false
+    standard_change_error: ""
+    snow_standard_change_summary:
+      outcome: stale
+      reason: stale
+      http_status: stale
+      change_number: stale
+      sys_id: stale
+      diagnostic_category: ""
+      diagnostic_code: ""
+      diagnostic_field: ""
+
+- name: Sanitize the canned module error
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/standard_change_module_failure.yml"
+  no_log: true
+  vars:
+    snow_standard_change_module_error: "{{ item.module_error }}"
+
+- name: Classify the sanitized result
+  block:
+    - name: Include the response classifier
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/classify_standard_change_response.yml"
+  rescue:
+    - name: Record the unconfirmed result
+      ansible.builtin.set_fact:
+        standard_change_unconfirmed: true
+        standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
+
+- name: Confirm the diagnostic display is bounded
+  ansible.builtin.assert:
+    that:
+      - standard_change_unconfirmed | bool
+      - snow_standard_change_summary.outcome == 'unconfirmed'
+      - snow_standard_change_summary.diagnostic_category == item.expect_category
+      - snow_standard_change_summary.diagnostic_field == item.expect_field
+      - snow_standard_change_summary.diagnostic_code == item.expect_code
+      - >-
+        item.expect_category | length == 0
+        or ('Diagnostic category: ' ~ item.expect_category) in standard_change_error
+      - >-
+        item.expect_field | length == 0
+        or ('Field: ' ~ item.expect_field) in standard_change_error
+      - "'SECRET' not in standard_change_error"
+      - "'Bearer' not in standard_change_error"
+      - "'password' not in standard_change_error"
+      - "'The POST was not retried' in standard_change_error"
+    fail_msg: "{{ item.label }} leaked or misclassified. error={{ standard_change_error | default('') }}"

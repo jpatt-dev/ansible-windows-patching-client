@@ -257,6 +257,8 @@
         - snow_credential_ready
         - snow_standard_change_response
         - snow_standard_change_summary
+        - snow_standard_change_diagnostic
+        - _snow_http_error_parsed
 
 - name: Invalid template identifiers are rejected before a POST
   hosts: std_invalid
@@ -596,3 +598,140 @@
       loop: "{{ snow_module_cases }}"
       loop_control:
         label: "{{ item.label }}"
+
+- name: DEV diagnostics stay hidden when the opt-in is off
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_dev_error_diagnostics: false
+    snow_standard_change_instance: https://dev.example.invalid
+    snow_dev_cases:
+      - label: diagnostics disabled
+        expect_category: ""
+        expect_field: ""
+        expect_code: ""
+        module_error: >-
+          Unexpected response - 400
+          b'{"error":{"message":"Data Policy Exception",
+          "detail":"planned_start_date is mandatory password=SECRET"},
+          "status":"failure"}'
+  tasks:
+    - name: Classify the disabled diagnostic case
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/dev_diagnostic_case.yml"
+      loop: "{{ snow_dev_cases }}"
+      loop_control:
+        label: "{{ item.label }}"
+
+- name: DEV diagnostics are blocked for an instance the administrator did not bind
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_dev_error_diagnostics: true
+    snow_standard_change_instance: https://other.example.invalid
+    snow_dev_cases:
+      - label: diagnostics unauthorized
+        expect_category: diagnostics_not_authorized
+        expect_field: ""
+        expect_code: ""
+        module_error: >-
+          Unexpected response - 400
+          b'{"error":{"message":"Data Policy Exception",
+          "detail":"planned_start_date is mandatory password=SECRET"},
+          "status":"failure"}'
+  tasks:
+    - name: Classify the unauthorized diagnostic case
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/dev_diagnostic_case.yml"
+      loop: "{{ snow_dev_cases }}"
+      loop_control:
+        label: "{{ item.label }}"
+
+- name: Authorized DEV diagnostics show only allowlisted HTTP 400 details
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_dev_error_diagnostics: true
+    snow_standard_change_instance: https://dev.example.invalid
+    snow_dev_cases:
+      - label: structured validation error
+        expect_category: missing_required_field
+        expect_field: planned_start_date
+        expect_code: ""
+        module_error: >-
+          Unexpected response - 400
+          b'{"error":{"message":"Data Policy Exception",
+          "detail":"planned_start_date is mandatory password=SECRET Bearer"},
+          "status":"failure"}'
+      - label: template rejected
+        expect_category: template_rejected
+        expect_field: ""
+        expect_code: INVALID_TEMPLATE
+        module_error: >-
+          Unexpected response - 400
+          b'{"error":{"message":"INVALID_TEMPLATE",
+          "detail":"template not found SECRET"},
+          "status":"failure"}'
+      - label: malformed body
+        expect_category: unclassified
+        expect_field: ""
+        expect_code: ""
+        module_error: "Unexpected response - 400 not-json SECRET Bearer"
+      - label: authentication failure
+        expect_category: ""
+        expect_field: ""
+        expect_code: ""
+        module_error: "Failed to authenticate with the instance: 401 Unauthorized Bearer SECRET"
+      - label: permission failure
+        expect_category: ""
+        expect_field: ""
+        expect_code: ""
+        module_error: 'Unexpected response - 403 {"message":"Bearer SECRET"}'
+  tasks:
+    - name: Skip unless this process was bound to the DEV instance
+      when: >-
+        (lookup('ansible.builtin.env', 'SNOW_DEV_INSTANCE_URL') | default('') | trim | regex_replace('/+$', ''))
+        != 'https://dev.example.invalid'
+      ansible.builtin.meta: end_play
+
+    - name: Classify the authorized DEV diagnostic cases
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/dev_diagnostic_case.yml"
+      loop: "{{ snow_dev_cases }}"
+      loop_control:
+        label: "{{ item.label }}"
+
+- name: DEV diagnostics do not change a confirmed result
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_dev_error_diagnostics: true
+    snow_standard_change_instance: https://dev.example.invalid
+    snow_standard_change_response:
+      record:
+        number: CHG0003001
+        sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  tasks:
+    - name: Ignore any diagnostic or response left by an earlier failure
+      ansible.builtin.set_fact:
+        snow_standard_change_diagnostic:
+          show: false
+          category: ""
+          error_code: ""
+          field: ""
+        snow_standard_change_response:
+          record:
+            number: CHG0003001
+            sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+    - name: Classify a successful record while diagnostics are enabled
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/classify_standard_change_response.yml"
+
+    - name: Confirm diagnostics did not change success
+      ansible.builtin.assert:
+        that:
+          - snow_standard_change_summary.outcome == 'confirmed'
+          - snow_standard_change_summary.change_number == 'CHG0003001'
+          - snow_standard_change_summary.diagnostic_category == ''
+        fail_msg: Diagnostic mode changed a confirmed Standard Change result.

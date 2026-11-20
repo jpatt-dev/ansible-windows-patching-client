@@ -1,0 +1,137 @@
+---
+# Build a bounded diagnostic from one HTTP 400 module error.
+# servicenow.itsm 2.6.3 raises UnexpectedAPIResponse as
+# "Unexpected response - <status> <raw body>". On Python 3 the body is
+# the bytes from HTTPError.read(), so the text contains b'{...}'.
+# This file does not display that text and does not send a request.
+# SNOW_DEV_INSTANCE_URL is an administrator environment value. Matching
+# snow_instance_url values do not authorize diagnostics.
+
+- name: Clear any earlier parsed error body
+  ansible.builtin.set_fact:
+    _snow_http_error_parsed: {}
+  no_log: true
+
+- name: Parse an authorized HTTP 400 body without displaying it
+  when:
+    - snow_dev_error_diagnostics | default(false) | bool
+    - _snow_dev_authorized | bool
+    - (_snow_status | trim) == '400'
+    - (_snow_candidate | length) > 1
+    - (_snow_candidate | length) <= 4000
+  no_log: true
+  vars:
+    _snow_dev_url: "{{ lookup('ansible.builtin.env', 'SNOW_DEV_INSTANCE_URL') | trim | regex_replace('/+$', '') }}"
+    _snow_dev_authorized: >-
+      {{
+        (_snow_dev_url | length) > 0
+        and _snow_dev_url is match('^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$')
+        and _snow_dev_url == (snow_standard_change_instance | default(''))
+      }}
+    _snow_raw: "{{ snow_standard_change_module_error | default('') | string }}"
+    _snow_start: "{{ _snow_raw.find('{') }}"
+    _snow_end: "{{ _snow_raw.rfind('}') }}"
+    _snow_candidate: >-
+      {{
+        _snow_raw[_snow_start | int:_snow_end | int + 1]
+        if ((_snow_start | int) >= 0 and (_snow_end | int) > (_snow_start | int))
+        else ''
+      }}
+  block:
+    - name: Read the JSON object embedded in the module error
+      ansible.builtin.set_fact:
+        _snow_http_error_parsed: "{{ _snow_candidate | from_json }}"
+      no_log: true
+  rescue:
+    - name: Discard an HTTP 400 body that is not JSON
+      ansible.builtin.set_fact:
+        _snow_http_error_parsed: {}
+      no_log: true
+
+- name: Keep only an allowlisted diagnostic
+  ansible.builtin.set_fact:
+    snow_standard_change_diagnostic: "{{ _snow_diag_json | trim | from_json }}"
+    _snow_http_error_parsed: {}
+  no_log: true
+  vars:
+    _snow_dev_url: "{{ lookup('ansible.builtin.env', 'SNOW_DEV_INSTANCE_URL') | trim | regex_replace('/+$', '') }}"
+    _snow_dev_authorized: >-
+      {{
+        (_snow_dev_url | length) > 0
+        and _snow_dev_url is match('^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$')
+        and _snow_dev_url == (snow_standard_change_instance | default(''))
+      }}
+    _snow_opt_in: "{{ snow_dev_error_diagnostics | default(false) | bool }}"
+    _snow_withhold: "{{ _snow_status in ['401', '403'] or ('Failed to authenticate' in (snow_standard_change_module_error | default('') | string)) }}"
+    _snow_diag_json: |
+      {% set parsed = _snow_http_error_parsed | default({}) %}
+      {% set error = parsed.error if (parsed is mapping and parsed.error is defined and parsed.error is mapping) else {} %}
+      {% set message = error.message | default('') | string %}
+      {% set detail = error.detail if (error.detail is defined) else '' %}
+      {% set detail_text = detail | string if (detail is string) else '' %}
+      {% set haystack = (message ~ ' ' ~ detail_text) | lower %}
+      {% set stop = [
+        'is', 'a', 'the', 'field', 'fields', 'mandatory', 'required', 'missing',
+        'invalid', 'data', 'policy', 'exception', 'value', 'values', 'template',
+        'request', 'body', 'change', 'standard', 'operation', 'failed', 'failure',
+        'error', 'detail', 'message', 'null', 'true', 'false', 'and', 'or', 'not',
+        'for', 'to', 'of', 'in', 'be', 'found', 'unknown', 'rejected'
+      ] %}
+      {% set blocked = [
+        'password', 'passwd', 'secret', 'token', 'authorization',
+        'cookie', 'credential', 'username', 'bearer', 'session'
+      ] %}
+      {% set ns = namespace(category='', code='', field='', show=false) %}
+      {% if (not (_snow_opt_in | bool)) or (_snow_withhold | bool) %}
+      {% elif not (_snow_dev_authorized | bool) %}
+      {% set ns.show = true %}
+      {% set ns.category = 'diagnostics_not_authorized' %}
+      {% elif (_snow_status | trim) != '400' %}
+      {% elif 'template' in haystack and ('not found' in haystack or 'invalid' in haystack or 'unknown' in haystack or 'rejected' in haystack) %}
+      {% set ns.show = true %}
+      {% set ns.category = 'template_rejected' %}
+      {% elif 'mandatory' in haystack or 'required' in haystack or 'missing' in haystack %}
+      {% set ns.show = true %}
+      {% set ns.category = 'missing_required_field' %}
+      {% elif 'invalid' in haystack or 'data policy' in haystack %}
+      {% set ns.show = true %}
+      {% set ns.category = 'invalid_field' if (detail is string and (detail | length) > 0) else 'invalid_request_body' %}
+      {% elif (error | length) > 0 %}
+      {% set ns.show = true %}
+      {% set ns.category = 'invalid_request_body' %}
+      {% else %}
+      {% set ns.show = true %}
+      {% set ns.category = 'unclassified' %}
+      {% endif %}
+      {% if ns.show and message is match('^[A-Za-z0-9_]{1,40}$') %}
+      {% set ns.code = message %}
+      {% endif %}
+      {% if ns.category in ['missing_required_field', 'invalid_field'] and detail is string %}
+      {% for token in detail | regex_findall('[a-z][a-z0-9_]{1,40}') %}
+      {% if (ns.field | length) == 0 and token not in stop and token not in blocked %}
+      {% set ns.field = token %}
+      {% endif %}
+      {% endfor %}
+      {% elif ns.category in ['missing_required_field', 'invalid_field'] and detail is not string and detail is sequence %}
+      {% for item in detail %}
+      {% if (ns.field | length) == 0 and item is string and item is match('^[a-z][a-z0-9_]{1,40}$') and item not in stop and item not in blocked %}
+      {% set ns.field = item %}
+      {% elif (ns.field | length) == 0 and item is mapping %}
+      {% set named = item.field | default(item.name | default('')) | string %}
+      {% if named is match('^[a-z][a-z0-9_]{1,40}$') and named not in stop and named not in blocked %}
+      {% set ns.field = named %}
+      {% endif %}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+      {% if ns.category == 'invalid_field' and (ns.field | length) == 0 %}
+      {% set ns.category = 'invalid_request_body' %}
+      {% endif %}
+      {{
+        {
+          'show': ns.show,
+          'category': ns.category,
+          'error_code': ns.code,
+          'field': ns.field
+        } | to_json
+      }}

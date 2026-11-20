@@ -20,7 +20,10 @@
         number='',
         sys_id='',
         record={},
-        usable=false
+        usable=false,
+        category='',
+        code='',
+        field=''
       ) %}
       {% if resp is mapping and (resp.status | default('') | string | length) > 0 %}
       {% set ns.status = resp.status | string %}
@@ -108,13 +111,49 @@
       {% set ns.reason = 'confirmed' %}
       {% endif %}
       {% endif %}
+      {% set diag = snow_standard_change_diagnostic | default({}) %}
+      {% set allowed = [
+        'diagnostics_not_authorized',
+        'template_rejected',
+        'missing_required_field',
+        'invalid_field',
+        'invalid_request_body',
+        'unclassified'
+      ] %}
+      {% set blocked = [
+        'password', 'passwd', 'secret', 'token', 'authorization',
+        'cookie', 'credential', 'username', 'bearer', 'session'
+      ] %}
+      {% if (
+        diag is mapping
+        and (diag.show | default(false) | bool)
+        and (diag.category | default('') | string) in allowed
+      ) %}
+      {% set ns.category = diag.category | string %}
+      {% endif %}
+      {% if (
+        (ns.category | length) > 0
+        and (diag.error_code | default('') | string) is match('^[A-Za-z0-9_]{1,40}$')
+      ) %}
+      {% set ns.code = diag.error_code | string %}
+      {% endif %}
+      {% if (
+        (ns.category | length) > 0
+        and (diag.field | default('') | string) is match('^[a-z][a-z0-9_]{1,40}$')
+        and (diag.field | string) not in blocked
+      ) %}
+      {% set ns.field = diag.field | string %}
+      {% endif %}
       {{
         {
           'outcome': ns.outcome,
           'reason': ns.reason,
           'http_status': ns.status,
           'change_number': ns.number if (ns.number | length) > 0 else 'NOT RETURNED',
-          'sys_id': ns.sys_id if (ns.sys_id | length) > 0 else 'NOT RETURNED'
+          'sys_id': ns.sys_id if (ns.sys_id | length) > 0 else 'NOT RETURNED',
+          'diagnostic_category': ns.category,
+          'diagnostic_code': ns.code,
+          'diagnostic_field': ns.field
         } | to_json
       }}
   changed_when: false
@@ -128,7 +167,21 @@
       HTTP status: {{ snow_standard_change_summary.http_status }}.
       Change number: {{ snow_standard_change_summary.change_number }}.
       sys_id: {{ snow_standard_change_summary.sys_id }}.
+      {{ _snow_diag_text }}
       The POST was not retried.
       A Standard Change may already exist. Do not relaunch this job until
       ServiceNow has been checked for the record.
       This result does not confirm that a Standard Change was created.
+  vars:
+    _snow_category: "{{ snow_standard_change_summary.diagnostic_category | default('') }}"
+    _snow_code: "{{ snow_standard_change_summary.diagnostic_code | default('') }}"
+    _snow_field: "{{ snow_standard_change_summary.diagnostic_field | default('') }}"
+    _snow_diag_text: >-
+      {{
+        (
+          []
+          + (['Diagnostic category: ' ~ _snow_category ~ '.'] if (_snow_category | length) > 0 else [])
+          + (['Error code: ' ~ _snow_code ~ '.'] if (_snow_code | length) > 0 else [])
+          + (['Field: ' ~ _snow_field ~ '.'] if (_snow_field | length) > 0 else [])
+        ) | join(' ')
+      }}

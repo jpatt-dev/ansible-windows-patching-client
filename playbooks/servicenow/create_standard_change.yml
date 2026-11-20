@@ -47,6 +47,7 @@
     snow_standard_change_template_id: ""
     snow_change_payload: {}
     snow_confirm_create: false
+    snow_dev_error_diagnostics: false
 
   tasks:
     - name: Check the Standard Change request before any POST
