@@ -209,8 +209,23 @@
   tags:
     - report
 
-- name: Write the separate operations CSV
-  ansible.builtin.include_tasks: operations_csv.yml
+- name: Write the optional operations CSV
+  block:
+    - name: Include the operations CSV tasks
+      ansible.builtin.include_tasks: operations_csv.yml
+  rescue:
+    - name: Record the optional operations CSV failure
+      ansible.builtin.set_fact:
+        patch_operations_report_failed: true
+      changed_when: false
+
+    - name: Warn that the optional operations CSV was not produced
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: The optional Windows patch operations CSV was not produced
+          ({{ ansible_failed_task.name | default('operations report') }}).
+          Canonical JSON, CSV, and Markdown reports were already written.
+          ServiceNow update, attachment, and notification steps continue.
   tags:
     - report
 

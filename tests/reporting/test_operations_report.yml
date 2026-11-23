@@ -24,8 +24,8 @@
           result: success
           updates_installed: 2
           updates_installed_kbs:
-            - KB5034123
-            - KB5034124
+            - "5034123"
+            - "5034124"
           patch_wave: wave_1
           patching_exception_status: none
           change_ticket_id: CHG0010001
@@ -95,7 +95,8 @@
           updates_installed_kbs: not_available
           patch_wave: wave_1
           patching_exception_status: expired
-          patching_exception_reference: EXC-OLD-1
+          patching_exception_reference: ""
+          patching_exception_patch_reference: EXC-OLD-1
           change_ticket_id: CHG0010001
           pre_patch_reboot_required: false
           post_patch_reboot_required: false
@@ -124,7 +125,7 @@
           result: failed
           updates_installed: 1
           updates_installed_kbs:
-            - KB5034000
+            - "5034000"
           patch_wave: wave_1
           patching_exception_status: none
           change_ticket_id: CHG0010001
@@ -185,7 +186,7 @@
           result: success
           updates_installed: 1
           updates_installed_kbs:
-            - KB5034123
+            - "5034123"
           patch_wave: wave_1
           patching_exception_status: none
           change_ticket_id: CHG0010001
@@ -293,3 +294,161 @@
           - patch_operations_report_csv is search('"not_available","not_available","wave_2"')
           - "'2026-11-23T01:00:00Z' not in patch_operations_report_csv"
         fail_msg: "A missing maintenance window was not reported as not_available."
+
+- name: Operations report regressions for KB, reboot, and exemptions
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_final_report_timestamp: "2026-11-23T17-00-00"
+    patch_report_output_dir: "{{ lookup('ansible.builtin.env', 'TEMP') | default('/tmp', true) }}/aap-operations-report-test"
+    maintenance_window_start: "2026-11-23T01:00:00Z"
+    maintenance_window_end: "2026-11-23T05:00:00Z"
+    patch_workflow_report:
+      report_generated_at_utc: "2026-11-23T17:05:00Z"
+      hosts:
+        - hostname: WIN-KB-MIXED
+          result: success
+          updates_installed: 2
+          updates_installed_kbs:
+            - "5034123"
+            - KB5034123
+            - "5034999"
+          reason_code: PATCH_SUCCEEDED
+        - hostname: WIN-REBOOT-ONLY
+          result: exempt
+          updates_installed_kbs: not_available
+          patching_exception_status: active
+          patching_exception_reference: EXC-REBOOT-9
+          patching_reboot_exception_active: true
+          patching_reboot_exception_reference: EXC-REBOOT-9
+          reason_code: PATCH_EXEMPTION
+        - hostname: WIN-POST-MISSED
+          result: failed
+          updates_installed_kbs: not_available
+          pre_patch_reboot_required: true
+          pre_patch_reboot_performed: true
+          post_patch_reboot_required: true
+          post_patch_reboot_performed: false
+          pending_reboot: true
+          reason_code: REBOOT_FAILED
+        - hostname: WIN-POST-UNKNOWN
+          result: failed
+          updates_installed_kbs: not_available
+          pre_patch_reboot_required: true
+          pre_patch_reboot_performed: true
+          post_patch_reboot_required: true
+          post_patch_reboot_performed: false
+          reason_code: REBOOT_FAILED
+        - hostname: WIN-POST-FALSE
+          result: failed
+          updates_installed_kbs: not_available
+          pre_patch_reboot_required: true
+          pre_patch_reboot_performed: true
+          post_patch_reboot_required: true
+          post_patch_reboot_performed: false
+          pending_reboot: false
+          reason_code: REBOOT_FAILED
+        - hostname: WIN-ALL-DONE
+          result: success
+          updates_installed: 1
+          updates_installed_kbs:
+            - "5034100"
+          pre_patch_reboot_required: true
+          pre_patch_reboot_performed: true
+          post_patch_reboot_required: true
+          post_patch_reboot_performed: true
+          pending_reboot: false
+          reason_code: PATCH_SUCCEEDED
+        - hostname: WIN-NO-REBOOT
+          result: already_compliant
+          updates_installed: 0
+          updates_installed_kbs: []
+          pre_patch_reboot_required: false
+          pre_patch_reboot_performed: false
+          post_patch_reboot_required: false
+          post_patch_reboot_performed: false
+          pending_reboot: false
+          reason_code: NO_APPLICABLE_UPDATES
+        - hostname: WIN-STILL-PENDING
+          result: degraded
+          updates_installed: 1
+          updates_installed_kbs:
+            - "5034101"
+          pre_patch_reboot_required: true
+          pre_patch_reboot_performed: true
+          post_patch_reboot_required: false
+          post_patch_reboot_performed: false
+          pending_reboot: true
+          reason_code: PENDING_REBOOT
+        - hostname: WIN-NO-EVIDENCE
+          result: unknown
+          updates_installed_kbs: not_available
+          reason_code: UNKNOWN_RESULT
+        - hostname: WIN-INVALID-REF
+          result: failed
+          updates_installed_kbs: not_available
+          patching_exception_status: invalid
+          patching_exception_reference: ""
+          patching_exception_patch_reference: EXC-BAD-1
+          reason_code: UNKNOWN_RESULT
+        - hostname: WIN-EXPIRED-EMPTY
+          result: failed
+          updates_installed_kbs: not_available
+          patching_exception_status: expired
+          patching_exception_reference: ""
+          patching_exception_patch_reference: ""
+          reason_code: UNKNOWN_RESULT
+  tasks:
+    - name: Render the regression CSV
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: operations_csv.yml
+
+    - name: Split the regression CSV
+      ansible.builtin.set_fact:
+        _reg_lines: "{{ (patch_operations_report_csv | trim).splitlines() }}"
+
+    - name: Assert KB, reboot, and exemption regressions
+      ansible.builtin.assert:
+        that:
+          - (_reg_lines | length) == 12
+          - (_reg_lines[1].split('","')[9] == 'KB5034123; KB5034999')
+          - ('KBKB' not in _reg_lines[1])
+          - (_reg_lines[2].split('","')[14] == 'EXC-REBOOT-9')
+          - ('EXC-REBOOT-9; EXC-REBOOT-9' not in _reg_lines[2])
+          - (_reg_lines[3].split('","')[16] == 'required_not_performed')
+          - (_reg_lines[4].split('","')[16] == 'required_not_performed')
+          - (_reg_lines[5].split('","')[16] == 'required_not_performed')
+          - (_reg_lines[6].split('","')[16] == 'performed')
+          - (_reg_lines[7].split('","')[16] == 'not_required')
+          - (_reg_lines[8].split('","')[16] == 'pending')
+          - (_reg_lines[9].split('","')[16] == 'not_available')
+          - (_reg_lines[10].split('","')[13] == 'invalid')
+          - (_reg_lines[10].split('","')[14] == 'EXC-BAD-1')
+          - (_reg_lines[11].split('","')[13] == 'expired')
+          - (_reg_lines[11].split('","')[14] == 'not_available')
+        fail_msg: "Operations regressions did not match: {{ _reg_lines }}"
+
+- name: Confirm an operations CSV failure stays after the canonical reports
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Read the final report writer
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../roles/patch_report/tasks/final_write.yml"
+      register: _final_write
+
+    - name: Assert the optional CSV is rescued after canonical generation
+      ansible.builtin.assert:
+        that:
+          - "_write_text is search('Write Final Report JSON from patch_workflow_report')"
+          - "_write_text is search('include_tasks: operations_csv.yml')"
+          - "_write_text is search('optional Windows patch operations CSV was not produced')"
+          - "(_write_text.find('Write Final Report JSON') | int) < (_write_text.find('include_tasks: operations_csv.yml') | int)"
+          - "(_write_text.find('include_tasks: operations_csv.yml') | int) < (_write_text.find('rescue:') | int)"
+          - "(_write_text.find('Publish Final Report CSV string artifact') | int) < (_write_text.find('include_tasks: operations_csv.yml') | int)"
+        fail_msg: "Optional operations CSV is not isolated from canonical reporting."
+      vars:
+        _write_text: "{{ _final_write.content | b64decode }}"

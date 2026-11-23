@@ -9,8 +9,10 @@ business operations report. It is also published as the AAP `set_stats` keys
 not attached to ServiceNow. Report Date is when the report is generated.
 Execution Start is when this playbook began patch work, recorded on localhost
 before precheck. It is not the AAP Controller job-start time. Installed KBs
-lists verified KB identifiers. `none` is used only when `updates_installed`
-is 0. An empty KB list does not by itself mean that no updates were installed.
+lists verified KB identifiers. Numeric identifiers are shown as `KB<number>`.
+`none` is used only when `updates_installed` is 0. An empty KB list does not
+by itself mean that no updates were installed. A failure in this optional CSV
+does not stop the canonical reports or the following ServiceNow steps.
 Patch Status uses the canonical `result` value, so an unreachable host stays
 `failed` with reason code `UNREACHABLE`. An expired exemption stays `expired`.
 

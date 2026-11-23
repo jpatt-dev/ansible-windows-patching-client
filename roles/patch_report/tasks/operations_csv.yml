@@ -107,16 +107,18 @@
       {% set count_raw = item.updates_installed | default('not_available') | string | trim %}
       {% set count_known = count_raw is match('^[0-9]+$') %}
       {% set installed_count = (count_raw | int) if count_known else -1 %}
-      {% set kbns = namespace(ids=[]) %}
-      {% if raw is string and (raw is match('^KB[0-9]+$')) %}
-      {% set kbns.ids = [raw] %}
-      {% elif raw is sequence and raw is not string %}
-      {% for kb in raw %}
-      {% if kb is string and (kb is match('^KB[0-9]+$')) %}
-      {% set kbns.ids = kbns.ids + [kb] %}
+      {% set kbns = namespace(ids=[], candidates=[], norm='') %}
+      {% if raw is string and raw != 'not_available' %}{% set kbns.candidates = [raw] %}
+      {% elif raw is sequence and raw is not string %}{% set kbns.candidates = raw %}
       {% endif %}
+      {% for kb in kbns.candidates %}
+      {% set text = kb | string | trim %}
+      {% set kbns.norm = '' %}
+      {% if text is match('^[0-9]+$') %}{% set kbns.norm = 'KB' ~ text %}
+      {% elif text is match('(?i)^KB[0-9]+$') %}{% set kbns.norm = 'KB' ~ (text | regex_replace('(?i)^KB', '')) %}
+      {% endif %}
+      {% if (kbns.norm | length) > 0 and kbns.norm not in kbns.ids %}{% set kbns.ids = kbns.ids + [kbns.norm] %}{% endif %}
       {% endfor %}
-      {% endif %}
       {% if (kbns.ids | length) > 0 %}{{ kbns.ids | join('; ') }}
       {% elif count_known and installed_count == 0 %}none
       {% else %}not_available{% endif %}
@@ -143,13 +145,16 @@
       {% set pref = item.patching_exception_reference | default('') | string | trim %}
       {% set ractive = (item.patching_reboot_exception_active | default(false) | string | lower) in ['true', 'yes', '1'] %}
       {% set rref = item.patching_reboot_exception_reference | default('') | string | trim %}
+      {% set patch_ref = item.patching_exception_patch_reference | default('') | string | trim %}
       {% set ns = namespace(ref='not_available', refs=[]) %}
       {% if pstatus == 'active' or ractive %}
-      {% if pstatus == 'active' and (pref | length) > 0 %}{% set ns.refs = ns.refs + [pref] %}{% endif %}
-      {% if ractive and (rref | length) > 0 %}{% set ns.refs = ns.refs + [rref] %}{% endif %}
+      {% if pstatus == 'active' and (pref | length) > 0 and pref not in ns.refs %}{% set ns.refs = ns.refs + [pref] %}{% endif %}
+      {% if ractive and (rref | length) > 0 and rref not in ns.refs %}{% set ns.refs = ns.refs + [rref] %}{% endif %}
       {% set ns.ref = (ns.refs | join('; ')) if (ns.refs | length) > 0 else 'not_available' %}
       {% elif pstatus in ['expired', 'invalid'] %}
-      {% set ns.ref = pref if (pref | length) > 0 else 'not_available' %}
+      {% if (pref | length) > 0 %}{% set ns.ref = pref %}
+      {% elif (patch_ref | length) > 0 %}{% set ns.ref = patch_ref %}
+      {% endif %}
       {% endif %}{{ ns.ref }}
     _ops_change: >-
       {% set raw = item.change_ticket_id | default('') | string | trim %}
@@ -171,13 +176,17 @@
       {% elif post_done in ['false', 'no', '0'] %}{% set ev.post_done = 'false' %}{% endif %}
       {% if pending in ['true', 'yes', '1'] %}{% set ev.pending = 'true' %}
       {% elif pending in ['false', 'no', '0'] %}{% set ev.pending = 'false' %}{% endif %}
-      {% set performed = (ev.pre_req == 'true' and ev.pre_done == 'true') or (ev.post_req == 'true' and ev.post_done == 'true') %}
-      {% set missed = (ev.pre_req == 'true' and ev.pre_done == 'false') or (ev.post_req == 'true' and ev.post_done == 'false') %}
-      {% if missed and not performed %}required_not_performed
-      {% elif ev.pending == 'true' and not performed %}required_not_performed
-      {% elif performed and ev.pending == 'true' %}pending
-      {% elif performed %}performed
-      {% elif ev.pending == 'true' %}pending
+      {% set pre_missed = ev.pre_req == 'true' and ev.pre_done == 'false' %}
+      {% set post_missed = ev.post_req == 'true' and ev.post_done == 'false' %}
+      {% set pre_done_ok = ev.pre_req == 'true' and ev.pre_done == 'true' %}
+      {% set post_done_ok = ev.post_req == 'true' and ev.post_done == 'true' %}
+      {% set pre_unknown = ev.pre_req == 'true' and ev.pre_done == 'not_available' %}
+      {% set post_unknown = ev.post_req == 'true' and ev.post_done == 'not_available' %}
+      {% if pre_missed or post_missed %}required_not_performed
+      {% elif pre_unknown or post_unknown %}not_available
+      {% elif (pre_done_ok or post_done_ok) and ev.pending == 'true' %}pending
+      {% elif pre_done_ok or post_done_ok %}performed
+      {% elif ev.pending == 'true' %}required_not_performed
       {% elif ev.pre_req == 'false' and ev.post_req == 'false' and ev.pending == 'false' %}not_required
       {% else %}not_available{% endif %}
     _ops_reason_code: >-
