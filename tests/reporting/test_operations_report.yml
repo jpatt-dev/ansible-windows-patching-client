@@ -1,0 +1,295 @@
+---
+# Offline operations CSV. Synthetic host results only.
+# No Windows patching and no ServiceNow requests.
+
+- name: Operations report with approved maintenance window
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_final_report_timestamp: "2026-11-23T15-00-00"
+    patch_report_output_dir: "{{ lookup('ansible.builtin.env', 'TEMP') | default('/tmp', true) }}/aap-operations-report-test"
+    maintenance_window_start: "2026-11-23T01:00:00Z"
+    maintenance_window_end: "2026-11-23T05:00:00Z"
+    patch_workflow_report:
+      report_generated_at_utc: "2026-11-23T15:05:00Z"
+      hosts:
+        - hostname: WIN-PATCHED
+          patch_environment: prod
+          os_version: "Windows Server 2022"
+          os_build_pre: "20348.1000"
+          os_build: "20348.2345"
+          aap_job_id: "9001"
+          patch_execution_started_at_utc: "2026-11-23T02:00:00Z"
+          result: success
+          updates_installed: 2
+          updates_installed_kbs:
+            - KB5034123
+            - KB5034124
+          patch_wave: wave_1
+          patching_exception_status: none
+          change_ticket_id: CHG0010001
+          pre_patch_reboot_required: false
+          pre_patch_reboot_performed: false
+          post_patch_reboot_required: true
+          post_patch_reboot_performed: true
+          pending_reboot: false
+          reason_code: PATCH_SUCCEEDED
+        - hostname: WIN-COMPLIANT
+          patch_environment: prod
+          os_version: "Windows Server 2019"
+          os_build_pre: "17763.1000"
+          os_build: "17763.1000"
+          aap_job_id: "9001"
+          patch_execution_started_at_utc: "2026-11-23T02:00:00Z"
+          result: already_compliant
+          updates_installed: 0
+          updates_installed_kbs: []
+          patch_wave: wave_1
+          patching_exception_status: none
+          change_ticket_id: CHG0010001
+          pre_patch_reboot_required: false
+          pre_patch_reboot_performed: false
+          post_patch_reboot_required: false
+          post_patch_reboot_performed: false
+          pending_reboot: false
+          reason_code: NO_APPLICABLE_UPDATES
+        - hostname: WIN-EXEMPT
+          patch_environment: prod
+          os_version: "Windows Server 2022"
+          os_build_pre: "20348.1000"
+          os_build: "20348.1000"
+          aap_job_id: "9001"
+          patch_execution_started_at_utc: "2026-11-23T02:00:00Z"
+          result: exempt
+          updates_installed_kbs: not_available
+          patch_wave: wave_1
+          patching_exception_status: active
+          patching_exception_reference: EXC-PERM-100
+          change_ticket_id: CHG0010001
+          reason_code: PATCH_EXEMPTION
+        - hostname: WIN-TEMP-EXEMPT
+          patch_environment: test
+          os_version: "Windows Server 2022"
+          os_build_pre: "20348.1000"
+          os_build: "20348.1000"
+          aap_job_id: "9001"
+          patch_execution_started_at_utc: "2026-11-23T02:00:00Z"
+          result: exempt
+          updates_installed_kbs: not_available
+          patch_wave: wave_1
+          patching_exception_status: active
+          patching_exception_reference: EXC-TEMP-200
+          patching_reboot_exception_active: true
+          patching_reboot_exception_reference: EXC-REBOOT-9
+          change_ticket_id: CHG0010001
+          reason_code: PATCH_EXEMPTION
+        - hostname: WIN-EXPIRED
+          patch_environment: prod
+          os_version: "Windows Server 2019"
+          os_build_pre: "17763.1000"
+          os_build: "17763.1000"
+          aap_job_id: "9001"
+          patch_execution_started_at_utc: "2026-11-23T02:00:00Z"
+          result: failed
+          updates_installed_kbs: not_available
+          patch_wave: wave_1
+          patching_exception_status: expired
+          patching_exception_reference: EXC-OLD-1
+          change_ticket_id: CHG0010001
+          pre_patch_reboot_required: false
+          post_patch_reboot_required: false
+          pending_reboot: false
+          reason_code: PATCH_INSTALL_FAILED
+        - hostname: WIN-BLOCKED
+          patch_environment: prod
+          os_version: "Windows Server 2016"
+          os_build_pre: "14393.100"
+          os_build: "14393.100"
+          aap_job_id: "9001"
+          patch_execution_started_at_utc: "2026-11-23T02:00:00Z"
+          result: blocked
+          updates_installed_kbs: not_available
+          patch_wave: wave_1
+          patching_exception_status: none
+          change_ticket_id: CHG0010001
+          reason_code: PRECHECK_BLOCKED
+        - hostname: WIN-FAILED
+          patch_environment: prod
+          os_version: "Windows Server 2022"
+          os_build_pre: "20348.1000"
+          os_build: "20348.1000"
+          aap_job_id: "9001"
+          patch_execution_started_at_utc: "2026-11-23T02:00:00Z"
+          result: failed
+          updates_installed: 1
+          updates_installed_kbs:
+            - KB5034000
+          patch_wave: wave_1
+          patching_exception_status: none
+          change_ticket_id: CHG0010001
+          post_patch_reboot_required: true
+          post_patch_reboot_performed: false
+          pending_reboot: true
+          reason_code: PATCH_INSTALL_FAILED
+        - hostname: WIN-UNREACHABLE
+          patch_environment: prod
+          os_version: not_available
+          os_build_pre: not_available
+          os_build: ""
+          aap_job_id: "9001"
+          patch_execution_started_at_utc: "2026-11-23T02:00:00Z"
+          result: failed
+          updates_installed_kbs: not_available
+          patch_wave: wave_1
+          patching_exception_status: none
+          change_ticket_id: CHG0010001
+          reason_code: UNREACHABLE
+        - hostname: WIN-NO-KB
+          patch_environment: prod
+          os_version: "Windows Server 2022"
+          os_build_pre: "20348.1000"
+          os_build: "20348.2345"
+          aap_job_id: "9001"
+          patch_execution_started_at_utc: "2026-11-23T02:00:00Z"
+          result: success
+          updates_installed: 2
+          updates_installed_kbs: not_available
+          patch_wave: wave_1
+          patching_exception_status: none
+          change_ticket_id: CHG0010001
+          post_patch_reboot_required: true
+          post_patch_reboot_performed: true
+          pending_reboot: false
+          reason_code: PATCH_SUCCEEDED
+        - hostname: WIN-EMPTY-KB
+          patch_environment: prod
+          os_version: "Windows Server 2022"
+          os_build_pre: "20348.1000"
+          os_build: "20348.2345"
+          aap_job_id: "9001"
+          patch_execution_started_at_utc: "2026-11-23T02:00:00Z"
+          result: success
+          updates_installed: 2
+          updates_installed_kbs: []
+          patch_wave: wave_1
+          patching_exception_status: none
+          change_ticket_id: CHG0010001
+          reason_code: PATCH_SUCCEEDED
+        - hostname: WIN-NO-START
+          patch_environment: prod
+          os_version: "Windows Server 2022"
+          os_build_pre: "20348.1000"
+          os_build: "20348.2345"
+          aap_job_id: "9001"
+          result: success
+          updates_installed: 1
+          updates_installed_kbs:
+            - KB5034123
+          patch_wave: wave_1
+          patching_exception_status: none
+          change_ticket_id: CHG0010001
+          post_patch_reboot_required: true
+          post_patch_reboot_performed: true
+          pending_reboot: false
+          reason_code: PATCH_SUCCEEDED
+        - hostname: 'SRV "1", East'
+          patch_environment: prod
+          os_version: "Windows Server 2022"
+          os_build_pre: "20348.1000"
+          os_build: "20348.2345"
+          aap_job_id: "9001"
+          patch_execution_started_at_utc: "2026-11-23T02:00:00Z"
+          result: success
+          updates_installed: 1
+          updates_installed_kbs:
+            - not a kb
+          patch_wave: wave_1
+          patching_exception_status: none
+          change_ticket_id: CHG0010001
+          reason_code: PATCH_SUCCEEDED
+  tasks:
+    - name: Render the operations CSV
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: operations_csv.yml
+
+    - name: Split the published operations CSV
+      ansible.builtin.set_fact:
+        _ops_lines: "{{ (patch_operations_report_csv | trim).splitlines() }}"
+
+    - name: Assert the operations CSV rows
+      ansible.builtin.assert:
+        that:
+          - (_ops_lines | length) == 13
+          - (_ops_lines[0] | regex_findall('","') | length) == 17
+          - (_ops_lines[0].split(',') | first) == '"Report Date (UTC)"'
+          - (_ops_lines[0].split(',') | last) == '"Reason Code"'
+          - _ops_lines[1] is search('"2026-11-23T15:05:00Z","WIN-PATCHED","prod"')
+          - _ops_lines[1] is search('"20348.1000","20348.2345","9001"')
+          - _ops_lines[1] is search('"2026-11-23T02:00:00Z","success","KB5034123; KB5034124"')
+          - _ops_lines[1] is search('"2026-11-23T01:00:00Z","2026-11-23T05:00:00Z","wave_1"')
+          - _ops_lines[1] is search('"none","not_available","CHG0010001","performed","PATCH_SUCCEEDED"$')
+          - _ops_lines[2] is search('"already_compliant","none"')
+          - _ops_lines[2] is search('"not_required","NO_APPLICABLE_UPDATES"$')
+          - _ops_lines[3] is search('"exempt","not_available"')
+          - _ops_lines[3] is search('"PATCH_EXEMPTION"$')
+          - _ops_lines[3] is search('"active","EXC-PERM-100"')
+          - _ops_lines[4] is search('"active","EXC-TEMP-200; EXC-REBOOT-9"')
+          - _ops_lines[5] is search('"expired","EXC-OLD-1"')
+          - ('"active"' not in _ops_lines[5])
+          - _ops_lines[6] is search('"blocked"')
+          - _ops_lines[6] is search('"PRECHECK_BLOCKED"$')
+          - _ops_lines[7] is search('"failed","KB5034000"')
+          - _ops_lines[7] is search('"required_not_performed","PATCH_INSTALL_FAILED"$')
+          - _ops_lines[8] is search('"failed","not_available"')
+          - _ops_lines[8] is search('"not_available","UNREACHABLE"$')
+          - ('unreachable' not in _ops_lines[8])
+          - _ops_lines[9] is search('"success","not_available"')
+          - (_ops_lines[9].split('","')[9] == 'not_available')
+          - _ops_lines[10] is search('"success","not_available","2026-11-23T01:00:00Z"')
+          - (_ops_lines[10].split('","')[9] == 'not_available')
+          - (_ops_lines[2].split('","')[9] == 'none')
+          - _ops_lines[11] is search('"9001","not_available","success","KB5034123"')
+          - _ops_lines[12] is search('"SRV ""1"", East"')
+          - _ops_lines[12] is search('"success","not_available"')
+          - patch_operations_report_filename | trim == 'windows-patch-operations-report-2026-11-23T15-00-00.csv'
+          - ('KB5034123' not in _ops_lines[9])
+        fail_msg: "Operations CSV did not match the synthetic cases: {{ _ops_lines }}"
+
+- name: Operations report without a maintenance window
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    patch_final_report_timestamp: "2026-11-23T16-00-00"
+    patch_report_output_dir: "{{ lookup('ansible.builtin.env', 'TEMP') | default('/tmp', true) }}/aap-operations-report-test"
+    patch_workflow_report:
+      report_generated_at_utc: "2026-11-23T16:05:00Z"
+      hosts:
+        - hostname: WIN-NO-WINDOW
+          patch_environment: prod
+          os_version: "Windows Server 2022"
+          os_build_pre: "20348.1000"
+          os_build: "20348.2345"
+          aap_job_id: "9002"
+          patch_execution_started_at_utc: "2026-11-23T02:00:00Z"
+          result: blocked
+          updates_installed_kbs: not_available
+          patch_wave: wave_2
+          patching_exception_status: none
+          change_ticket_id: CHG0010002
+          reason_code: PRECHECK_BLOCKED
+  tasks:
+    - name: Render the operations CSV without a window
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: operations_csv.yml
+
+    - name: Assert a missing maintenance window stays not_available
+      ansible.builtin.assert:
+        that:
+          - patch_operations_report_csv is search('"WIN-NO-WINDOW"')
+          - patch_operations_report_csv is search('"not_available","not_available","wave_2"')
+          - "'2026-11-23T01:00:00Z' not in patch_operations_report_csv"
+        fail_msg: "A missing maintenance window was not reported as not_available."

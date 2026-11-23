@@ -3,6 +3,17 @@
 The structured AAP/JSON result is the authoritative source of truth. CSV is the
 concise operational report. Markdown is the human-readable summary.
 
+A second file, `windows-patch-operations-report-<timestamp>.csv`, is the
+business operations report. It is also published as the AAP `set_stats` keys
+`patch_operations_report_csv` and `patch_operations_report_filename`. It is
+not attached to ServiceNow. Report Date is when the report is generated.
+Execution Start is when this playbook began patch work, recorded on localhost
+before precheck. It is not the AAP Controller job-start time. Installed KBs
+lists verified KB identifiers. `none` is used only when `updates_installed`
+is 0. An empty KB list does not by itself mean that no updates were installed.
+Patch Status uses the canonical `result` value, so an unreachable host stays
+`failed` with reason code `UNREACHABLE`. An expired exemption stays `expired`.
+
 Do not infer historical actions from final machine state. A compliant host does
 not prove AAP patched it. A rebooted host does not prove AAP performed the
 reboot.

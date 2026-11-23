@@ -209,6 +209,11 @@
   tags:
     - report
 
+- name: Write the separate operations CSV
+  ansible.builtin.include_tasks: operations_csv.yml
+  tags:
+    - report
+
 - name: Report Final Report file locations (ephemeral on EE)
   ansible.builtin.debug:
     msg:

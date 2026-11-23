@@ -954,6 +954,7 @@
       inventory_hostname: "{{ inventory_hostname }}"
       change_ticket_id: "{{ change_ticket_id | default('') }}"
       aap_job_id: "{{ _rpt_aap_job_id }}"
+      patch_execution_started_at_utc: "{{ (hostvars['localhost'] | default({})).patch_execution_started_at_utc | default('not_available') }}"
       aap_limit: "{{ patch_target_scope | default(ansible_limit | default('')) }}"
       patch_target_scope: "{{ patch_target_scope | default(ansible_limit | default('')) }}"
       patch_wave: "{{ patch_wave_name | default('unspecified') }}"

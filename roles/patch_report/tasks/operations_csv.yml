@@ -1,0 +1,240 @@
+---
+# Business operations CSV. Separate from the operational Final Report CSV.
+# Reads patch_workflow_report.hosts. Does not attach this file to ServiceNow.
+# Caller: final_write.yml, run_once, connection local.
+
+- name: Assert patch_workflow_report is available for the operations report
+  ansible.builtin.assert:
+    that:
+      - patch_workflow_report is defined
+      - patch_workflow_report is mapping
+    fail_msg: >-
+      operations_csv.yml requires patch_workflow_report from final_aggregate.yml.
+  tags:
+    - report
+
+- name: Set the operations report filename
+  ansible.builtin.set_fact:
+    patch_operations_report_filename: "windows-patch-operations-report-{{ patch_final_report_timestamp | default('undated', true) }}.csv"
+  changed_when: false
+  tags:
+    - report
+
+- name: Initialize the operations report header
+  ansible.builtin.set_fact:
+    _ops_csv_lines:
+      - "\"{{ _ops_header | join('\",\"') }}\""
+  vars:
+    _ops_header:
+      - Report Date (UTC)
+      - Server
+      - Environment
+      - OS Version
+      - Previous OS Build
+      - Current OS Build
+      - AAP Job ID
+      - Execution Start (UTC)
+      - Patch Status
+      - Installed KBs
+      - Maintenance Window Start (UTC)
+      - Maintenance Window End (UTC)
+      - Patch Wave
+      - Exception Status
+      - Exception Reference
+      - Change Number
+      - Reboot Status
+      - Reason Code
+  changed_when: false
+  tags:
+    - report
+
+- name: Append quoted operations report rows
+  ansible.builtin.set_fact:
+    _ops_csv_lines: "{{ _ops_csv_lines + [_ops_row] }}"
+  vars:
+    _ops_text: "{{ _ops_cells | map('regex_replace', '\"', '\"\"') | map('regex_replace', '[\\r\\n]+', ' ') | join('\",\"') }}"
+    _ops_row: "\"{{ _ops_text }}\""
+    _ops_cells:
+      - "{{ _ops_report_date | trim }}"
+      - "{{ _ops_server | trim }}"
+      - "{{ _ops_environment | trim }}"
+      - "{{ _ops_os_version | trim }}"
+      - "{{ _ops_os_build_pre | trim }}"
+      - "{{ _ops_os_build | trim }}"
+      - "{{ _ops_job_id | trim }}"
+      - "{{ _ops_execution_start | trim }}"
+      - "{{ _ops_patch_status | trim }}"
+      - "{{ _ops_installed_kbs | trim }}"
+      - "{{ _ops_window_start | trim }}"
+      - "{{ _ops_window_end | trim }}"
+      - "{{ _ops_wave | trim }}"
+      - "{{ _ops_exception_status | trim }}"
+      - "{{ _ops_exception_reference | trim }}"
+      - "{{ _ops_change | trim }}"
+      - "{{ _ops_reboot_status | trim }}"
+      - "{{ _ops_reason_code | trim }}"
+    _ops_iso: '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+    _ops_report_date: >-
+      {% set raw = patch_workflow_report.report_generated_at_utc | default('') | string %}
+      {{ raw if (raw is match(_ops_iso)) else 'not_available' }}
+    _ops_server: >-
+      {% set raw = item.hostname | default(item.host | default('')) | string | trim %}
+      {{ raw if (raw | length) > 0 else 'not_available' }}
+    _ops_environment: >-
+      {% set raw = item.patch_environment | default('') | string | trim %}
+      {{ raw if (raw | length) > 0 else 'not_available' }}
+    _ops_os_version: >-
+      {% set raw = item.os_version | default('') | string | trim %}
+      {{ 'not_available' if (raw | length) == 0 or raw == 'not_available' else raw }}
+    _ops_os_build_pre: >-
+      {% set raw = item.os_build_pre | default('') | string | trim %}
+      {{ 'not_available' if (raw | length) == 0 or raw == 'not_available' else raw }}
+    _ops_os_build: >-
+      {% set raw = item.os_build | default('') | string | trim %}
+      {{ 'not_available' if (raw | length) == 0 or raw == 'not_available' else raw }}
+    _ops_job_id: >-
+      {% set raw = item.aap_job_id | default(item.tower_job_id | default('')) | string | trim %}
+      {{ raw if (raw | length) > 0 else 'not_available' }}
+    _ops_execution_start: >-
+      {% set raw = item.patch_execution_started_at_utc | default('') | string | trim %}
+      {{ raw if (raw is match(_ops_iso)) else 'not_available' }}
+    _ops_patch_status: >-
+      {% set result = item.result | default('') | string %}
+      {% if result in ['success', 'already_compliant', 'exempt', 'blocked', 'failed', 'degraded', 'unknown'] %}{{ result }}
+      {% else %}not_available{% endif %}
+    _ops_installed_kbs: >-
+      {% set raw = item.updates_installed_kbs | default('not_available') %}
+      {% set count_raw = item.updates_installed | default('not_available') | string | trim %}
+      {% set count_known = count_raw is match('^[0-9]+$') %}
+      {% set installed_count = (count_raw | int) if count_known else -1 %}
+      {% set kbns = namespace(ids=[]) %}
+      {% if raw is string and (raw is match('^KB[0-9]+$')) %}
+      {% set kbns.ids = [raw] %}
+      {% elif raw is sequence and raw is not string %}
+      {% for kb in raw %}
+      {% if kb is string and (kb is match('^KB[0-9]+$')) %}
+      {% set kbns.ids = kbns.ids + [kb] %}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+      {% if (kbns.ids | length) > 0 %}{{ kbns.ids | join('; ') }}
+      {% elif count_known and installed_count == 0 %}none
+      {% else %}not_available{% endif %}
+    _ops_window_start: >-
+      {% set raw = maintenance_window_start | default('') | string | trim %}
+      {{ raw if (raw is match(_ops_iso)) else 'not_available' }}
+    _ops_window_end: >-
+      {% set raw = maintenance_window_end | default('') | string | trim %}
+      {{ raw if (raw is match(_ops_iso)) else 'not_available' }}
+    _ops_wave: >-
+      {% set raw = item.patch_wave | default(item.patch_wave_name | default('')) | string | trim %}
+      {{ raw if (raw | length) > 0 else 'not_available' }}
+    _ops_exception_status: >-
+      {% set pstatus = item.patching_exception_status | default('') | string %}
+      {% set ractive = (item.patching_reboot_exception_active | default(false) | string | lower) in ['true', 'yes', '1'] %}
+      {% set ns = namespace(status='not_available') %}
+      {% if pstatus == 'active' or ractive %}{% set ns.status = 'active' %}
+      {% elif pstatus == 'expired' %}{% set ns.status = 'expired' %}
+      {% elif pstatus == 'invalid' %}{% set ns.status = 'invalid' %}
+      {% elif pstatus == 'none' %}{% set ns.status = 'none' %}
+      {% endif %}{{ ns.status }}
+    _ops_exception_reference: >-
+      {% set pstatus = item.patching_exception_status | default('') | string %}
+      {% set pref = item.patching_exception_reference | default('') | string | trim %}
+      {% set ractive = (item.patching_reboot_exception_active | default(false) | string | lower) in ['true', 'yes', '1'] %}
+      {% set rref = item.patching_reboot_exception_reference | default('') | string | trim %}
+      {% set ns = namespace(ref='not_available', refs=[]) %}
+      {% if pstatus == 'active' or ractive %}
+      {% if pstatus == 'active' and (pref | length) > 0 %}{% set ns.refs = ns.refs + [pref] %}{% endif %}
+      {% if ractive and (rref | length) > 0 %}{% set ns.refs = ns.refs + [rref] %}{% endif %}
+      {% set ns.ref = (ns.refs | join('; ')) if (ns.refs | length) > 0 else 'not_available' %}
+      {% elif pstatus in ['expired', 'invalid'] %}
+      {% set ns.ref = pref if (pref | length) > 0 else 'not_available' %}
+      {% endif %}{{ ns.ref }}
+    _ops_change: >-
+      {% set raw = item.change_ticket_id | default('') | string | trim %}
+      {{ raw if (raw | length) > 0 else 'not_available' }}
+    _ops_reboot_status: >-
+      {% set pre_req = item.pre_patch_reboot_required | default('not_available') | string | lower %}
+      {% set pre_done = item.pre_patch_reboot_performed | default('not_available') | string | lower %}
+      {% set post_req = item.post_patch_reboot_required | default('not_available') | string | lower %}
+      {% set post_done = item.post_patch_reboot_performed | default('not_available') | string | lower %}
+      {% set pending = item.pending_reboot | default('not_available') | string | lower %}
+      {% set ev = namespace(pre_req='not_available', pre_done='not_available', post_req='not_available', post_done='not_available', pending='not_available') %}
+      {% if pre_req in ['true', 'yes', '1'] %}{% set ev.pre_req = 'true' %}
+      {% elif pre_req in ['false', 'no', '0'] %}{% set ev.pre_req = 'false' %}{% endif %}
+      {% if pre_done in ['true', 'yes', '1'] %}{% set ev.pre_done = 'true' %}
+      {% elif pre_done in ['false', 'no', '0'] %}{% set ev.pre_done = 'false' %}{% endif %}
+      {% if post_req in ['true', 'yes', '1'] %}{% set ev.post_req = 'true' %}
+      {% elif post_req in ['false', 'no', '0'] %}{% set ev.post_req = 'false' %}{% endif %}
+      {% if post_done in ['true', 'yes', '1'] %}{% set ev.post_done = 'true' %}
+      {% elif post_done in ['false', 'no', '0'] %}{% set ev.post_done = 'false' %}{% endif %}
+      {% if pending in ['true', 'yes', '1'] %}{% set ev.pending = 'true' %}
+      {% elif pending in ['false', 'no', '0'] %}{% set ev.pending = 'false' %}{% endif %}
+      {% set performed = (ev.pre_req == 'true' and ev.pre_done == 'true') or (ev.post_req == 'true' and ev.post_done == 'true') %}
+      {% set missed = (ev.pre_req == 'true' and ev.pre_done == 'false') or (ev.post_req == 'true' and ev.post_done == 'false') %}
+      {% if missed and not performed %}required_not_performed
+      {% elif ev.pending == 'true' and not performed %}required_not_performed
+      {% elif performed and ev.pending == 'true' %}pending
+      {% elif performed %}performed
+      {% elif ev.pending == 'true' %}pending
+      {% elif ev.pre_req == 'false' and ev.post_req == 'false' and ev.pending == 'false' %}not_required
+      {% else %}not_available{% endif %}
+    _ops_reason_code: >-
+      {% set raw = item.reason_code | default('') | string | trim %}
+      {{ raw if (raw | length) > 0 else 'not_available' }}
+  loop: "{{ patch_workflow_report.hosts | default([]) }}"
+  loop_control:
+    label: "{{ item.hostname | default(item.host | default('unknown')) }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Join operations report lines
+  ansible.builtin.set_fact:
+    patch_operations_report_csv: "{{ (_ops_csv_lines | join(csv_newline)) ~ csv_newline }}"
+  vars:
+    csv_newline: "\n"
+  changed_when: false
+  tags:
+    - report
+
+- name: Ensure the operations report directory exists
+  ansible.builtin.file:
+    path: "{{ patch_report_output_dir_effective | default(patch_report_output_dir | default('/tmp/aap-patch-reports')) }}"
+    state: directory
+    mode: "0750"
+  delegate_to: localhost
+  become: false
+  failed_when: false
+  tags:
+    - report
+
+- name: Resolve the operations report path
+  ansible.builtin.set_fact:
+    patch_operations_report_path: "{{ _ops_dir }}/{{ patch_operations_report_filename | trim }}"
+  vars:
+    _ops_dir: "{{ patch_report_output_dir_effective | default(_ops_dir_default) }}"
+    _ops_dir_default: "{{ patch_report_output_dir | default('/tmp/aap-patch-reports') }}"
+  changed_when: false
+  tags:
+    - report
+
+- name: Write the operations report CSV
+  ansible.builtin.copy:
+    content: "{{ patch_operations_report_csv }}"
+    dest: "{{ patch_operations_report_path }}"
+    mode: "0640"
+  delegate_to: localhost
+  become: false
+  tags:
+    - report
+
+- name: Publish the operations report CSV for AAP retrieval
+  ansible.builtin.set_stats:
+    data:
+      patch_operations_report_csv: "{{ patch_operations_report_csv }}"
+      patch_operations_report_filename: "{{ patch_operations_report_filename | trim }}"
+    per_host: false
+  tags:
+    - report

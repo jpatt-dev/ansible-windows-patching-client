@@ -45,6 +45,7 @@
       updates_installed_kbs: not_available
       updates_failed_kbs: not_available
       patch_attempted: not_available
+      patch_execution_started_at_utc: "{{ (hostvars['localhost'] | default({})).patch_execution_started_at_utc | default('not_available') }}"
       pre_patch_reboot_performed: not_available
       post_patch_reboot_performed: not_available
       pending_reboot: not_available

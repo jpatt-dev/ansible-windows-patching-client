@@ -26,6 +26,17 @@
     - patching
 
   tasks:
+    - name: Record when this patch execution started
+      ansible.builtin.set_fact:
+        patch_execution_started_at_utc: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+      delegate_to: localhost
+      delegate_facts: true
+      run_once: true
+      when: >-
+        'localhost' not in hostvars
+        or (hostvars['localhost'].patch_execution_started_at_utc | default('') | string | length) == 0
+      changed_when: false
+
     - name: Include shared orchestration validation
       ansible.builtin.include_role:
         name: patch_common
