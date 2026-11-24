@@ -195,8 +195,8 @@
       No change was created.
       Primary CI host: {{ patch_change_primary_ci_host | default('') | string | trim }}.
       Do not set chg_model, type, state, or approval in patch_change_fields.
-      Create sends type normal. The installed collection copies type into
-      chg_model. Confirm that mapping on the client ServiceNow instance.
+      This job creates a Standard Change from the approved template.
+      It does not send type or chg_model.
   run_once: true
 
 - name: Reject hosts without a usable CI sys_id
@@ -258,36 +258,30 @@
     quiet: true
   run_once: true
 
-- name: Instantiate the standard change template when that path is selected
+- name: Reject a normal change from preparation
   when:
     - not (snow_prepare_preview_only | bool)
     - snow_prepare_existing_change_number | default('') | string | length == 0
-    - snow_prepare_standard_change | default(false) | bool
-  ansible.builtin.include_tasks: create_standard_change.yml
+    - not (snow_prepare_standard_change | default(true) | bool)
+  ansible.builtin.fail:
+    msg: >-
+      This preparation job creates a Standard Change.
+      snow_prepare_standard_change must stay true.
+      The normal change create operation was not used.
+      No ServiceNow request was sent.
   run_once: true
 
-- name: Create the change request
+- name: Create the Standard Change
   when:
     - not (snow_prepare_preview_only | bool)
     - snow_prepare_existing_change_number | default('') | string | length == 0
-    - not (snow_prepare_standard_change | default(false) | bool)
+    - snow_prepare_standard_change | default(true) | bool
   run_once: true
   block:
-    - name: Open one normal change
-      ansible.builtin.include_role:
-        name: servicenow_patching_change
+    - name: Instantiate the approved Standard Change template
+      ansible.builtin.include_tasks: create_standard_change.yml
       vars:
-        snow_operation: create
-        snow_allow_create: true
-        snow_short_description: "{{ patch_change_short_description | trim }}"
-        snow_description: "{{ patch_change_description | trim }}"
-        snow_change_fields: "{{ snow_prepare_change_fields }}"
-
-    - name: Keep the new change identity before any later operation
-      ansible.builtin.set_fact:
-        snow_prepare_change_number: "{{ snow_result.number }}"
-        snow_prepare_change_sys_id: "{{ snow_result.sys_id }}"
-        snow_prepare_created_this_run: true
+        snow_standard_change_from_preparation: true
 
 - name: Display and publish the change number
   when: not (snow_prepare_preview_only | bool)

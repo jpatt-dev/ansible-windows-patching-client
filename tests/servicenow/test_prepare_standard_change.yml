@@ -1,0 +1,337 @@
+# Offline preparation checks for Standard Change creation, resume,
+# missing CIs, incomplete association, and an unconfirmed API result.
+# No ServiceNow write is sent.
+# Run with the wave fixture and an extra var, not --limit, so localhost
+# plays still run:
+#   ANSIBLE_ROLES_PATH=roles ansible-playbook tests/servicenow/test_prepare_standard_change.yml \
+#     -i tests/servicenow/fixtures/prepare_waves.yml \
+#     -e ansible_limit=windows_wave_1
+
+- name: Lock the Standard Change preparation path
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Read the preparation and Standard Change tasks
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      loop:
+        - "{{ playbook_dir }}/../../playbooks/servicenow/tasks/prepare_patch_change.yml"
+        - "{{ playbook_dir }}/../../playbooks/servicenow/tasks/create_standard_change.yml"
+      register: _prepare_standard_sources
+
+    - name: Confirm one POST, then confirmed CI association
+      ansible.builtin.assert:
+        that:
+          - "(_prepare_text | regex_findall('snow_operation: create') | length) == 0"
+          - "(_prepare_text | regex_findall('retries:') | length) == 0"
+          - "(_post_text | regex_findall('action: post') | length) == 1"
+          - "(_post_text | regex_findall('retries:') | length) == 0"
+          - "_prepare_text is search('snow_prepare_existing_change_number')"
+          - "_prepare_text is search('snow_operation: add_cis')"
+          - "_prepare_text is search('snow_result.confirmed_ci_sys_ids | length == snow_prepare_ci_map | length')"
+          - "_prepare_text is search('Do not enable snow_prepare_allow_create')"
+          - "_post_text is search('classify_standard_change_response.yml')"
+          - "(_post_text.find('classify_standard_change_response.yml') | int) < (_post_text.find('snow_prepare_created_this_run: true') | int)"
+        fail_msg: Preparation no longer has one Standard Change POST and a confirmed CI gate.
+      vars:
+        _prepare_text: "{{ _prepare_standard_sources.results[0].content | b64decode }}"
+        _post_text: "{{ _prepare_standard_sources.results[1].content | b64decode }}"
+
+- name: An unconfirmed API result does not record a created change
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_prepare_created_this_run: false
+    snow_standard_change_response:
+      failed: true
+      status: ""
+      failure_class: connection failed
+      json: {}
+  tasks:
+    - name: Classify the failed API response
+      block:
+        - name: Include the failed-response classification
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/classify_standard_change_response.yml"
+      rescue:
+        - name: Record the unconfirmed result
+          ansible.builtin.set_fact:
+            standard_change_unconfirmed: true
+            standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Confirm the failure does not authorize another create
+      ansible.builtin.assert:
+        that:
+          - standard_change_unconfirmed | bool
+          - snow_standard_change_summary.outcome == 'unconfirmed'
+          - "'The POST was not retried' in standard_change_error"
+          - >-
+            'A Standard Change may already exist. Do not relaunch this job until ServiceNow has been checked for the record.'
+            in standard_change_error
+          - not (snow_prepare_created_this_run | bool)
+          - snow_prepare_change_number is not defined
+        fail_msg: "Unconfirmed API result was treated as a created change. error={{ standard_change_error | default('') }}"
+
+    - name: Clear the rescued unconfirmed result
+      ansible.builtin.meta: clear_host_errors
+
+- name: Incomplete CI confirmation fails the preparation gate
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    snow_prepare_change_number: CHG0001001
+    snow_prepare_ci_map:
+      - hostname: w1a
+        sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      - hostname: w1b
+        sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    snow_result:
+      success: true
+      operation: add_cis
+      number: CHG0001001
+      confirmed_ci_sys_ids:
+        - aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  tasks:
+    - name: Apply the production association gate
+      block:
+        - name: Require every wave CI on the change
+          ansible.builtin.assert:
+            that:
+              - snow_result.success | bool
+              - snow_result.operation == 'add_cis'
+              - snow_result.number == snow_prepare_change_number
+              - snow_result.confirmed_ci_sys_ids | length == snow_prepare_ci_map | length
+            fail_msg: >-
+              Change {{ snow_prepare_change_number }} exists, but CI
+              association is incomplete.
+      rescue:
+        - name: Record the incomplete association
+          ansible.builtin.set_fact:
+            snow_prepare_association_failed: true
+            snow_prepare_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Confirm a short CI list is not success
+      ansible.builtin.assert:
+        that:
+          - snow_prepare_association_failed | bool
+          - "'association is incomplete' in snow_prepare_error"
+          - (snow_result.confirmed_ci_sys_ids | length) < (snow_prepare_ci_map | length)
+        fail_msg: Incomplete CI association was accepted.
+
+    - name: Clear the rescued association failure
+      ansible.builtin.meta: clear_host_errors
+
+- name: Preview the selected wave without calling ServiceNow
+  hosts: windows_wave_1
+  connection: local
+  gather_facts: false
+  vars:
+    snow_prepare_supported_waves:
+      - windows_wave_1
+    patch_change_short_description: Windows patch wave
+    patch_change_description: Patch the selected wave.
+    patch_change_primary_ci_host: w1a
+    patch_change_fields:
+      assignment_group: Patch Operations
+      category: Software
+      justification: Scheduled patch window.
+      implementation_plan: Apply approved Windows updates.
+      backout_plan: Uninstall the updates from this wave.
+    snow_prepare_existing_change_number: ""
+    snow_prepare_allow_create: true
+    snow_prepare_preview_only: true
+    snow_prepare_standard_change: true
+    snow_confirm_create: true
+    snow_standard_change_template_id: STD-APPROVED-TEMPLATE
+    snow_instance_url: https://nonproduction.example.invalid
+    snow_nonproduction_instance_url: https://nonproduction.example.invalid
+    snow_change_payload: {}
+  tasks:
+    - name: Include preview preparation
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/prepare_patch_change.yml"
+
+    - name: Confirm preview collected every CI and sent nothing
+      ansible.builtin.assert:
+        that:
+          - snow_result is not defined
+          - snow_standard_change_response is not defined
+          - snow_standard_change_preflight is not defined
+          - not (snow_prepare_created_this_run | default(false) | bool)
+          - (snow_prepare_ci_map | map(attribute='hostname') | list) == ['w1a', 'w1b']
+          - snow_prepare_change_fields.short_description is not defined
+          - snow_prepare_change_fields.cmdb_ci == 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+          - "'chg_model' not in snow_prepare_change_fields"
+          - "'type' not in snow_prepare_change_fields"
+      run_once: true
+
+- name: Refuse to create when snow_confirm_create is false
+  hosts: windows_wave_1
+  connection: local
+  gather_facts: false
+  vars:
+    snow_prepare_supported_waves:
+      - windows_wave_1
+    patch_change_short_description: Windows patch wave
+    patch_change_description: Patch the selected wave.
+    patch_change_primary_ci_host: w1a
+    patch_change_fields:
+      assignment_group: Patch Operations
+      category: Software
+      justification: Scheduled patch window.
+      implementation_plan: Apply approved Windows updates.
+      backout_plan: Uninstall the updates from this wave.
+    snow_prepare_existing_change_number: ""
+    snow_prepare_allow_create: true
+    snow_prepare_preview_only: false
+    snow_prepare_standard_change: true
+    snow_confirm_create: false
+    snow_standard_change_template_id: STD-APPROVED-TEMPLATE
+    snow_instance_url: https://nonproduction.example.invalid
+    snow_nonproduction_instance_url: https://nonproduction.example.invalid
+    snow_change_payload: {}
+  tasks:
+    - name: Clear the previous preparation result
+      ansible.builtin.set_fact:
+        snow_prepare_failed: false
+        snow_prepare_error: ""
+        snow_prepare_created_this_run: false
+
+    - name: Include creation with confirmation off
+      run_once: true
+      block:
+        - name: Run preparation
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/prepare_patch_change.yml"
+      rescue:
+        - name: Record the confirmation failure
+          ansible.builtin.set_fact:
+            snow_prepare_failed: true
+            snow_prepare_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Confirm the job stopped before POST
+      ansible.builtin.assert:
+        that:
+          - snow_prepare_failed | bool
+          - "'No ServiceNow request was sent' in snow_prepare_error"
+          - snow_standard_change_response is not defined
+          - snow_result is not defined
+          - not (snow_prepare_created_this_run | default(false) | bool)
+          - snow_prepare_change_number is not defined
+      run_once: true
+
+    - name: Clear the rescued confirmation failure
+      ansible.builtin.meta: clear_host_errors
+
+- name: Refuse to resume by creating a change
+  hosts: windows_wave_1
+  connection: local
+  gather_facts: false
+  vars:
+    snow_prepare_supported_waves:
+      - windows_wave_1
+    snow_prepare_existing_change_number: CHG0009999
+    snow_prepare_allow_create: true
+    snow_prepare_preview_only: false
+    snow_prepare_standard_change: true
+    snow_confirm_create: true
+    snow_standard_change_template_id: STD-APPROVED-TEMPLATE
+    snow_instance_url: https://nonproduction.example.invalid
+    snow_nonproduction_instance_url: https://nonproduction.example.invalid
+    snow_change_payload: {}
+  tasks:
+    - name: Clear the previous preparation result
+      ansible.builtin.set_fact:
+        snow_prepare_failed: false
+        snow_prepare_error: ""
+        snow_prepare_created_this_run: false
+
+    - name: Include resume preparation
+      run_once: true
+      block:
+        - name: Run preparation for an existing change
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/prepare_patch_change.yml"
+      rescue:
+        - name: Record the resume failure
+          ansible.builtin.set_fact:
+            snow_prepare_failed: true
+            snow_prepare_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Confirm resume did not start Standard Change creation
+      ansible.builtin.assert:
+        that:
+          - snow_prepare_failed | bool
+          - "'Could not read change request CHG0009999' in snow_prepare_error"
+          - snow_standard_change_response is not defined
+          - not (snow_prepare_created_this_run | default(false) | bool)
+          - "'Standard Change creation was not sent' not in snow_prepare_error"
+          - "'SUCCEEDED' not in snow_prepare_error"
+      run_once: true
+
+    - name: Clear the rescued resume failure
+      ansible.builtin.meta: clear_host_errors
+
+- name: Replace one wave host with an empty CI sys_id
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Clear the selected host sys_id for the next play
+      ansible.builtin.add_host:
+        name: w1b
+        groups:
+          - windows_hosts
+          - windows_wave_1
+        ansible_connection: local
+        sys_id: ""
+
+- name: Reject a wave host that has no CI sys_id
+  hosts: windows_wave_1
+  connection: local
+  gather_facts: false
+  vars:
+    snow_prepare_supported_waves:
+      - windows_wave_1
+    patch_change_short_description: Windows patch wave
+    patch_change_description: Patch the selected wave.
+    patch_change_primary_ci_host: w1a
+    patch_change_fields:
+      assignment_group: Patch Operations
+      category: Software
+      justification: Scheduled patch window.
+      implementation_plan: Apply approved Windows updates.
+      backout_plan: Uninstall the updates from this wave.
+    snow_prepare_allow_create: true
+    snow_prepare_preview_only: true
+    snow_prepare_standard_change: true
+  tasks:
+    - name: Clear the previous preparation result
+      ansible.builtin.set_fact:
+        snow_prepare_failed: false
+        snow_prepare_error: ""
+        snow_prepare_created_this_run: false
+
+    - name: Include preparation with a missing CI
+      run_once: true
+      block:
+        - name: Run preparation
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/prepare_patch_change.yml"
+      rescue:
+        - name: Record the missing CI failure
+          ansible.builtin.set_fact:
+            snow_prepare_failed: true
+            snow_prepare_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Confirm the missing CI stops preparation
+      ansible.builtin.assert:
+        that:
+          - snow_prepare_failed | bool
+          - "'missing sys_id' in snow_prepare_error"
+          - "'w1b' in snow_prepare_error"
+          - "'No change was created' in snow_prepare_error"
+          - snow_standard_change_response is not defined
+          - not (snow_prepare_created_this_run | default(false) | bool)
+      run_once: true
+
+    - name: Clear the rescued missing-CI failure
+      ansible.builtin.meta: clear_host_errors

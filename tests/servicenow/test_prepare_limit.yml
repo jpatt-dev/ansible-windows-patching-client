@@ -60,7 +60,7 @@
           - _prepare_play.tasks[0].run_once | bool
           - _prepare_tasks | rejectattr('run_once', 'defined') | list | length == 0
           - _prepare_tasks | selectattr('run_once') | list | length == (_prepare_tasks | length)
-          - "(_prepare_task_text | regex_findall('snow_operation: create') | length) == 1"
+          - "(_prepare_task_text | regex_findall('snow_operation: create') | length) == 0"
           - "(_prepare_task_text | regex_findall('snow_operation: read') | length) == 1"
           - "(_prepare_task_text | regex_findall('snow_operation: add_cis') | length) == 1"
           - _prepare_task_text is not search('groups\[patch_wave_name\]')
@@ -74,7 +74,7 @@
       ansible.builtin.set_fact:
         _prepare_preview: "{{ _prepare_tasks | selectattr('name', 'equalto', 'Stop after preview without calling ServiceNow') | list | first }}"
         _prepare_read: "{{ _prepare_tasks | selectattr('name', 'equalto', 'Read an existing change instead of creating one') | list | first }}"
-        _prepare_create: "{{ _prepare_tasks | selectattr('name', 'equalto', 'Create the change request') | list | first }}"
+        _prepare_create: "{{ _prepare_tasks | selectattr('name', 'equalto', 'Create the Standard Change') | list | first }}"
         _prepare_link: "{{ _prepare_tasks | selectattr('name', 'equalto', 'Associate the wave configuration items') | list | first }}"
       run_once: true
 
@@ -89,9 +89,10 @@
           - _prepare_read.when[1] == "snow_prepare_existing_change_number | default('') | string | length > 0"
           - _prepare_create.when[0] == 'not (snow_prepare_preview_only | bool)'
           - _prepare_create.when[1] == "snow_prepare_existing_change_number | default('') | string | length == 0"
+          - _prepare_create.when[2] == 'snow_prepare_standard_change | default(true) | bool'
           - _prepare_link.when == 'not (snow_prepare_preview_only | bool)'
-          - _prepare_create.block[0].vars.snow_operation == 'create'
-          - _prepare_create.block[0].vars.snow_change_fields is search('snow_prepare_change_fields')
+          - (_prepare_create.block[0]['ansible.builtin.include_tasks'] | default('')) == 'create_standard_change.yml'
+          - _prepare_create.block[0].vars.snow_standard_change_from_preparation | bool
           - _prepare_read.block[0].vars.snow_operation == 'read'
           - _prepare_link.block[0].vars.snow_ci_sys_ids is search('snow_prepare_ci_map')
           - >-

@@ -1,37 +1,120 @@
----
-# Future Standard Change instantiation. This file does not call ServiceNow.
-# Replace the final fail task with the verified template operation. Do not
-# route that operation through snow_operation create. The normal change
-# module sends type normal and is a different API.
+# One Standard Change POST, shared by the standalone playbook and by
+# prepare_patch_change.yml. This file does not create a Normal Change
+# and does not send a second request.
 
 - name: Reject standard change creation without a template identifier
   when: snow_standard_change_template_id | default('') | string | trim | length == 0
   ansible.builtin.fail:
     msg: >-
-      snow_prepare_standard_change is true but
       snow_standard_change_template_id is empty. No ServiceNow request
       was sent. The normal change create operation was not used.
-      Set the identifier of the approved Standard Change template, or
-      set snow_prepare_standard_change=false. An existing
-      change_ticket_id does not use this task.
+      Set the identifier of the approved Standard Change template.
+      An existing change number does not use this task.
 
-- name: Record the standard change request without calling ServiceNow
+- name: Use the prepared fields as the Standard Change body
+  when:
+    - snow_standard_change_from_preparation | default(false) | bool
+    - snow_change_payload | default({}, true) is mapping
+    - (snow_change_payload | default({}, true) | length) == 0
   ansible.builtin.set_fact:
-    snow_standard_change_request:
-      template_id: "{{ snow_standard_change_template_id | string | trim }}"
-      short_description: "{{ patch_change_short_description | default('') | string | trim }}"
-      description: "{{ patch_change_description | default('') | string | trim }}"
-      change_fields: "{{ snow_prepare_change_fields | default({}) }}"
-      primary_ci_host: "{{ patch_change_primary_ci_host | default('') | string | trim }}"
-      affected_ci_sys_ids: "{{ snow_prepare_ci_map | default([]) | map(attribute='sys_id') | list }}"
-      api_implemented: false
-  changed_when: false
+    snow_change_payload: "{{ _snow_prepared_payload }}"
+  vars:
+    _snow_prepared_payload: >-
+      {{
+        (snow_prepare_change_fields | default({}, true))
+        | combine({
+            'short_description': patch_change_short_description | default('') | string | trim,
+            'description': patch_change_description | default('') | string | trim
+          })
+      }}
 
-- name: Stop before an unverified standard change API
+- name: Check the Standard Change request before any POST
+  ansible.builtin.include_tasks: standard_change_preflight.yml
+
+- name: Show that creation was not confirmed
+  when:
+    - not (snow_standard_change_from_preparation | default(false) | bool)
+    - snow_standard_change_preflight == 'not_confirmed'
+  ansible.builtin.debug:
+    msg:
+      - "Standard Change creation: NOT CONFIRMED"
+      - "snow_confirm_create is false. No ServiceNow request was sent."
+      - "Set snow_confirm_create=true to send one POST."
+
+- name: Show that check mode does not create a change
+  when:
+    - not (snow_standard_change_from_preparation | default(false) | bool)
+    - snow_standard_change_preflight == 'check_mode'
+  ansible.builtin.debug:
+    msg:
+      - "Standard Change creation: CHECK MODE"
+      - "No ServiceNow request was sent."
+
+- name: End before POST when creation is not confirmed or check mode is on
+  when:
+    - not (snow_standard_change_from_preparation | default(false) | bool)
+    - snow_standard_change_preflight != 'proceed'
+  ansible.builtin.meta: end_play
+
+- name: Stop preparation before an unconfirmed Standard Change POST
+  when:
+    - snow_standard_change_from_preparation | default(false) | bool
+    - snow_standard_change_preflight != 'proceed'
   ansible.builtin.fail:
     msg: >-
-      Standard change template
-      {{ snow_standard_change_template_id | string | trim }}
-      is selected, but this repository has no verified Standard Change
-      instantiation API. The normal change create operation was not used.
+      Standard Change creation was not sent
+      ({{ snow_standard_change_preflight }}).
+      snow_confirm_create must be true, check mode must be off, and
+      the request body must be nonempty.
       No ServiceNow request was sent.
+      The normal change create operation was not used.
+
+- name: Check the ServiceNow credential against the validated instance
+  ansible.builtin.include_tasks: standard_change_credential.yml
+
+- name: POST one Standard Change
+  block:
+    # Username and password come from the credential environment.
+    # args[module] does not see that env fallback.
+    - name: Send the Standard Change creation request  # noqa: args[module]
+      servicenow.itsm.api:
+        instance:
+          host: "{{ snow_standard_change_instance }}"
+          validate_certs: true
+          timeout: 60
+        api_path: "api/sn_chg_rest/change/standard/{{ snow_standard_change_template }}"
+        action: post
+        data: "{{ snow_change_payload }}"
+      register: snow_standard_change_response
+      no_log: true
+  rescue:
+    - name: Sanitize the module failure
+      ansible.builtin.include_tasks: standard_change_module_failure.yml
+      no_log: true
+      vars:
+        snow_standard_change_module_error: "{{ ansible_failed_result.msg | default('') }}"
+
+- name: Classify the Standard Change response
+  ansible.builtin.include_tasks: classify_standard_change_response.yml
+
+- name: Record the prepared Standard Change identity
+  when: snow_standard_change_from_preparation | default(false) | bool
+  ansible.builtin.set_fact:
+    snow_prepare_change_number: "{{ snow_standard_change_summary.change_number }}"
+    snow_prepare_change_sys_id: "{{ snow_standard_change_summary.sys_id }}"
+    snow_prepare_created_this_run: true
+
+- name: Show the confirmed Standard Change result
+  when: not (snow_standard_change_from_preparation | default(false) | bool)
+  ansible.builtin.debug:
+    msg:
+      - "Standard Change creation: SUCCEEDED"
+      - >-
+        HTTP status: {{
+          'not exposed by the module'
+          if snow_standard_change_summary.http_status == 'NOT RETURNED'
+          else snow_standard_change_summary.http_status
+        }}
+      - "Change number: {{ snow_standard_change_summary.change_number }}"
+      - "sys_id: {{ snow_standard_change_summary.sys_id }}"
+      - "No further request was sent. Confirm the record in ServiceNow before using it."

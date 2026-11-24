@@ -392,6 +392,11 @@
         src: "{{ playbook_dir }}/../../playbooks/servicenow/create_standard_change.yml"
       register: standard_change_playbook
 
+    - name: Read the shared Standard Change POST
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/create_standard_change.yml"
+      register: standard_change_post
+
     - name: Read the response classifier
       ansible.builtin.slurp:
         src: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/classify_standard_change_response.yml"
@@ -416,6 +421,7 @@
       ansible.builtin.assert:
         that:
           - "(standard_change_text | regex_findall('action: post') | length) == 1"
+          - standard_change_playbook_text is search('tasks/create_standard_change.yml')
           - "(standard_change_text | regex_findall('method: POST') | length) == 0"
           - "'servicenow.itsm.api' in standard_change_text"
           - "'url_username' not in standard_change_text"
@@ -446,7 +452,8 @@
             or dev_identity_value is match('^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$')
         fail_msg: The Standard Change playbook does not keep a single unretriable POST.
       vars:
-        standard_change_text: "{{ standard_change_playbook.content | b64decode }}"
+        standard_change_playbook_text: "{{ standard_change_playbook.content | b64decode }}"
+        standard_change_text: "{{ standard_change_playbook_text ~ '\n' ~ (standard_change_post.content | b64decode) }}"
         classifier_text: "{{ standard_change_classifier.content | b64decode }}"
         diagnostic_text: "{{ standard_change_diagnostic_task.content | b64decode }}"
         dev_identity_text: "{{ standard_change_dev_identity.content | b64decode }}"

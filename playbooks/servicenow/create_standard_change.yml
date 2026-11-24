@@ -1,6 +1,8 @@
 ---
 # Standalone proof of concept. One POST to the Standard Change API.
-# This playbook is not part of Full Patch, Precheck, or change preparation.
+# playbooks/servicenow/tasks/create_standard_change.yml is that POST.
+# prepare_patch_change.yml includes the same file. This playbook is not
+# part of Full Patch or Precheck.
 #
 # Confirmed endpoint:
 #   POST /api/sn_chg_rest/change/standard/{snow_standard_change_template_id}
@@ -54,66 +56,5 @@
     snow_dev_error_diagnostics: false
 
   tasks:
-    - name: Check the Standard Change request before any POST
-      ansible.builtin.include_tasks: tasks/standard_change_preflight.yml
-
-    - name: Show that creation was not confirmed
-      when: snow_standard_change_preflight == 'not_confirmed'
-      ansible.builtin.debug:
-        msg:
-          - "Standard Change creation: NOT CONFIRMED"
-          - "snow_confirm_create is false. No ServiceNow request was sent."
-          - "Set snow_confirm_create=true to send one POST."
-
-    - name: Show that check mode does not create a change
-      when: snow_standard_change_preflight == 'check_mode'
-      ansible.builtin.debug:
-        msg:
-          - "Standard Change creation: CHECK MODE"
-          - "No ServiceNow request was sent."
-
-    - name: End before POST when creation is not confirmed or check mode is on
-      when: snow_standard_change_preflight != 'proceed'
-      ansible.builtin.meta: end_play
-
-    - name: Check the ServiceNow credential against the validated instance
-      ansible.builtin.include_tasks: tasks/standard_change_credential.yml
-
-    - name: POST one Standard Change
-      block:
-        # Username and password come from the credential environment.
-        # args[module] does not see that env fallback.
-        - name: Send the Standard Change creation request  # noqa: args[module]
-          servicenow.itsm.api:
-            instance:
-              host: "{{ snow_standard_change_instance }}"
-              validate_certs: true
-              timeout: 60
-            api_path: "api/sn_chg_rest/change/standard/{{ snow_standard_change_template }}"
-            action: post
-            data: "{{ snow_change_payload }}"
-          register: snow_standard_change_response
-          no_log: true
-      rescue:
-        - name: Sanitize the module failure
-          ansible.builtin.include_tasks: tasks/standard_change_module_failure.yml
-          no_log: true
-          vars:
-            snow_standard_change_module_error: "{{ ansible_failed_result.msg | default('') }}"
-
-    - name: Classify the Standard Change response
-      ansible.builtin.include_tasks: tasks/classify_standard_change_response.yml
-
-    - name: Show the confirmed Standard Change result
-      ansible.builtin.debug:
-        msg:
-          - "Standard Change creation: SUCCEEDED"
-          - >-
-            HTTP status: {{
-              'not exposed by the module'
-              if snow_standard_change_summary.http_status == 'NOT RETURNED'
-              else snow_standard_change_summary.http_status
-            }}
-          - "Change number: {{ snow_standard_change_summary.change_number }}"
-          - "sys_id: {{ snow_standard_change_summary.sys_id }}"
-          - "No further request was sent. Confirm the record in ServiceNow before using it."
+    - name: Create one Standard Change from the approved template
+      ansible.builtin.include_tasks: tasks/create_standard_change.yml

@@ -1,5 +1,5 @@
----
-# Standard change template creation stays fail-closed until the API exists.
+# Standard Change preparation uses the shared POST and does not open a
+# Normal Change. No ServiceNow request is sent by this playbook.
 
 - name: Reject a missing standard change template
   hosts: localhost
@@ -11,13 +11,19 @@
         - name: Include the standard change task
           ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/create_standard_change.yml"
           vars:
-            snow_prepare_standard_change: true
+            snow_standard_change_from_preparation: true
             snow_standard_change_template_id: ""
       rescue:
         - name: Record the missing template failure
           ansible.builtin.set_fact:
             standard_change_failed: true
             standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Add a clean host for the standalone confirmation check
+      ansible.builtin.add_host:
+        name: std_template_host
+        groups: std_template_host
+        ansible_connection: local
 
     - name: Confirm missing template configuration does not call ServiceNow
       ansible.builtin.assert:
@@ -27,66 +33,102 @@
           - "'No ServiceNow request' in standard_change_error"
           - "'was not used' in standard_change_error"
           - snow_standard_change_request is not defined
+          - snow_standard_change_response is not defined
           - snow_result is not defined
         fail_msg: "Missing template id was not rejected. error={{ standard_change_error | default('') }}"
 
-- name: Stop when a template id exists but the API does not
+- name: Stop preparation when creation is not confirmed
   hosts: localhost
   connection: local
   gather_facts: false
   vars:
-    snow_prepare_standard_change: true
+    snow_instance_url: https://nonproduction.example.invalid
+    snow_nonproduction_instance_url: https://nonproduction.example.invalid
     snow_standard_change_template_id: STD-APPROVED-TEMPLATE
-    patch_change_short_description: Windows patch wave
-    patch_change_description: Apply approved updates
-    patch_change_primary_ci_host: w1a
+    snow_confirm_create: false
+    snow_change_payload: {}
     snow_prepare_change_fields:
       assignment_group: Windows Patching
       category: Software
-    snow_prepare_ci_map:
-      - hostname: w1a
-        sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-      - hostname: w1b
-        sys_id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      cmdb_ci: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    patch_change_short_description: Windows patch wave
+    patch_change_description: Apply approved updates
   tasks:
-    - name: Request template creation with an identifier
+    - name: Clear the previous template result
+      ansible.builtin.set_fact:
+        standard_change_failed: false
+        standard_change_error: ""
+        snow_prepare_created_this_run: false
+
+    - name: Include preparation creation with confirmation off
       block:
         - name: Include the standard change task
           ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/create_standard_change.yml"
+          vars:
+            snow_standard_change_from_preparation: true
       rescue:
-        - name: Record the unimplemented API failure
+        - name: Record the unconfirmed preparation failure
           ansible.builtin.set_fact:
             standard_change_failed: true
             standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
 
+    - name: Confirm preparation does not POST when creation is not confirmed
+      ansible.builtin.assert:
+        that:
+          - standard_change_failed | bool
+          - snow_standard_change_preflight == 'not_confirmed'
+          - "'No ServiceNow request was sent' in standard_change_error"
+          - "'was not used' in standard_change_error"
+          - snow_standard_change_response is not defined
+          - snow_result is not defined
+          - not (snow_prepare_created_this_run | default(false) | bool)
+          - snow_change_payload.short_description == 'Windows patch wave'
+          - snow_change_payload.cmdb_ci == 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+          - "'type' not in snow_change_payload"
+          - "'chg_model' not in snow_change_payload"
+        fail_msg: "Unconfirmed preparation POSTed or built a Normal Change. error={{ standard_change_error | default('') }}"
+
+- name: Standalone creation stays off when snow_confirm_create is false
+  hosts: std_template_host
+  connection: local
+  gather_facts: false
+  vars:
+    snow_instance_url: https://nonproduction.example.invalid
+    snow_nonproduction_instance_url: https://nonproduction.example.invalid
+    snow_standard_change_template_id: STD-APPROVED-TEMPLATE
+    snow_confirm_create: false
+    snow_change_payload:
+      short_description: offline
+  tasks:
+    - name: Include the standalone task with creation disabled
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/create_standard_change.yml"
+
+- name: Confirm the standalone task ended before POST
+  hosts: std_template_host
+  connection: local
+  gather_facts: false
+  tasks:
     - name: Read the preparation decision tasks
       ansible.builtin.slurp:
         src: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/prepare_patch_change.yml"
       register: prepare_tasks_file
 
-    - name: Confirm the template path is separate from normal create
+    - name: Confirm no POST and no Normal Change path
       ansible.builtin.assert:
         that:
-          - standard_change_failed | bool
-          - "'no verified Standard Change' in standard_change_error"
-          - "'was not used' in standard_change_error"
-          - "'No ServiceNow request' in standard_change_error"
+          - snow_standard_change_preflight == 'not_confirmed'
+          - snow_standard_change_response is not defined
           - snow_result is not defined
-          - snow_standard_change_request.template_id == 'STD-APPROVED-TEMPLATE'
-          - not (snow_standard_change_request.api_implemented | bool)
-          - "'cmdb_ci' not in snow_standard_change_request"
-          - "'chg_model' not in snow_standard_change_request"
-          - "'endpoint' not in snow_standard_change_request"
-          - snow_standard_change_request.affected_ci_sys_ids | length == 2
-          - snow_standard_change_request.primary_ci_host == 'w1a'
+          - not (snow_prepare_created_this_run | default(false) | bool)
           - prepare_task_text is search('create_standard_change.yml')
+          - prepare_task_text is not search('snow_operation: create')
           - >-
-            (prepare_tasks | selectattr('name', 'equalto', 'Create the change request') | list | first).when
-            is contains('not (snow_prepare_standard_change | default(false) | bool)')
+            (prepare_tasks | selectattr('name', 'equalto', 'Create the Standard Change') | list | first).when
+            is contains('snow_prepare_standard_change | default(true) | bool')
           - >-
-            (prepare_tasks | selectattr('name', 'equalto', 'Instantiate the standard change template when that path is selected') | list | first).when
-            is contains('snow_prepare_standard_change | default(false) | bool')
-        fail_msg: "Template creation called ServiceNow or reused normal create. error={{ standard_change_error | default('') }}"
+            (prepare_tasks | selectattr('name', 'equalto', 'Reject a normal change from preparation') | list | first).when
+            is contains('not (snow_prepare_standard_change | default(true) | bool)')
+        fail_msg: Standalone confirmation-off path called ServiceNow or left a Normal Change create.
       vars:
         prepare_task_text: "{{ prepare_tasks_file.content | b64decode }}"
         prepare_tasks: "{{ prepare_task_text | from_yaml }}"

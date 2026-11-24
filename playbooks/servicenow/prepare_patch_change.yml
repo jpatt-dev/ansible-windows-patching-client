@@ -34,10 +34,9 @@
 #
 # Do not put cmdb_ci, chg_model, type, state, or approval in
 # patch_change_fields. The primary cmdb_ci is the inventory sys_id of
-# patch_change_primary_ci_host. Create sends type normal. The installed
-# servicenow.itsm collection copies type into chg_model, and this playbook
-# still rejects an explicit model. Confirm that normal maps to the model
-# required by the client instance before AAP testing.
+# patch_change_primary_ci_host. Creation POSTs one Standard Change to
+# /api/sn_chg_rest/change/standard/{snow_standard_change_template_id}.
+# It does not send type or chg_model and does not open a Normal Change.
 #
 # Resume CI association for a change that already exists. This does not
 # create another change and does not require the creation fields above.
@@ -45,13 +44,13 @@
 #   snow_prepare_preview_only: false
 #   snow_prepare_existing_change_number: CHG0001234
 #
-# Standard Change template instantiation is a separate path. It is off.
-# snow_prepare_standard_change and snow_standard_change_template_id are
-# administrator settings, not survey inputs. An existing change number still
-# wins: this play reads that change and does not instantiate a template.
-# Turning the switch on does not call the normal change create operation.
-# Until the ServiceNow team supplies the template API, the task fails before
-# any ServiceNow call. See docs/operations.md.
+# Creation uses the shared Standard Change POST. snow_prepare_standard_change
+# stays true. snow_standard_change_template_id, snow_instance_url, and
+# snow_nonproduction_instance_url are administrator settings, not survey
+# inputs. snow_confirm_create must also be true before the POST is sent.
+# An existing change number still wins: this play reads that change and
+# does not instantiate a template. A failed or unconfirmed POST is not
+# retried. See docs/operations.md.
 
 - name: Prepare the ServiceNow change for the AAP Limit wave
   hosts: windows_hosts
@@ -65,8 +64,13 @@
     snow_prepare_existing_change_number: ""
     snow_prepare_allow_create: false
     snow_prepare_preview_only: true
-    snow_prepare_standard_change: false
+    snow_prepare_standard_change: true
     snow_standard_change_template_id: ""
+    snow_instance_url: ""
+    snow_nonproduction_instance_url: ""
+    snow_confirm_create: false
+    snow_change_payload: {}
+    snow_dev_error_diagnostics: false
     snow_prepare_supported_waves:
       - windows_wave_1
       - windows_wave_2

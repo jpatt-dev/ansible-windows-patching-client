@@ -107,27 +107,26 @@ default and does not call ServiceNow. Creation also requires
 host's inventory `sys_id`. Resume with an existing change number does not
 require those creation fields and does not open a second change.
 
-Standard Change creation from an approved template is off
-(`snow_prepare_standard_change: false`). It is not a survey field and it does
-not use the normal change create operation. `change_ticket_id` on Full Patch,
-and `snow_prepare_existing_change_number` on preparation, still refer to a
-change that already exists. Turning the switch on with an empty
-`snow_standard_change_template_id` fails before any ServiceNow call. A
-template id alone also stops before a call: the instantiation API is not in
-this repository. Per-host change validation is unchanged.
+Standard Change creation is the preparation job's only create path
+(`snow_prepare_standard_change: true`). It is not a survey field. The job
+POSTs once to
+`/api/sn_chg_rest/change/standard/{snow_standard_change_template_id}`
+and then links every selected inventory `sys_id` through the existing
+`add_cis` operation. It does not open a Normal Change. Setting
+`snow_prepare_standard_change` false fails before any ServiceNow call.
+`change_ticket_id` on Full Patch, and
+`snow_prepare_existing_change_number` on preparation, still refer to a
+change that already exists and do not create another one. An empty
+template id, a `snow_confirm_create` value that is not true, check mode,
+or an instance URL that does not match the nonproduction URL fails before
+the POST. A failed or unconfirmed POST is not retried.
 
-The ServiceNow team still needs to provide, before template creation can be
-activated:
+The ServiceNow team still needs to provide:
 
-- The approved template identifier and whether it is a sys_id or a name
-- The API operation that instantiates that template (it is not the normal
-  change create used today)
-- Which fields the template already fills, and which this job must still send
-- How affected CIs are associated on the new Standard Change
+- The approved template identifier
+- Which of the prepared fields the template accepts, and which it already fills
 - The change state and approval result immediately after instantiation
-- Confirmation that the response includes the change number and sys_id
-
-Until those are confirmed, leave `snow_prepare_standard_change` false.
+- Confirmation that a Standard Change accepts the same `task_ci` associations as the current `add_cis` operation
 
 An approved Limit that intersects **zero** hosts never runs play tasks
 (including fail-closed asserts). Empty waves must be rejected by inventory or
