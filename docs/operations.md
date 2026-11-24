@@ -99,20 +99,23 @@ Change Request preparation uses that same Limit field.
 `connection: local` and reads `ansible_limit`. It does not read
 `patch_wave_name`. The hosts selected for the play must be the complete
 membership of `windows_wave_1` through `windows_wave_20`. Preview stays the
-default and does not call ServiceNow. Creation also requires
-`patch_change_short_description`, `patch_change_description`,
-`patch_change_primary_ci_host` from that wave, and `patch_change_fields`
-(`assignment_group` or `assignment_group_id`, `category`, `justification`,
-`implementation_plan`, `backout_plan`). The primary `cmdb_ci` comes from that
-host's inventory `sys_id`. Resume with an existing change number does not
-require those creation fields and does not open a second change.
+default and does not call ServiceNow. Operator inputs are the AAP Limit,
+preview or execute, and an existing change number only when resuming.
+The approved template supplies assignment group, category, justification,
+implementation plan, backout plan, short description, description, and the
+Change primary CI. Preparation does not send those fields. Resume with an
+existing change number does not open a second change.
 
 Standard Change creation is the preparation job's only create path
 (`snow_prepare_standard_change: true`). It is not a survey field. The job
 POSTs once to
 `/api/sn_chg_rest/change/standard/{snow_standard_change_template_id}`
-and then links every selected inventory `sys_id` through the existing
-`add_cis` operation. It does not open a Normal Change. Setting
+with no Change field values. `servicenow.itsm.api` defaults an omitted
+`data` argument to `{}`, so the request body is an empty JSON object.
+It then links every selected inventory `sys_id` through the existing
+`add_cis` operation, passing the known change number and sys_id. A
+successful job result is published only after every affected CI is
+confirmed. It does not open a Normal Change. Setting
 `snow_prepare_standard_change` false fails before any ServiceNow call.
 `change_ticket_id` on Full Patch, and
 `snow_prepare_existing_change_number` on preparation, still refer to a
@@ -124,7 +127,6 @@ the POST. A failed or unconfirmed POST is not retried.
 The ServiceNow team still needs to provide:
 
 - The approved template identifier
-- Which of the prepared fields the template accepts, and which it already fills
 - The change state and approval result immediately after instantiation
 - Confirmation that a Standard Change accepts the same `task_ci` associations as the current `add_cis` operation
 

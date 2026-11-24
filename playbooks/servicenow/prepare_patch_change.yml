@@ -13,34 +13,24 @@
 #   snow_prepare_preview_only: true
 #   snow_prepare_allow_create: false
 #
-# Preview, Limit windows_wave_1. Preview prints field completeness and the
-# primary CI. It does not print implementation, backout, or justification text,
-# and it does not call ServiceNow.
+# Preview, Limit windows_wave_1. Preview lists the selected hosts and their
+# inventory sys_id values. It does not call ServiceNow.
 #   snow_prepare_preview_only: true
-#   patch_change_short_description: "Windows patching windows_wave_1"
-#   patch_change_description: "What is changing, in operator words."
-#   patch_change_primary_ci_host: "<one hostname from this wave>"
-#   patch_change_fields:
-#     assignment_group: "<ServiceNow group name, or use assignment_group_id>"
-#     category: "<client category>"
-#     justification: "<why this change is needed>"
-#     implementation_plan: "<how the wave will be patched>"
-#     backout_plan: "<how the wave will be backed out>"
 #
-# Create, after preview looks right. Limit windows_wave_1:
+# Execute, after preview looks right. Limit windows_wave_1:
 #   snow_prepare_preview_only: false
 #   snow_prepare_allow_create: true
-#   plus the same short description, description, primary host, and fields.
 #
-# Do not put cmdb_ci, chg_model, type, state, or approval in
-# patch_change_fields. The primary cmdb_ci is the inventory sys_id of
-# patch_change_primary_ci_host. Creation POSTs one Standard Change to
-# /api/sn_chg_rest/change/standard/{snow_standard_change_template_id}.
-# It does not send type or chg_model and does not open a Normal Change.
+# The approved Standard Change template supplies assignment group, category,
+# justification, implementation plan, backout plan, short description,
+# description, and the Change primary CI. This job does not send those
+# fields. It POSTs once to
+# /api/sn_chg_rest/change/standard/{snow_standard_change_template_id}
+# and then associates every selected inventory sys_id. It does not open a
+# Normal Change.
 #
 # Resume CI association for a change that already exists. This does not
-# create another change and does not require the creation fields above.
-# Limit remains the same wave:
+# create another change. Limit remains the same wave:
 #   snow_prepare_preview_only: false
 #   snow_prepare_existing_change_number: CHG0001234
 #
@@ -57,10 +47,6 @@
   connection: local
   gather_facts: false
   vars:
-    patch_change_short_description: ""
-    patch_change_description: ""
-    patch_change_primary_ci_host: ""
-    patch_change_fields: {}
     snow_prepare_existing_change_number: ""
     snow_prepare_allow_create: false
     snow_prepare_preview_only: true

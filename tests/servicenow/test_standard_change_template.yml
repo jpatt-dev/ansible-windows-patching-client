@@ -82,8 +82,11 @@
           - snow_standard_change_response is not defined
           - snow_result is not defined
           - not (snow_prepare_created_this_run | default(false) | bool)
-          - snow_change_payload.short_description == 'Windows patch wave'
-          - snow_change_payload.cmdb_ci == 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+          - snow_change_payload | length == 0
+          - "'short_description' not in snow_change_payload"
+          - "'description' not in snow_change_payload"
+          - "'cmdb_ci' not in snow_change_payload"
+          - "'assignment_group' not in snow_change_payload"
           - "'type' not in snow_change_payload"
           - "'chg_model' not in snow_change_payload"
         fail_msg: "Unconfirmed preparation POSTed or built a Normal Change. error={{ standard_change_error | default('') }}"

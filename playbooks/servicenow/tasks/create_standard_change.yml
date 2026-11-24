@@ -1,6 +1,8 @@
 # One Standard Change POST, shared by the standalone playbook and by
 # prepare_patch_change.yml. This file does not create a Normal Change
-# and does not send a second request.
+# and does not send a second request. The template id in the URI supplies
+# the Change fields. servicenow.itsm.api defaults its data argument to an
+# empty mapping, so this task does not pass one.
 
 - name: Reject standard change creation without a template identifier
   when: snow_standard_change_template_id | default('') | string | trim | length == 0
@@ -10,23 +12,6 @@
       was sent. The normal change create operation was not used.
       Set the identifier of the approved Standard Change template.
       An existing change number does not use this task.
-
-- name: Use the prepared fields as the Standard Change body
-  when:
-    - snow_standard_change_from_preparation | default(false) | bool
-    - snow_change_payload | default({}, true) is mapping
-    - (snow_change_payload | default({}, true) | length) == 0
-  ansible.builtin.set_fact:
-    snow_change_payload: "{{ _snow_prepared_payload }}"
-  vars:
-    _snow_prepared_payload: >-
-      {{
-        (snow_prepare_change_fields | default({}, true))
-        | combine({
-            'short_description': patch_change_short_description | default('') | string | trim,
-            'description': patch_change_description | default('') | string | trim
-          })
-      }}
 
 - name: Check the Standard Change request before any POST
   ansible.builtin.include_tasks: standard_change_preflight.yml
@@ -64,8 +49,8 @@
     msg: >-
       Standard Change creation was not sent
       ({{ snow_standard_change_preflight }}).
-      snow_confirm_create must be true, check mode must be off, and
-      the request body must be nonempty.
+      snow_confirm_create must be true and check mode must be off.
+      The approved template supplies the Change fields.
       No ServiceNow request was sent.
       The normal change create operation was not used.
 
@@ -73,6 +58,10 @@
   ansible.builtin.include_tasks: standard_change_credential.yml
 
 - name: POST one Standard Change
+  delegate_to: localhost
+  become: false
+  vars:
+    ansible_connection: local
   block:
     # Username and password come from the credential environment.
     # args[module] does not see that env fallback.
@@ -84,7 +73,6 @@
           timeout: 60
         api_path: "api/sn_chg_rest/change/standard/{{ snow_standard_change_template }}"
         action: post
-        data: "{{ snow_change_payload }}"
       register: snow_standard_change_response
       no_log: true
   rescue:

@@ -7,8 +7,9 @@
 # Confirmed endpoint:
 #   POST /api/sn_chg_rest/change/standard/{snow_standard_change_template_id}
 # The template id is one path token. It is not assumed to be a producer
-# version sys_id. The body is snow_change_payload. Required fields are not
-# filled in here because the client has not confirmed that contract.
+# version sys_id. The ServiceNow team confirmed that the template fills the
+# Change fields, so this playbook does not send them. servicenow.itsm.api
+# defaults data to {} when the argument is omitted, and the POST task omits it.
 #
 # Authentication matches the working Incident Import Set path.
 # servicenow.itsm 2.6.3 reads SN_USERNAME and SN_PASSWORD from the module

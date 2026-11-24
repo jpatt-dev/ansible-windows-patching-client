@@ -1,5 +1,5 @@
 ---
-# Mandatory change fields and primary CI selection. No ServiceNow calls.
+# Template fields are not required. CI, Limit, and resume checks remain. No ServiceNow calls.
 
 - name: Prove change preparation fields and primary CI
   hosts: windows_hosts
@@ -132,25 +132,14 @@
           - not (snow_prepare_failed | default(false) | bool)
           - snow_result is not defined
           - not (snow_prepare_created_this_run | default(false) | bool)
-          - snow_prepare_input_check.missing | length == 0
-          - snow_prepare_input_check.primary_sys_id == (hostvars[patch_change_primary_ci_host | trim]['sys_id'] | trim)
-          - snow_prepare_change_fields.cmdb_ci == snow_prepare_input_check.primary_sys_id
-          - snow_prepare_change_fields.cmdb_ci in (snow_prepare_ci_map | map(attribute='sys_id') | list)
+          - snow_prepare_change_fields is not defined
           - (snow_prepare_ci_map | length) == (ansible_play_hosts_all | length)
           - (snow_prepare_ci_map | length) > 1
-          - "'category' in snow_prepare_change_fields"
-          - "'justification' in snow_prepare_change_fields"
-          - "'implementation_plan' in snow_prepare_change_fields"
-          - "'backout_plan' in snow_prepare_change_fields"
-          - "'chg_model' not in snow_prepare_change_fields"
-          - snow_prepare_case != 'group_id' or 'assignment_group_id' in snow_prepare_change_fields
-          - snow_prepare_case != 'group_id' or 'assignment_group' not in snow_prepare_change_fields
-          - snow_prepare_case == 'group_id' or 'assignment_group' in snow_prepare_change_fields
           - hostvars['localhost'].snow_prepare_execution_count | int == 1
-        fail_msg: Complete field preview did not resolve the primary CI or keep every affected CI.
+        fail_msg: Preview did not keep every affected CI without building a Change body.
       run_once: true
 
-    - name: Check a preview that reports missing creation fields
+    - name: Check a preview that no longer requires template fields
       when:
         - snow_prepare_preview_only | bool
         - snow_prepare_case not in ['complete', 'group_id', 'resume', 'bad_limit', 'invalid_primary', 'duplicate_ci']
@@ -159,11 +148,11 @@
           - not (snow_prepare_failed | default(false) | bool)
           - snow_result is not defined
           - not (snow_prepare_created_this_run | default(false) | bool)
-          - snow_prepare_case_errors[snow_prepare_case] in snow_prepare_input_check.missing
+          - snow_prepare_change_fields is not defined
+          - (snow_prepare_ci_map | length) == (ansible_play_hosts_all | length)
           - hostvars['localhost'].snow_prepare_execution_count | int == 1
         fail_msg: >-
-          Preview did not report {{ snow_prepare_case }} without calling ServiceNow.
-          missing={{ (snow_prepare_input_check | default({})).missing | default([]) }}
+          Preview {{ snow_prepare_case }} required a template field or called ServiceNow.
       run_once: true
 
     - name: Check a rejected field case

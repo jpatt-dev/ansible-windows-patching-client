@@ -311,7 +311,7 @@
           - snow_standard_change_template == 'STDCHG0001'
         fail_msg: "snow_confirm_create false did not stop before POST."
 
-- name: An empty payload is not sent when creation is confirmed
+- name: An empty payload is the template-only creation request
   hosts: std_empty
   connection: local
   gather_facts: false
@@ -332,14 +332,14 @@
             standard_change_rejected: true
             standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
 
-    - name: Confirm the empty payload was rejected before POST
+    - name: Confirm the empty payload may proceed without field values
       ansible.builtin.assert:
         that:
-          - standard_change_rejected | bool
-          - "'snow_change_payload is empty' in standard_change_error"
-          - "'No ServiceNow request was sent' in standard_change_error"
-          - snow_standard_change_preflight is not defined
-        fail_msg: "Empty payload was accepted. error={{ standard_change_error | default('') }}"
+          - not (standard_change_rejected | default(false) | bool)
+          - snow_standard_change_preflight == 'proceed'
+          - snow_standard_change_response is not defined
+          - snow_change_payload | length == 0
+        fail_msg: "Empty template-only payload did not proceed. error={{ standard_change_error | default('') }}"
 
 - name: HTTP failure or timeout stays unconfirmed without another POST
   hosts: localhost

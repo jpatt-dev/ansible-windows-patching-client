@@ -29,9 +29,14 @@
           - "(_post_text | regex_findall('retries:') | length) == 0"
           - "_prepare_text is search('snow_prepare_existing_change_number')"
           - "_prepare_text is search('snow_operation: add_cis')"
-          - "_prepare_text is search('snow_result.confirmed_ci_sys_ids | length == snow_prepare_ci_map | length')"
+          - "_prepare_text is search('snow_result.sys_id == snow_prepare_change_sys_id')"
+          - "_prepare_text is search('snow_change_sys_id:')"
+          - "(_prepare_text.find('Require every wave CI on the change') | int) < (_prepare_text.find('Publish the change number after CI confirmation') | int)"
           - "_prepare_text is search('Do not enable snow_prepare_allow_create')"
           - "_post_text is search('classify_standard_change_response.yml')"
+          - "_post_text is search('delegate_to: localhost')"
+          - "_post_text is search('ansible_connection: local')"
+          - "'data:' not in _post_text"
           - "(_post_text.find('classify_standard_change_response.yml') | int) < (_post_text.find('snow_prepare_created_this_run: true') | int)"
         fail_msg: Preparation no longer has one Standard Change POST and a confirmed CI gate.
       vars:
@@ -82,6 +87,7 @@
   gather_facts: false
   vars:
     snow_prepare_change_number: CHG0001001
+    snow_prepare_change_sys_id: cccccccccccccccccccccccccccccccc
     snow_prepare_ci_map:
       - hostname: w1a
         sys_id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -91,6 +97,7 @@
       success: true
       operation: add_cis
       number: CHG0001001
+      sys_id: cccccccccccccccccccccccccccccccc
       confirmed_ci_sys_ids:
         - aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   tasks:
@@ -102,9 +109,13 @@
               - snow_result.success | bool
               - snow_result.operation == 'add_cis'
               - snow_result.number == snow_prepare_change_number
-              - snow_result.confirmed_ci_sys_ids | length == snow_prepare_ci_map | length
+              - snow_result.sys_id == snow_prepare_change_sys_id
+              - >-
+                (snow_result.confirmed_ci_sys_ids | map('lower') | list | sort)
+                == (snow_prepare_ci_map | map(attribute='sys_id') | map('lower') | list | sort)
             fail_msg: >-
-              Change {{ snow_prepare_change_number }} exists, but CI
+              Change {{ snow_prepare_change_number }}
+              ({{ snow_prepare_change_sys_id }}) exists, but CI
               association is incomplete.
       rescue:
         - name: Record the incomplete association
@@ -160,10 +171,8 @@
           - snow_standard_change_preflight is not defined
           - not (snow_prepare_created_this_run | default(false) | bool)
           - (snow_prepare_ci_map | map(attribute='hostname') | list) == ['w1a', 'w1b']
-          - snow_prepare_change_fields.short_description is not defined
-          - snow_prepare_change_fields.cmdb_ci == 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-          - "'chg_model' not in snow_prepare_change_fields"
-          - "'type' not in snow_prepare_change_fields"
+          - snow_prepare_change_fields is not defined
+          - snow_standard_change_request is not defined
       run_once: true
 
 - name: Refuse to create when snow_confirm_create is false
@@ -334,4 +343,67 @@
       run_once: true
 
     - name: Clear the rescued missing-CI failure
+      ansible.builtin.meta: clear_host_errors
+
+- name: Add a Windows host whose inventory connection is WinRM
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Register the WinRM inventory host
+      ansible.builtin.add_host:
+        name: winrm-std
+        groups: winrm_hosts
+        ansible_connection: winrm
+        ansible_host: 192.0.2.25
+        ansible_port: 5986
+        ansible_winrm_scheme: https
+
+- name: Standard Change creation stays local for a WinRM inventory host
+  hosts: winrm-std
+  gather_facts: false
+  vars:
+    snow_instance_url: https://nonproduction.example.invalid
+    snow_nonproduction_instance_url: https://nonproduction.example.invalid
+    snow_standard_change_template_id: STDCHG0001
+    snow_confirm_create: true
+    snow_change_payload: {}
+  tasks:
+    - name: Confirm the POST task delegates to localhost
+      ansible.builtin.assert:
+        that:
+          - _post_task is search('delegate_to: localhost')
+          - _post_task is search('ansible_connection: local')
+          - _post_task is search('action: post')
+          - "'data:' not in _post_task"
+          - ansible_connection == 'winrm'
+      vars:
+        _post_task: "{{ lookup('ansible.builtin.file', playbook_dir + '/../../playbooks/servicenow/tasks/create_standard_change.yml') }}"
+
+    - name: Include creation on the WinRM host
+      block:
+        - name: Run the shared Standard Change task
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/servicenow/tasks/create_standard_change.yml"
+          vars:
+            snow_standard_change_from_preparation: true
+      rescue:
+        - name: Record the local credential failure
+          ansible.builtin.set_fact:
+            standard_change_failed: true
+            standard_change_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Confirm the WinRM host stopped before a request
+      ansible.builtin.assert:
+        that:
+          - standard_change_failed | bool
+          - "'missing_host' in standard_change_error"
+          - "'No ServiceNow request was sent' in standard_change_error"
+          - "'winrm' not in (standard_change_error | lower)"
+          - snow_standard_change_response is not defined
+          - snow_standard_change_preflight == 'proceed'
+        fail_msg: >-
+          WinRM inventory host did not stay on the local credential gate.
+          error={{ standard_change_error | default('') }}
+
+    - name: Clear the rescued credential failure
       ansible.builtin.meta: clear_host_errors
