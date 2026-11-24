@@ -56,10 +56,12 @@
 - name: Fail closed when a pending reboot remains before remediating apply
   ansible.builtin.assert:
     that:
+      - windows_pending_reboot_probe_ok | default(false) | bool
       - not (pending_reboot | default(false) | bool)
     fail_msg: >-
-      Apply blocked on {{ inventory_hostname }} because a pending reboot is still
-      present. Complete the pre-patch reboot workflow and rerun Apply.
+      Apply blocked on {{ inventory_hostname }} because the pending-reboot
+      state is unknown or a reboot is still pending. An unknown reboot state
+      does not authorize installation.
   when:
     - windows_patch_mode == 'direct_win_updates'
     - patch_apply_enabled | bool

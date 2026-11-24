@@ -1,0 +1,135 @@
+---
+# Authorized post-patch reboot skipped because the pending-reboot probe failed.
+# A later successful probe must not report success or drop follow-up.
+# No Windows modules and no ServiceNow requests.
+
+- name: Seed the skipped always-reboot scenario
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Add the host whose later probes succeed
+      ansible.builtin.add_host:
+        name: win-probe-skipped
+        groups: probe_report_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        precheck_status: passed
+        pending_reboot: false
+        windows_pending_reboot_probe_ok: true
+        windows_critical_services_ok: true
+        windows_disk_low: false
+        windows_update_search_ok: true
+        updates_found: 0
+        windows_update_search:
+          found_update_count: 0
+          failed: false
+          skipped: false
+        patch_phase_apply:
+          win-probe-skipped:
+            patch_attempted: true
+            updates_installed: 2
+            updates_failed: 0
+        patch_phase_postcheck:
+          win-probe-skipped:
+            postcheck_status: ok
+        patch_phase_reboot_post:
+          win-probe-skipped:
+            reboot_phase: post
+            reboot_mode: always
+            reboot_performed: false
+            post_patch_reboot_required: false
+            reboot_skipped_reason: pending_reboot_unknown
+            manual_followup_required: true
+        expected_result: degraded
+        expected_followup: true
+
+    - name: Add a successful install whose reboot probe was known
+      ansible.builtin.add_host:
+        name: win-probe-clear
+        groups: probe_report_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        precheck_status: passed
+        pending_reboot: false
+        windows_pending_reboot_probe_ok: true
+        windows_critical_services_ok: true
+        windows_disk_low: false
+        windows_update_search_ok: true
+        updates_found: 0
+        windows_update_search:
+          found_update_count: 0
+          failed: false
+          skipped: false
+        patch_phase_apply:
+          win-probe-clear:
+            patch_attempted: true
+            updates_installed: 1
+            updates_failed: 0
+        patch_phase_postcheck:
+          win-probe-clear:
+            postcheck_status: ok
+        patch_phase_reboot_post:
+          win-probe-clear:
+            reboot_phase: post
+            reboot_mode: always
+            reboot_performed: true
+            post_patch_reboot_required: false
+            reboot_skipped_reason: ""
+        expected_result: success
+        expected_followup: false
+
+    - name: Add an exempt host with the same skipped reboot evidence
+      ansible.builtin.add_host:
+        name: win-probe-exempt
+        groups: probe_report_hosts
+        ansible_connection: local
+        patch_host_eligible: true
+        windows_connectivity_ok: true
+        precheck_status: passed
+        pending_reboot: false
+        windows_pending_reboot_probe_ok: true
+        patching_exception_active: true
+        patching_exception_status: active
+        patching_exception_reference_effective: EXC-PERM-1
+        windows_critical_services_ok: true
+        windows_disk_low: false
+        windows_update_search_ok: true
+        updates_found: 0
+        windows_update_search:
+          found_update_count: 0
+          failed: false
+          skipped: false
+        patch_phase_reboot_post:
+          win-probe-exempt:
+            reboot_skipped_reason: pending_reboot_unknown
+            reboot_performed: false
+        expected_result: exempt
+        expected_followup: false
+
+- name: Report the skipped reboot after later probes succeed
+  hosts: probe_report_hosts
+  connection: local
+  gather_facts: false
+  vars:
+    change_ticket_id: CHG001
+    patch_wave_name: windows_wave_1
+  tasks:
+    - name: Build the final report
+      ansible.builtin.include_role:
+        name: patch_report
+        tasks_from: final_build.yml
+
+    - name: Assert success is not restored and exemption is preserved
+      ansible.builtin.assert:
+        that:
+          - patch_final_result.result == expected_result
+          - (patch_final_result.manual_followup_required | bool) == (expected_followup | bool)
+          - patch_final_result.result != 'success' or inventory_hostname == 'win-probe-clear'
+          - inventory_hostname != 'win-probe-skipped' or patch_final_result.reason_code == 'PENDING_REBOOT'
+        fail_msg: >-
+          {{ inventory_hostname }} result={{ patch_final_result.result }}
+          followup={{ patch_final_result.manual_followup_required }}
+          expected {{ expected_result }}.

@@ -79,6 +79,17 @@
   gather_facts: false
   vars:
     reboot_cases:
+      - name: always_unknown_probe
+        applicable: true
+        install_authorized: true
+        exception: false
+        reboot_enabled: true
+        phase_enabled: true
+        inventory_allowed: true
+        mode: always
+        pending: false
+        probe_ok: false
+        should_run: false
       - name: updates_always_authorized
         applicable: true
         install_authorized: true

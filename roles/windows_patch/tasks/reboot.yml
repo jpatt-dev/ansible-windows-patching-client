@@ -89,6 +89,7 @@
         and (reboot_enabled | bool)
         and (reboot_phase_enabled | bool)
         and (patching_reboot_allowed_effective | bool)
+        and (windows_pending_reboot_probe_ok | default(false) | bool)
         and (
           (windows_reboot_mode_effective == 'always')
           or (pending_reboot | default(false) | bool)
@@ -166,6 +167,9 @@
         'install_not_authorized'
         if not (patch_apply_enabled | default(false) | bool)
         else (
+        'pending_reboot_unknown'
+        if not (windows_pending_reboot_probe_ok | default(false) | bool)
+        else (
         'reboot_not_required'
         if (
           (windows_reboot_mode_effective == 'if_required')
@@ -190,18 +194,31 @@
         )
         )
         )
+        )
       }}
     manual_followup_required: >-
       {{
         not (patching_exception_active | default(false) | bool)
         and (
-          (pending_reboot | default(false) | bool)
-          or (windows_reboot_mode_effective == 'always')
-        )
-        and (
-          (not reboot_enabled | bool)
-          or (not reboot_phase_enabled | bool)
-          or (not patching_reboot_allowed_effective | bool)
+          (
+            (
+              (pending_reboot | default(false) | bool)
+              or (windows_reboot_mode_effective == 'always')
+            )
+            and (
+              (not reboot_enabled | bool)
+              or (not reboot_phase_enabled | bool)
+              or (not patching_reboot_allowed_effective | bool)
+            )
+          )
+          or (
+            not (windows_pending_reboot_probe_ok | default(false) | bool)
+            and (windows_applicable_updates_present | default(false) | bool)
+            and (patch_apply_enabled | default(false) | bool)
+            and (reboot_enabled | bool)
+            and (reboot_phase_enabled | bool)
+            and (patching_reboot_allowed_effective | bool)
+          )
         )
       }}
   changed_when: false

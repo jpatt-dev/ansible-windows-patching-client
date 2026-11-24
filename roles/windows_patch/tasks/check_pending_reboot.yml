@@ -58,7 +58,7 @@
           and (not (windows_pfro_reboot.failed | default(false) | bool))
           and (not (windows_pfro_reboot.unreachable | default(false) | bool))
         )
-        else false
+        else 'not_available'
       }}
     pending_reboot: >-
       {{
@@ -75,7 +75,7 @@
           and (not (windows_pfro_reboot.failed | default(false) | bool))
           and (not (windows_pfro_reboot.unreachable | default(false) | bool))
         )
-        else false
+        else 'not_available'
       }}
   changed_when: false
   tags:

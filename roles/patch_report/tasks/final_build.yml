@@ -805,6 +805,17 @@
         and ((patch_lifecycle_failed_phase | default('')) == 'pre_patch_reboot')
         and (_apply_execution_failed | bool)
       }}
+    _authorized_reboot_not_run: >-
+      {{
+        (
+          (_ua_reboot_post_present | bool)
+          and ((_upstream_reboot_post.reboot_skipped_reason | default('')) == 'pending_reboot_unknown')
+        )
+        or (
+          (_ua_reboot_pre_present | bool)
+          and ((_upstream_reboot_pre.reboot_skipped_reason | default('')) == 'pending_reboot_unknown')
+        )
+      }}
   changed_when: false
   tags:
     - report
@@ -815,7 +826,8 @@
       {{
         not (_rpt_exempt | bool)
         and (
-          (_rpt_unreachable | bool)
+          (_authorized_reboot_not_run | default(false) | bool)
+          or (_rpt_unreachable | bool)
           or (_reboot_recovery_unresolved | bool)
           or (_pre_reboot_apply_failure | bool)
           or (_rpt_apply_failed | bool)
@@ -911,13 +923,27 @@
       {{
         'failed'
         if (_reboot_recovery_classification_gap | bool)
-        else _rpt_result
+        else (
+          'degraded'
+          if (
+            (_authorized_reboot_not_run | default(false) | bool)
+            and (_rpt_result in ['success', 'already_compliant'])
+          )
+          else _rpt_result
+        )
       }}
     _pub_reason_code: >-
       {{
         'REBOOT_FAILED'
         if (_reboot_recovery_classification_gap | bool)
-        else _rpt_reason_code
+        else (
+          'PENDING_REBOOT'
+          if (
+            (_authorized_reboot_not_run | default(false) | bool)
+            and (_rpt_result in ['success', 'already_compliant'])
+          )
+          else _rpt_reason_code
+        )
       }}
     _pub_reason: >-
       {{
@@ -927,7 +953,14 @@
           else 'Pre-patch reboot failed'
         )
         if (_reboot_recovery_classification_gap | bool)
-        else _rpt_reason
+        else (
+          'A reboot is pending and requires follow-up'
+          if (
+            (_authorized_reboot_not_run | default(false) | bool)
+            and (_rpt_result in ['success', 'already_compliant'])
+          )
+          else _rpt_reason
+        )
       }}
   changed_when: false
   tags:

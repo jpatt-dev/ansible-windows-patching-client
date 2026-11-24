@@ -9,6 +9,7 @@
         and (reboot_case.reboot_enabled | bool)
         and (reboot_case.phase_enabled | bool)
         and (reboot_case.inventory_allowed | bool)
+        and (reboot_case.probe_ok | default(true) | bool)
         and (
           (reboot_case.mode == 'always')
           or (reboot_case.pending | bool)
